@@ -5,14 +5,10 @@
 
 #include "mitra_defs.h"
 #include <ctype.h>
+#include "mitra_io.h"
 
 /* External device declarations */
 extern DEVICE cpu_dev;
-extern DEVICE ptr_dev;   /* Paper tape reader */
-extern DEVICE ptp_dev;   /* Paper tape punch */
-extern DEVICE tti_dev;   /* Typewriter input */
-extern DEVICE tto_dev;   /* Typewriter output */
-extern DEVICE lpt_dev;   /* Line printer */
 extern DEVICE rtc_dev;   /* Real-time clock */
 
 /* Memory */
@@ -45,14 +41,10 @@ const char *sim_stop_messages[] = {
     NULL
 };
 
-/* Device list */
+/* Device list – add I/O devices as needed */
 DEVICE *sim_devices[] = {
     &cpu_dev,
-    &ptr_dev,
-    &ptp_dev,
-    &tti_dev,
-    &tto_dev,
-    &lpt_dev,
+    /* no separate device entries needed – I/O is handled via minibus */
     &rtc_dev,
     NULL
 };
@@ -179,6 +171,7 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw)
     
     if (sw & SWMASK('M')) {
         /* Check for SYS instructions (F4 opcode with special disp) */
+/*
         if (opcode == 0xF4) {
             switch (disp) {
                 case 0x00: mnemonic = "RTS"; break;
@@ -194,6 +187,36 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw)
             fprintf(of, "%s", mnemonic);
             return SCPE_OK;
         }
+*/
+//->
+    if (opcode == 0x37) {  /* CSV */
+        if (disp == M_10_SECTION)
+            fprintf(of, "CSV M:1O");
+        else if (disp == M_ZIO_SECTION)
+            fprintf(of, "CSV M:ZIO");
+        else if (disp == M_WAIT_SECTION)
+            fprintf(of, "CSV M:WAIT");
+        else if (disp == M_ZWAT_SECTION)
+            fprintf(of, "CSV M:ZWAT");
+        else
+            fprintf(of, "CSV %03o", disp);
+        return SCPE_OK;
+    } else if (opcode == 0xF4) {
+        /* SYS instructions */
+        switch (disp) {
+        case 0x00: fprintf(of, "RTS"); break;
+        case 0x01: fprintf(of, "DIT"); break;
+        case 0x02: fprintf(of, "RD"); break;
+        case 0x03: fprintf(of, "WD"); break;
+        case 0x08: fprintf(of, "STM"); break;
+        case 0x0C: fprintf(of, "CLM"); break;
+        case 0x20: fprintf(of, "DITR"); break;
+        case 0x40: fprintf(of, "RSV"); break;
+        default: fprintf(of, "SYS %03o", disp);
+        }
+        return SCPE_OK;
+    }
+//<-
         
         /* Check for SRG family special mnemonics (manual page 7-56) */
         if ((opcode == 0x31 || opcode == 0xE1 || opcode == 0xF1) && 

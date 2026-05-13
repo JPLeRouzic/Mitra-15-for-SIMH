@@ -6,6 +6,14 @@
 
 #include "mitra_defs.h"
 
+#include "mitra_io.h"   /* header for I/O subsystem */
+
+extern t_stat io_csv_1o(uint32 cb_addr, int zio);   /* M:1O / M:ZIO */
+extern t_stat io_csv_wait(uint32 cb_addr, int zwat);/* M:WAIT / M:ZWAT */
+extern void io_interrupt_dispatch(void);            /* call when interrupt pending */
+extern int  io_check_ready(void);                   /* true if any device ready */
+
+
 /* SIMH flags */
 #define PCQ_SIZE        64                              /* must be 2**n */
 #define PCQ_MASK        (PCQ_SIZE - 1)
@@ -82,20 +90,13 @@ uint32 alert;                                           /* alert dispatch */
 uint32 em2_dyn, em3_dyn;                                /* extensions, dynamic */
 uint32 usr_map[8];                                      /* user map, dynamic */
 uint32 mon_map[8];                                      /* mon map, dynamic */
-// int32 ind_lim = 32;                                     /* indirect limit */
-// int32 exu_lim = 32;                                     /* EXU limit */
+int32 ind_lim = 32;                                     /* indirect limit */
+int32 exu_lim = 32;                                     /* EXU limit */
 
-// uint32 cpu_mode = NML_MODE;                             /* normal mode */
+uint16 cpu_mode = NML_MODE;                             /* normal mode */
 uint32 mon_usr_trap = 0;                                /* mon-user trap */
 uint32 EM2 = 2, EM3 = 3;                                /* extension registers */
 // uint32 RL1, RL2, RL4;                                   /* relocation maps */
-uint32 bpt;                                             /* breakpoint switches */
-uint32 alert;                                           /* alert dispatch */
-uint32 em2_dyn, em3_dyn;                                /* extensions, dynamic */
-uint32 usr_map[8];                                      /* user map, dynamic */
-uint32 mon_map[8];                                      /* mon map, dynamic */
-int32 ind_lim = 32;                                     /* indirect limit */
-int32 exu_lim = 32;                                     /* EXU limit */
 
 int32 cpu_genie = 0;                                    /* Genie flag */
 int32 cpu_astop = 0;                                    /* address stop */
@@ -121,10 +122,10 @@ t_stat cpu_set_size (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_set_type (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_set_hist (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_show_hist (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
-t_stat Ea (uint32 wd, uint32 *va);
-t_stat EaSh (uint32 wd, uint32 *va);
-t_stat Read (uint32 va, uint32 *dat);
-t_stat Write (uint32 va, uint32 dat);
+t_stat Ea (uint32 wd, uint16 *va);
+t_stat EaSh (uint32 wd, uint16 *va);
+t_stat Read (uint16 *va, uint16 *dat);
+t_stat Write (uint16 va, uint16 dat);
 void set_dyn_map (void);
 uint32 api_findreq (void);
 void api_dismiss (void);
@@ -134,7 +135,7 @@ void Mul48 (uint32 mplc, uint32 mplr);
 void Div48 (uint32 dvdh, uint32 dvdl, uint32 dvr);
 void RotR48 (uint32 sc);
 void ShfR48 (uint32 sc, uint32 sgn);
-t_stat one_inst (uint32 inst, uint32 pc, uint32 mode, uint32 *trappc);
+t_stat one_inst (uint16 inst, uint16 pc, uint32 mode, uint16 *trappc);
 void inst_hist (uint32 inst, uint32 pc, uint32 typ);
 t_stat rtc_inst (uint32 inst);
 t_stat rtc_svc (UNIT *uptr);
@@ -583,7 +584,7 @@ static const uint32 int_vec[32] = {
 
 t_stat sim_instr (void)
 {
-uint32 inst, tinst, pa, save_P, save_mode, trap_P, tmp;
+uint16 inst, tinst, pa, save_P, save_mode, trap_P, tmp;
 t_stat reason, tr;
 
 /* Restore register state */
@@ -635,7 +636,7 @@ while (reason == 0) {                                   /* loop until halted */
             inst_hist (tinst, P, HIST_INT);
         if (pa != VEC_RTCP) {                           /* normal intr? */
             tr = one_inst (tinst, P, save_mode, &tmp);  /* exec intr inst */
-            Read (P, (uint32 *) &C);
+            Read (&P, (uint16 *) &C);
             if (tr) {                                   /* stop code? */
                 cpu_mode = save_mode;                   /* restore mode */
                 reason = (tr > 0)? tr: STOP_MMINT;
@@ -684,18 +685,18 @@ while (reason == 0) {                                   /* loop until halted */
                 }
             }
         trap_P = save_P = P;                            /* set backups for fetch */
-        reason = Read (P, &inst);                       /* get instr */
+        reason = Read (&P, &inst);                       /* get instr */
         P = (P + 1) & VA_MASK;                          /* incr PC */
         if (reason == SCPE_OK) {                        /* fetch ok? */
             ion_defer = 0;                              /* clear ion */
             if (hst_lnt)
                 inst_hist (C, save_P, HIST_XCT);
             reason = one_inst (C, save_P, cpu_mode, &trap_P); /* exec inst */
-            Read (P, (uint32 *) &C);
+            Read (&P, (uint16 *) &C);
             if (reason > 0) {                           /* stop code? */
                 if (reason != STOP_HALT) {
                     P = save_P;
-                    Read (P, (uint32 *) &C);
+                    Read (&P, (uint16 *) &C);
                 }
                 if (reason == STOP_IONRDY)
                     reason = 0;
@@ -724,7 +725,7 @@ while (reason == 0) {                                   /* loop until halted */
             */
             tr = one_inst (tinst, (reason == MM_NOACC)?
                   trap_P: save_P, save_mode, &tmp);     /* trap address */
-            Read (P, (uint32 *) &C);
+            Read (&P, (uint16 *) &C);
             if (tr) {                                   /* stop code? */
                 cpu_mode = save_mode;                   /* restore mode */
                 P = save_P;                             /* restore PC */
@@ -742,7 +743,7 @@ pcq_r->qptr = pcq_p;                                    /* update pc q ptr */
 return reason;
 }
 
-t_stat one_inst (uint32 inst, uint32 pc, uint32 mode, uint32 *trappc)
+t_stat one_inst (uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
 {
     uint16 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
     uint16 addr_mode = (inst >> I_MODE_SHIFT) & 0x07;
@@ -1004,20 +1005,39 @@ t_stat one_inst (uint32 inst, uint32 pc, uint32 mode, uint32 *trappc)
             L = (L - disp) & 0xFFFF;
             break;
             
-        case 0x37:  /* CSV - Call Supervisor (7-94) */
+/*        case 0x37:  /* CSV - Call Supervisor (7-94) *
             if (mode == 0) return MM_PRVINS;
-            /* Store context in TWB */
+            /* Store context in TWB *
             write_word(G, P - GPRIME);
             write_word(G + 2, L - GPRIME);
             write_word(G + 4, (MS << 15) | (PR << 14) | (MA << 13) | (OV << 1) | C);
             MS = 1;
             PR = 1;
-            /* Load called section context from PRT at addr 12 */
+            /* Load called section context from PRT at addr 12 *
             ea = disp;
             G = read_word(12) & 0xFFFF;
             L = read_word(G - 4 * ea + 2) + G;
             P = read_word(G - 4 * ea) + G;
             return SCPE_OK;
+*/
+//->
+    case 0x37:  /* CSV – Call Supervisor (7-94) */
+        /* Check if this is a known I/O supervisor section */
+        if (disp == M_10_SECTION) {          /* M:1O section number = ? */
+            /* A-register contains CB address relative to G */
+            uint32 cb_addr = (MS ? G + A : A) & 0xFFFF;
+            return io_csv_1o(cb_addr, 0);
+        } else if (disp == M_ZIO_SECTION) {  /* M:ZIO section number */
+            uint32 cb_addr = (MS ? G + A : A) & 0xFFFF;
+            return io_csv_1o(cb_addr, 1);
+        } else if (disp == M_WAIT_SECTION) { /* M:WAIT */
+            uint32 cb_addr = (MS ? G + A : A) & 0xFFFF;
+            return io_csv_wait(cb_addr, 0);
+        } else if (disp == M_ZWAT_SECTION) { /* M:ZWAT */
+            uint32 cb_addr = (MS ? G + A : A) & 0xFFFF;
+            return io_csv_wait(cb_addr, 1);
+        }
+//<-
             
         case 0x38:  /* CLS - Call Section (7-90) */
             if (mode == 0) return MM_PRVINS;
@@ -1059,31 +1079,32 @@ t_stat one_inst (uint32 inst, uint32 pc, uint32 mode, uint32 *trappc)
             goto set_cc;
             
         /* SYS instructions (STM, CLM, RD, WD, DIT) */
-        case 0xF4:  /* SYS family */
+/*
+        case 0xF4:  /* SYS family *
             switch (disp) {
-                case 0x00:  /* RTS - Return Section (7-93) */
+                case 0x00:  /* RTS - Return Section (7-93) *
                     P = read_word(L + 2) + GPRIME;
                     L = read_word(L) + GPRIME;
                     return SCPE_OK;
                 case 0x01:  /* DIT - Deactivate Interrupt (7-97) (privileged) */
                     if (mode != 1) return MM_PRVINS;
-                    /* Complex context switching */
+                    /* Complex context switching *
                     break;
-                case 0x02:  /* RD - Read Direct (7-104) (privileged) */
+                case 0x02:  /* RD - Read Direct (7-104) (privileged) *
                     break;
-                case 0x03:  /* WD - Write Direct (7-104) (privileged) */
+                case 0x03:  /* WD - Write Direct (7-104) (privileged) *
                     break;
-                case 0x08:  /* STM - Set Interrupt Mask (7-103) (privileged) */
+                case 0x08:  /* STM - Set Interrupt Mask (7-103) (privileged) *
                     if (mode != 1) return MM_PRVINS;
                     MA = 1;
                     break;
-                case 0x0C:  /* CLM - Clear Interrupt Mask (7-103) (privileged) */
+                case 0x0C:  /* CLM - Clear Interrupt Mask (7-103) (privileged) *
                     if (mode != 1) return MM_PRVINS;
                     MA = 0;
                     break;
-                case 0x20:  /* DITR - Deactivate High-Speed Interrupt (7-100) (optional) */
+                case 0x20:  /* DITR - Deactivate High-Speed Interrupt (7-100) (optional) *
                     break;
-                case 0x40:  /* RSV - Return Supervisor (7-96) (privileged) */
+                case 0x40:  /* RSV - Return Supervisor (7-96) (privileged) *
                     if (mode != 1) return MM_PRVINS;
                     C = read_word(G + 4) & 1;
                     OV = (read_word(G + 4) >> 1) & 1;
@@ -1093,20 +1114,43 @@ t_stat one_inst (uint32 inst, uint32 pc, uint32 mode, uint32 *trappc)
                     L = read_word(G + 2) + G;
                     P = read_word(G) + G;
                     return SCPE_OK;
-            }
-            break;
-            
-        default:
-            /* Class 2 Branch Instructions (opcodes 0xC0-0xDF) */
-            if (opcode >= 0x18 && opcode <= 0x1F) {
-                /* Class 2 instructions handled by opcode range */
-            }
-            break;
-    }
-    
-    /* Default: advance PC */
-    P = (pc + 2) & 0xFFFF;
+            } 
+*/
+//->
+   case 0xF4:  /* SYS family – includes RD, WD, DIT, DITR, etc. */
+        switch (disp) {
+		    case 0x02: /* RD – Read Direct */
+		        if (mode != 1) return MM_PRVINS;
+		        /* E-register defines read mode and controller address */
+		        return io_rd(E, &A);   /* result in A */
+		    case 0x03: /* WD – Write Direct */
+		        if (mode != 1) return MM_PRVINS;
+		        return io_wd(E, A);
+		    case 0x01: /* DIT – Deactivate Interrupt */
+		        if (mode != 1) return MM_PRVINS;
+		        return io_dit();
+		    case 0x20: /* DITR – High‑speed DIT */
+		        if (mode != 1) return MM_PRVINS;
+		        return io_ditr();
+	//<-
+		        break;
+		       
+		    default:
+                            /* Class 2 Branch Instructions (opcodes 0xC0-0xDF) */
+                            if (opcode >= 0x18 && opcode <= 0x1F) {
+                                /* Class 2 instructions handled by opcode range */
+                            }
+		        break;
+		 	}
+ }   /* end of switch(opcode) */
     return SCPE_OK;
+//->    
+/* Check for pending interrupts */
+if (int_req && !ion_defer && (int_req & ~MA)) {
+    io_interrupt_dispatch();
+    /* The dispatch will load context and set P, etc. */
+}
+//<-
     
 set_cc:
     /* Set condition codes based on A (manual page 7-8, 7-13, etc.) */
@@ -1134,70 +1178,26 @@ return t & DMASK;
 
 /* Read word from virtual address */
 
-t_stat Read (uint32 va, uint32 *dat)
+t_stat Read (uint16 *va, uint16 *dat)
 {
-uint32 pgn, map, pa;
-
-if (cpu_mode == NML_MODE) {                             /* normal? */
-    va = va & VA_MASK;                                  /* ignore user */
-    if (va < 020000)                                    /* first 8K: 1 for 1 */
-        pa = va;
-    else if (va < 030000)                               /* next 4K: ext EM2 */
-        pa = va + em2_dyn;
-    else pa = va + em3_dyn;                             /* next 4K: ext EM3 */
-    }
-else if ((cpu_mode == USR_MODE) || (va & VA_USR)) {     /* user mapping? */
-    pgn = VA_GETPN (va);                                /* get page no */
-    map = usr_map[pgn];                                 /* get map entry */
-    if (map == MAP_PROT)                                /* prot? no access */
-        return MM_NOACC;
-    pa = (map & ~MAP_PROT) | (va & VA_POFF);            /* map address */
-    }
-else {
-    pgn = VA_GETPN (va);                                /* mon, get page no */
-    map = mon_map[pgn];                                 /* get map entry */
-    if (map & MAP_PROT)
-        return MM_NOACC;                                /* prot? no access */
-    pa = map | (va & VA_POFF);                          /* map address */
-    }
-*dat = M[pa];                                           /* return word */
-return SCPE_OK;
+    if (va >= MEMSIZE) 
+		{
+		return SCPE_NXM;
+		}
+    *dat = M[(uint) va];
+    return SCPE_OK;
 }
 
 /* Write word to virtual address */
 
-t_stat Write (uint32 va, uint32 dat)
+t_stat Write (uint16 va, uint16 dat)
 {
-uint32 pgn, map, pa;
-
-if (cpu_mode == NML_MODE) {                             /* normal? */
-    va = va & VA_MASK;                                  /* ignore user */
-    if (va < 020000)                                    /* first 8K: 1 for 1 */
-        pa = va;
-    else if (va < 030000)                               /* next 4K: ext EM2 */
-        pa = va + em2_dyn;
-    else pa = va + em3_dyn;                             /* next 4K: ext EM3 */
-    }
-else if ((cpu_mode == USR_MODE) || (va & VA_USR)) {     /* user mapping? */
-    pgn = VA_GETPN (va);                                /* get page no */
-    map = usr_map[pgn];                                 /* get map entry */
-    if (map & MAP_PROT) {                               /* protected page? */
-        if (map == MAP_PROT)                            /* zero? no access */
-            return MM_NOACC;
-        else return MM_WRITE;                           /* else, write prot */
-        }
-    pa = map | (va & VA_POFF);                          /* map address */
-    }
-else {
-    pgn = VA_GETPN (va);                                /* mon, get page no */
-    map = mon_map[pgn];                                 /* get map entry */
-    if (map & MAP_PROT)                                 /* prot? no access */
-        return MM_NOACC;
-    pa = map | (va & VA_POFF);                          /* map address */
-    }
-if (MEM_ADDR_OK (pa))
-    M[pa] = dat;
-return SCPE_OK;
+    if (va >= MEMSIZE) 
+		{
+		return SCPE_NXM;
+		}
+    M[va] = dat & DMASK;
+    return SCPE_OK;
 }
 
 void set_dyn_map (void)
@@ -1268,7 +1268,7 @@ return 0;                                               /* none */
 
 uint32 RelocC (int32 va, int32 sw)
 {
-return 0;                                               
+return va;                                               
 }
 
 /* Memory examine */
@@ -1368,7 +1368,7 @@ return SCPE_OK;
 
 t_stat rtc_inst (uint32 inst)
 {
-uint32 op, dat, val, va;
+uint16 op, dat, val, va;
 t_stat r;
 
 op = I_GETOP (inst);                                    /* get opcode */
@@ -1379,7 +1379,7 @@ else if (op == SKR)                                     /* decr */
 else return STOP_RTCINS;                                /* can't do it */
 if ((r = Ea (inst, &va)))                               /* decode eff addr */
     return r;
-if ((r = Read (va, &dat)))                              /* get operand */
+if ((r = Read (&va, &dat)))                              /* get operand */
     return r;
 dat = AddM24 (dat, val);                                /* mem +/- 1 */
 if ((r = Write (va, dat)))                              /* rewrite */
@@ -1390,7 +1390,24 @@ return SCPE_OK;
 }
 
 // FIXME
-t_stat Ea (uint32 wd, uint32 *va) {
+t_stat Ea (uint32 inst, uint16 *va)
+{
+    uint16 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
+    uint16 mode = (inst >> I_MODE_SHIFT) & 0x07;
+    uint16 disp = inst & I_DISP_MASK;
+    uint32 addr;
+
+    /* Class 0 instructions use ea_class0, Class 2 use ea_class2 */
+    /* The original Mitra uses addressing mode bits to distinguish */
+    if (mode & 0x04) {
+        /* Class 2 style (modes 4-7) – Relative or special */
+        addr = ea_class2(inst);
+    } else {
+        /* Class 0 style (modes 0-3) */
+        addr = ea_class0(inst);
+    }
+    *va = addr;
+    return SCPE_OK;
 }
 
 /* Clock reset */
@@ -1532,3 +1549,4 @@ for (k = 0; k < lnt; k++) {                             /* print specified */
     }                                                   /* end for */
 return SCPE_OK;
 }
+

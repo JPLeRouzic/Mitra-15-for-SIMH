@@ -45,7 +45,7 @@
 #define STOP_INVDEV     4                               /* invalid dev */
 #define STOP_INVINS     5                               /* invalid instr */
 #define STOP_INVIOP     6                               /* invalid I/O op */
-#define STOP_INDLIM     7                               /* indirect limit */
+// #define STOP_INDLIM     7                               /* indirect limit */
 #define STOP_EXULIM     8                               /* EXU limit */
 #define STOP_MMINT      9                               /* mm in intr */
 #define STOP_MMTRP      10                              /* mm in trap */
