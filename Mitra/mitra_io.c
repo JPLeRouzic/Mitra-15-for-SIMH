@@ -52,6 +52,13 @@ uint32 dev_map[64][NUM_CHAN];
 t_stat (*dev_dsp[64][NUM_CHAN])(uint32 fnc, uint32 dev, uint32 *dat) = { {NULL} };
 t_stat (*dev3_dsp[64])(uint32 fnc, uint32 dev, uint32 *dat) = { NULL };
 
+/* Indicators byte bits (byte 1) */
+#define IND_U         0x01
+#define IND_E         0x02
+#define IND_S         0x04
+#define IND_T         0x08
+#define IND_I         0x10
+
 /* Channel handling tables (existing) */
 uint8 chan_uar[NUM_CHAN];
 uint16 chan_wcr[NUM_CHAN];
