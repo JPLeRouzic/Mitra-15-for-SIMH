@@ -76,7 +76,7 @@
 /* Architectural constants */
 
 #define SIGN            040000000                       /* sign */
-#define DMASK           077777777                       /* data mask */
+#define DMASK           0177777                         /* data mask */
 #define EXPS            0400                            /* exp sign */
 #define EXPMASK         0777                            /* exp mask */
 #define SXT(x)          ((int32) (((x) & SIGN)? ((x) | ~DMASK): \

@@ -406,8 +406,8 @@ uint16 M[MAXMEMSIZE];
 /* Function prototypes */
 static uint16 ea_class0(uint16 inst);
 static uint16 ea_class2(uint16 inst);
-static uint16 read_word(uint16 addr);
-static void write_word(uint16 addr, uint16 val);
+uint16 read_word(uint16 addr);
+void write_word(uint16 addr, uint16 val);
 static uint16 add16(uint16 a, uint16 b, uint16 *carry, uint16 *overflow);
 static uint16 sub16(uint16 a, uint16 b, uint16 *carry, uint16 *overflow);
 static void set_condition_codes(uint16 result);
@@ -416,7 +416,7 @@ static int div32(uint16 high, uint16 low, uint16 divisor, uint16 *quot, uint16 *
 
 /* ========== Memory Access with Protection (manual page 11-10) ========== */
 
-static uint16 read_word(uint16 addr)
+uint16 read_word(uint16 addr)
 {
     uint16 word_addr = addr >> 1;  /* byte address to word address */
     if (word_addr >= MEMSIZE) {
@@ -425,7 +425,7 @@ static uint16 read_word(uint16 addr)
     return M[word_addr];
 }
 
-static void write_word(uint16 addr, uint16 val)
+void write_word(uint16 addr, uint16 val)
 {
     uint16 word_addr = addr >> 1;
     if (word_addr < MEMSIZE) {
@@ -1180,7 +1180,7 @@ return t & DMASK;
 
 t_stat Read (uint16 *va, uint16 *dat)
 {
-    if (va >= MEMSIZE) 
+    if ((uint) va >= MEMSIZE) 
 		{
 		return SCPE_NXM;
 		}
@@ -1225,29 +1225,6 @@ if (mon_map[6] == 0)
 if (mon_map[7] == 0)
     mon_map[7] = MAP_PROT;
 return;
-}
-
-/* POT routines for RL1, RL2, RL4 */
-
-t_stat pot_RL1 (uint32 num, uint32 *dat)
-{
-RL1 = *dat;
-set_dyn_map ();
-return SCPE_OK;
-}
-
-t_stat pot_RL2 (uint32 num, uint32 *dat)
-{
-RL2 = *dat;
-set_dyn_map ();
-return SCPE_OK;
-}
-
-t_stat pot_RL4 (uint32 num, uint32 *dat)
-{
-RL4 = (*dat) & 03737;
-set_dyn_map ();
-return SCPE_OK;
 }
 
 /* Recalculate api requests */

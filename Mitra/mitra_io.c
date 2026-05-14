@@ -1,61 +1,48 @@
-/* sds_io.c: SDS 940 I/O simulator
-
-   Copyright (c) 2001-2020, Robert M. Supnik
-
-   Permission is hereby granted, free of charge, to any person obtaining a
-   copy of this software and associated documentation files (the "Software"),
-   to deal in the Software without restriction, including without limitation
-   the rights to use, copy, modify, merge, publish, distribute, sublicense,
-   and/or sell copies of the Software, and to permit persons to whom the
-   Software is furnished to do so, subject to the following conditions:
-
-   The above copyright notice and this permission notice shall be included in
-   all copies or substantial portions of the Software.
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-   ROBERT M SUPNIK BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
-   IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-   Except as contained in this notice, the name of Robert M Supnik shall not be
-   used in advertising or otherwise to promote the sale, use or other dealings
-   in this Software without prior written authorization from Robert M Supnik.
-
-   01-Nov-2020  RMS     Fixed overrun/underrun handling in single-word IO
-   23-Oct-2020  RMS     TOP disconnects the channel rather than setting CHF_EOR
-   19-Mar-2012  RMS     Fixed various declarations (Mark Pizzolato)
-*/
-
+/* mitra_io.c – Mitra 15 I/O subsystem: Minibus, handlers, CSV M:1O/M:WAIT */
+#include "mitra_io.h"
 #include "mitra_defs.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-/* Data chain word */
+/* External references from mitra_cpu.c */
+extern uint16 G;        /* general base register */
+extern uint16 P;        /* program counter */
+extern uint16 A, E, X, L;
+extern uint8 C, OV, MS, MA, PR;
+extern uint16 read_word(uint16 addr);   /* raw absolute word read */
+extern void write_word(uint16 addr, uint16 val); /* raw absolute word write */
+extern uint16 M[];      /* memory array */
+extern uint16 RL1, RL2, RL4;  /* Relocation registers */
+extern void set_dyn_map (void);
 
-#define CHD_INT         040                             /* int on chain */
-#define CHD_PAGE        037                             /* new page # */
+/* Forward declarations for memory access helpers */
+static uint32 read_mem(uint32 addr, int zio);
+static void write_mem(uint32 addr, uint32 val, int zio);
+static uint8 read_byte(uint32 addr, int zio);
+static void write_byte(uint32 addr, uint8 val, int zio);
 
-/* Interlace POT */
+/* Device callbacks (to be implemented by handlers) */
+uint32 dev_read_byte(uint32 dev, int *eor);
+uint32 dev_read_word(uint32 dev, int *eor);
+void dev_write_byte(uint32 dev, uint8 val, int *eor);
+void dev_write_word(uint32 dev, uint16 val, int *eor);
+void dev_complete(uint32 dev, int ch);
 
-#define CHI_V_WC        14                              /* word count */
-#define CHI_M_WC        01777
-#define CHI_GETWC(x)    (((x) >> CHI_V_WC) & CHI_M_WC)
-#define CHI_V_MA        0                               /* mem address */
-#define CHI_M_MA        037777
-#define CHI_GETMA(x)    (((x) >> CHI_V_MA) & CHI_M_MA)
+/* dev_map maps device and channel numbers to a transfer flag masks */
+uint32 dev_map[64][NUM_CHAN];
 
-/* System interrupt POT */
+/* dev_dsp maps device and channel numbers to dispatch routines */
+t_stat (*dev_dsp[64][NUM_CHAN])(uint32 fnc, uint32 dev, uint32 *dat) = { {NULL} };
 
-#define SYI_V_GRP       18                              /* group */
-#define SYI_M_GRP       077
-#define SYI_GETGRP(x)   (((x) >> SYI_V_GRP) & SYI_M_GRP)
-#define SYI_DIS         (1 << 17)                       /* disarm if 0 */
-#define SYI_ARM         (1 << 16)                       /* arm if 1 */
-#define SYI_M_INT       0177777                         /* interrupt */
+/* dev3_dsp maps system device numbers to dispatch routines */
+t_stat (*dev3_dsp[64])(uint32 fnc, uint32 dev, uint32 *dat) = { NULL };
 
-/* Pseudo-device number for EOM/SKS mode 3 */
+t_stat chan_eor(int32 ch);
+t_stat pot_ilc(uint32 num, uint32 *dat);
+t_stat chan_read(int32 ch);
+t_stat chan_write(int32 ch);
 
-#define I_GETDEV3(x)    ((((x) & 020046000) != 020046000)? ((x) & DEV_MASK): DEV_MASK)
 
 #define TST_XFR(d,c)    (xfr_req & dev_map[d][c])
 #define SET_XFR(d,c)    xfr_req = xfr_req | dev_map[d][c]
@@ -64,6 +51,29 @@
 #define VLD_DEV(d,c)    (dev_dsp[d][c] != NULL)
 #define TST_EOR(c)      (chan_flag[c] & CHF_EOR)
 #define QAILCE(a)       (((a) >= POT_ILCY) && ((a) < (POT_ILCY + NUM_CHAN)))
+
+/* Control Block offsets (bytes) */
+#define CB_EVENT       0
+#define CB_INDICATORS  1
+#define CB_CMD         2
+#define CB_OPLABEL     3
+#define CB_ADDR_LO     4
+#define CB_COUNT_LO    6
+#define CB_ERRBR_LO    8
+#define CB_EXTRA_LO   10
+#define CB_TIMEOUT_LO 12
+#define CB_INTLEV_LO  14
+
+/* Event byte bits (from mitra_io.h) */
+/* EV_ACTIVE = 0x01, EV_ERROR = 0x02, EV_PHYSERR = 0x04, EV_INITERR = 0x10 */
+#define EV_USER       0x10
+
+/* Indicators byte bits (byte 1) */
+#define IND_U         0x01
+#define IND_E         0x02
+#define IND_S         0x04
+#define IND_T         0x08
+#define IND_I         0x10
 
 uint8 chan_uar[NUM_CHAN];                               /* unit addr */
 uint16 chan_wcr[NUM_CHAN];                              /* word count */
@@ -76,943 +86,686 @@ uint16 chan_mode[NUM_CHAN];                             /* mode */
 uint16 chan_flag[NUM_CHAN];                             /* flags */
 static const char *chname[NUM_CHAN] = {
     "W", "Y", "C", "D", "E", "F", "G", "H"
-    };
+};
 
-extern uint32 M[MAXMEMSIZE];                            /* memory */
+extern uint16 M[MAXMEMSIZE];                            /* memory */
 extern uint32 int_req;                                  /* int req */
 extern uint32 xfr_req;                                  /* xfer req */
 extern uint32 alert;                                    /* pin/pot alert */
-extern uint32 X, EM2, EM3, OV, ion, bpt;
+extern uint16 X, EM2, EM3, ion, bpt;
+extern uint8 OV;
 extern uint32 cpu_mode;
 extern int32 rtc_pie;
 extern int32 stop_invins, stop_invdev, stop_inviop;
 extern uint32 mon_usr_trap;
 extern UNIT cpu_unit;
 
-t_stat chan_reset (DEVICE *dptr);
-t_stat chan_read (int32 ch);
-t_stat chan_write (int32 ch);
-void chan_write_mem (int32 ch);
-void chan_flush_war (int32 ch);
-uint32 chan_mar_inc (int32 ch);
-t_stat chan_eor (int32 ch);
-t_stat pot_ilc (uint32 num, uint32 *dat);
-t_stat pot_dcr (uint32 num, uint32 *dat);
-t_stat pin_adr (uint32 num, uint32 *dat);
-t_stat pot_fork (uint32 num, uint32 *dat);
-t_stat dev_disc (uint32 ch, uint32 dev);
-t_stat dev_wreor (uint32 ch, uint32 dev);
-extern t_stat pot_RL1 (uint32 num, uint32 *dat);
-extern t_stat pot_RL2 (uint32 num, uint32 *dat);
-extern t_stat pot_RL4 (uint32 num, uint32 *dat);
-extern t_stat pin_rads (uint32 num, uint32 *dat);
-extern t_stat pot_rada (uint32 num, uint32 *dat);
-extern t_stat pin_dsk (uint32 num, uint32 *dat);
-extern t_stat pot_dsk (uint32 num, uint32 *dat);
-t_stat pin_mux (uint32 num, uint32 *dat);
-t_stat pot_mux (uint32 num, uint32 *dat);
-extern void set_dyn_map (void);
+/* Device handler type */
+typedef struct device_handler {
+    const char *name;
+    int   (*init)(uint32 cb_addr, int write, uint32 *extra);
+    void  (*start)(int unit);
+    int   (*poll)(int unit, uint32 *data, int *eor);
+    void  (*interrupt)(int unit);
+    void  (*attach)(int unit, const char *file, int write);
+} DEVHANDLER;
 
-/* SDS I/O model
+/* Minibus device slot */
+#define MAX_DEVICES 32
+typedef struct {
+    int         used;
+    int         oplabel;
+    int         handler_id;
+    int         unit;
+    uint32      cb_addr;
+    int         zio;
+    uint32      buffer_addr;
+    uint32      bytes_left;
+    uint32      extra_info;
+    int         cmd;
+    int         status;
+    int         eor;
+    int         waiting;
+    uint32      wait_task;
+    uint32      intr_level;
+    uint32      timeout;
+    int         active;
+    uint8       indicators;            /* store byte 1 of CB */
+} MINIBUS_DEV;
 
-   A device is modeled by its interactions with a channel.  Devices can only be
-   accessed via channels.  Each channel has its own device address space.  This
-   means devices can only be accessed from a specific channel.
+static MINIBUS_DEV minibus[MAX_DEVICES];
+static int next_free_dev = 0;
 
-   I/O operations start with a channel connect.  The EOM instruction is passed
-   to the device via the conn routine.  This routine is also used for non-channel
-   EOM's to the device.  For channel connects, the device must remember the
-   channel number.
+/* Interrupt system */
+#define INT_LEVELS 32
+static uint32 intr_pending = 0;
+static uint32 intr_mask = 0;
+static uint32 intr_armed[INT_LEVELS];
+static uint32 intr_context[INT_LEVELS];
 
-   The device responds (after a delay) by setting its XFR_RDY flag.  This causes
-   the channel to invoke either the read or write routine (for input or output)
-   to get or put the next character.  If the device is an asynchronous output
-   device, it calls routine chan_set_ordy to see if there is output available.
-   If there is, XFR_RDY is set; if not, the channel is marked to wake the
-   attached device when output is available.  This prevents invalid rate errors.
+/* Forward declarations of device handlers */
+static int  ty_init(uint32 cb_addr, int write, uint32 *extra);
+static void ty_start(int unit);
+static int  ty_poll(int unit, uint32 *data, int *eor);
+static void ty_interrupt(int unit);
+static void ty_attach(int unit, const char *file, int write);
 
-   Output may be terminated by a write end of record, a disconnect, or both.
-   Write end of record occurs when the word count reaches zero on an IORD or IORP
-   operation.  It also occurs if a TOP instruction is issued.  The device is
-   expected to respond by setting the end of record indicator in the channel,
-   which will in turn trigger an end of record interrupt.
+static int  ptr_init(uint32 cb_addr, int write, uint32 *extra);
+static void ptr_start(int unit);
+static int  ptr_poll(int unit, uint32 *data, int *eor);
+static void ptr_interrupt(int unit);
+static void ptr_attach(int unit, const char *file, int write);
 
-   When the channel operation completes, the channel disconnects and calls the
-   disconnect processor to perform any device specific cleanup.  The differences
-   between write end of record and disconnect are subtle.  On magtape output,
-   for example, both signal end of record; but write end of record allows the
-   magtape to continue moving, while disconnect halts its motion.
+static int  ptp_init(uint32 cb_addr, int write, uint32 *extra);
+static void ptp_start(int unit);
+static int  ptp_poll(int unit, uint32 *data, int *eor);
+static void ptp_interrupt(int unit);
+static void ptp_attach(int unit, const char *file, int write);
 
-   Valid devices supply a routine to handle potentially all I/O operations
-   (connect, disconnect, read, write, write end of record, sks).  There are
-   separate routines for PIN and POT.
+static int  lpr_init(uint32 cb_addr, int write, uint32 *extra);
+static void lpr_start(int unit);
+static int  lpr_poll(int unit, uint32 *data, int *eor);
+static void lpr_interrupt(int unit);
+static void lpr_attach(int unit, const char *file, int write);
 
-   Channels could, optionally, handle 12b or 24b characters.  The simulator can
-   support all widths.
-*/
+void io_assign_oplabel(int oplabel, int handler_id, int unit);
 
-t_stat chan_show_reg (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
-
-struct aldisp {
-    t_stat      (*pin) (uint32 num, uint32 *dat);       /* altnum, *dat */
-    t_stat      (*pot) (uint32 num, uint32 *dat);       /* altnum, *dat */
-    };
-
-/* Channel data structures
-
-   chan_dev     channel device descriptor
-   chan_unit    channel unit descriptor
-   chan_reg     channel register list
-*/
-
-UNIT chan_unit = { UDATA (NULL, 0, 0) };
-
-REG chan_reg[] = {
-    { BRDATA (UAR, chan_uar, 8, 6, NUM_CHAN) },
-    { BRDATA (WCR, chan_wcr, 8, 15, NUM_CHAN) },
-    { BRDATA (MAR, chan_mar, 8, 16, NUM_CHAN) },
-    { BRDATA (DCR, chan_dcr, 8, 6, NUM_CHAN) },
-    { BRDATA (WAR, chan_war, 8, 24, NUM_CHAN) },
-    { BRDATA (CPW, chan_cpw, 8, 2, NUM_CHAN) },
-    { BRDATA (CNT, chan_cnt, 8, 3, NUM_CHAN) },
-    { BRDATA (MODE, chan_mode, 8, 12, NUM_CHAN) },
-    { BRDATA (FLAG, chan_flag, 8, CHF_N_FLG, NUM_CHAN) },
+/* Handler table */
+static DEVHANDLER handlers[] = {
+    { "typewriter",  ty_init,  ty_start,  ty_poll,  ty_interrupt,  ty_attach },
+    { "ptr",         ptr_init, ptr_start, ptr_poll, ptr_interrupt, ptr_attach },
+    { "ptp",         ptp_init, ptp_start, ptp_poll, ptp_interrupt, ptp_attach },
+    { "lprinter",    lpr_init, lpr_start, lpr_poll, lpr_interrupt, lpr_attach },
     { NULL }
-    };
+};
+#define NUM_HANDLERS (sizeof(handlers)/sizeof(handlers[0]) - 1)
 
-MTAB chan_mod[] = {
-    { MTAB_XTD | MTAB_VDV | MTAB_NMO, CHAN_W, "W", NULL,
-      NULL, &chan_show_reg, NULL },
-    { MTAB_XTD | MTAB_VDV | MTAB_NMO, CHAN_Y, "Y", NULL,
-      NULL, &chan_show_reg, NULL },
-    { MTAB_XTD | MTAB_VDV | MTAB_NMO, CHAN_C, "C", NULL,
-      NULL, &chan_show_reg, NULL },
-    { MTAB_XTD | MTAB_VDV | MTAB_NMO, CHAN_D, "D", NULL,
-      NULL, &chan_show_reg, NULL },
-    { MTAB_XTD | MTAB_VDV | MTAB_NMO, CHAN_E, "E", NULL,
-      NULL, &chan_show_reg, NULL },
-    { MTAB_XTD | MTAB_VDV | MTAB_NMO, CHAN_F, "F", NULL,
-      NULL, &chan_show_reg, NULL },
-    { MTAB_XTD | MTAB_VDV | MTAB_NMO, CHAN_G, "G", NULL,
-      NULL, &chan_show_reg, NULL },
-    { MTAB_XTD | MTAB_VDV | MTAB_NMO, CHAN_H, "H", NULL,
-      NULL, &chan_show_reg, NULL }
-    };
+/* Operational label mapping */
+typedef struct {
+    int oplabel;
+    int handler_id;
+    int unit;
+} OPL_MAP;
+static OPL_MAP opl_map[32];
+static int num_opl = 0;
 
-DEVICE chan_dev = {
-    "CHAN", &chan_unit, chan_reg, chan_mod,
-    1, 8, 8, 1, 8, 8,
-    NULL, NULL, &chan_reset,
-    NULL, NULL, NULL
-    };
-
-/* Tables */
-
-static const uint32 int_zc[8] = {
-    INT_WZWC, INT_YZWC, INT_CZWC, INT_DZWC,
-    INT_EZWC, INT_FZWC, INT_GZWC, INT_HZWC
-    };
-
-static const uint32 int_er[8] = {
-    INT_WEOR, INT_YEOR, INT_CEOR, INT_DEOR,
-    INT_EEOR, INT_FEOR, INT_GEOR, INT_HEOR
-    };
-
-/* dev_map maps device and channel numbers to a transfer flag masks */
-
-uint32 dev_map[64][NUM_CHAN];
-
-/* dev_dsp maps device and channel numbers to dispatch routines */
-
-t_stat (*dev_dsp[64][NUM_CHAN])(uint32 fnc, uint32 dev, uint32 *dat) = { {NULL} };
-
-/* dev3_dsp maps system device numbers to dispatch routines */
-
-t_stat (*dev3_dsp[64])(uint32 fnc, uint32 dev, uint32 *dat) = { NULL };
-
-/* dev_alt maps alert numbers to dispatch routines */
-
-struct aldisp dev_alt[] = {
-    { NULL, NULL },
-    { NULL, &pot_ilc }, { NULL, &pot_ilc },
-    { NULL, &pot_ilc }, { NULL, &pot_ilc },
-    { NULL, &pot_ilc }, { NULL, &pot_ilc },
-    { NULL, &pot_ilc }, { NULL, &pot_ilc },
-    { NULL, &pot_dcr }, { NULL, &pot_dcr },
-    { NULL, &pot_dcr }, { NULL, &pot_dcr },
-    { NULL, &pot_dcr }, { NULL, &pot_dcr },
-    { NULL, &pot_dcr }, { NULL, &pot_dcr },
-    { &pin_adr, NULL }, { &pin_adr, NULL },
-    { &pin_adr, NULL }, { &pin_adr, NULL },
-    { &pin_adr, NULL }, { &pin_adr, NULL },
-    { &pin_adr, NULL }, { &pin_adr, NULL },
-    { NULL, &pot_RL1 }, { NULL, &pot_RL2 },
-    { NULL, &pot_RL4 },
-    { &pin_rads, NULL }, { NULL, &pot_rada },
-    { &pin_dsk, &pot_dsk }, { NULL, &pot_fork },
-    { &pin_mux, &pot_mux }
-    };
-
-/* Single word I/O instructions */
-
-t_stat op_wyim (uint32 inst, uint32 *dat)
+/* ------------------------------------------------------------
+   Memory access helpers (G‑relative or ZC‑relative)
+   ------------------------------------------------------------ */
+static uint32 read_mem(uint32 addr, int zio)
 {
-int32 ch, dev;
-
-ch = (inst & 000200000)? CHAN_W: CHAN_Y;                /* get chan# */
-dev = chan_uar[ch] & DEV_MASK;                          /* get dev # */
-if (chan_cnt[ch] <= chan_cpw[ch]) {                     /* buffer empty? */
-    if (dev == 0)                                       /* no device? dead */
-        return STOP_INVIOP;
-    return STOP_IONRDY;                                 /* hang until full */
+    if (zio) {
+        uint32 zc_base = read_word(G + 6);
+        return read_word(zc_base + addr);
+    } else {
+        return read_word(G + addr);
     }
-*dat = chan_war[ch];                                    /* get data */
-chan_war[ch] = 0;                                       /* reset war */
-chan_cnt[ch] = 0;                                       /* reset cnt */
-return SCPE_OK;
 }
 
-t_stat op_miwy (uint32 inst, uint32 dat)
+static void write_mem(uint32 addr, uint32 val, int zio)
 {
-int32 ch, dev;
-
-ch = (inst & 000200000)? CHAN_W: CHAN_Y;                /* get chan# */
-dev = chan_uar[ch] & DEV_MASK;                          /* get dev # */
-if (chan_cnt[ch] != 0) {                                /* buffer full? */
-    if (dev == 0)                                       /* no device? dead */
-        return STOP_INVIOP;
-    return STOP_IONRDY;                                 /* hang until full */
+    if (zio) {
+        uint32 zc_base = read_word(G + 6);
+        write_word(zc_base + addr, val);
+    } else {
+        write_word(G + addr, val);
     }
-chan_war[ch] = dat;                                     /* get data */
-chan_cnt[ch] = chan_cpw[ch] + 1;                        /* buffer full */
-if (chan_flag[ch] & CHF_OWAK) {                         /* output wake? */
-    if (VLD_DEV (dev, ch))                              /* wake channel */
-        SET_XFR (dev, ch);
-    chan_flag[ch] = chan_flag[ch] & ~CHF_OWAK;          /* clear wake */
-    }
-return SCPE_OK;
 }
 
-t_stat op_pin (uint32 *dat)
+static uint8 read_byte(uint32 addr, int zio)
 {
-uint32 al = alert;                                      /* local copy */
-
-alert = 0;                                              /* clear alert */
-if ((al == 0) || (dev_alt[al].pin == NULL))             /* inv alert? */
-    CRETIOP;
-return dev_alt[al].pin (al, dat);                       /* PIN from dev */
+    uint16 word = read_mem(addr & ~1, zio);
+    return (addr & 1) ? (word >> 8) : (word & 0xFF);
 }
 
-t_stat op_pot (uint32 dat)
+static void write_byte(uint32 addr, uint8 val, int zio)
 {
-uint32 al = alert;                                      /* local copy */
-
-alert = 0;                                              /* clear alert */
-if ((al == 0) || (dev_alt[al].pot == NULL))             /* inv alert? */
-    CRETIOP;
-return dev_alt[al].pot (al, &dat);                      /* POT to dev */
+    uint16 word = read_mem(addr & ~1, zio);
+    if (addr & 1)
+        word = (word & 0x00FF) | (val << 8);
+    else
+        word = (word & 0xFF00) | val;
+    write_mem(addr & ~1, word, zio);
 }
 
-/* EOM/EOD */
-
-t_stat op_eomd (uint32 inst)
+/* ------------------------------------------------------------
+   I/O Supervisor Calls
+   ------------------------------------------------------------ */
+static int find_device_by_oplabel(int oplabel)
 {
-uint32 mod = I_GETIOMD (inst);                          /* get mode */
-uint32 ch = I_GETEOCH (inst);                           /* get chan # */
-uint32 dev = inst & DEV_MASK;                           /* get dev # */
-uint32 ch_dev = chan_uar[ch] & DEV_MASK;                /* chan curr dev # */
-t_stat r;
-
-switch (mod) {
-
-    case 0:                                             /* IO control */
-        if (dev) {                                      /* new dev? */
-            if (ch_dev)                                 /* chan act? err */
-                CRETIOP;
-            if (INV_DEV (dev, ch))                      /* inv dev? err */
-                CRETDEV;
-            chan_war[ch] = chan_cnt[ch] = 0;            /* init chan */
-            chan_dcr[ch] = 0;
-            chan_uar[ch] = 0;
-            if (!(chan_flag[ch] & CHF_ILCE) &&          /* ignore if ilc */
-                !QAILCE (alert)) {                      /* already alerted */
-                chan_flag[ch] = chan_mode[ch] = 0;
-                if (ch >= CHAN_E)
-                    chan_mode[ch] = CHM_CE;
-                }
-            if ((r = dev_dsp[dev][ch] (IO_CONN, inst, NULL)))/* connect */
-                return r;
-            if (!(chan_flag[ch] & CHF_ILCE) &&          /* ignore if ilc */
-                !QAILCE (alert)) {                      /* already alerted */
-                if ((inst & I_IND) || (ch >= CHAN_C)) { /* C-H? alert ilc */
-                    alert = POT_ILCY + ch;
-                    chan_mar[ch] = chan_wcr[ch] = 0;
-                    }
-                }
-            if (chan_flag[ch] & CHF_24B)                /* 24B? 1 ch/wd */
-                chan_cpw[ch] = 0;
-            else if (chan_flag[ch] & CHF_12B)           /* 12B? 2 ch/wd */
-                chan_cpw[ch] = CHC_GETCPW (inst) & 1;
-            else chan_cpw[ch] = CHC_GETCPW (inst);      /* 6b, 1-4 ch/wd */
-            chan_uar[ch] = dev;                         /* connected */
-            if ((dev & DEV_OUT) && ion && !QAILCE (alert)) /* out, prog IO? */
-                int_req = int_req | int_zc[ch];         /* initial intr */
-            }
-        else return dev_disc (ch, ch_dev);              /* disconnect */
-        break;
-
-    case 1:                                             /* buf control */
-        if (QAILCE (alert)) {                           /* ilce alerted? */
-            ch = alert - POT_ILCY;                      /* derive chan */
-            if (ch >= CHAN_E)                           /* DACC? ext */
-                inst = inst | CHM_CE;
-            chan_mode[ch] = inst;                       /* save mode */
-            chan_mar[ch] = (CHM_GETHMA (inst) << 14) |  /* get hi mar */
-                (chan_mar[ch] & CHI_M_MA);
-            chan_wcr[ch] = (CHM_GETHWC (inst) << 10) |  /* get hi wc */
-                (chan_wcr[ch] & CHI_M_WC);
-            }
-        else if (dev) {                                 /* dev EOM */
-            if (INV_DEV (dev, ch))                      /* inv dev? err */
-                CRETDEV;
-            return dev_dsp[dev][ch] (IO_EOM1, inst, NULL);
-            }
-        else {                                          /* chan EOM */
-            inst = inst & 047677;
-            if (inst == 040000) {                       /* alert ilce */
-                alert = POT_ILCY + ch;
-                chan_mar[ch] = chan_wcr[ch] = 0;
-                }
-            else if (inst == 002000)                    /* alert addr */
-                alert = POT_ADRY + ch;
-            else if (inst == 001000)                    /* alert DCR */
-                alert = POT_DCRY + ch;
-            else if (inst == 004000) {                  /* term output */
-                if (ch_dev & DEV_OUT) {                 /* to output dev? */
-                    if (chan_cnt[ch] || (chan_flag[ch] & CHF_ILCE)) /* busy, DMA? */
-                        chan_flag[ch] = chan_flag[ch] | CHF_TOP;    /* TOP pending */
-                    else return dev_disc (ch, ch_dev);  /* idle, disconnect */
-                    }                                   /* end else TOP */
-                else if (ch_dev & DEV_MT) {             /* change to scan? */
-                    chan_uar[ch] = chan_uar[ch] | DEV_MTS;    /* change dev addr */
-                    chan_flag[ch] = chan_flag[ch] | CHF_SCAN; /* set scan flag */
-                    }                                   /* end else change scan */
-                }                                       /* end else term output */
-            }                                           /* end else chan EOM */
-        break;
-
-    case 2:                                             /* internal */
-        if (ch >= CHAN_E) {                             /* EOD? */
-            if (inst & 00300) {                         /* set EM? */
-                if (inst & 00100)
-                    EM2 = inst & 07;
-                if (inst & 00200)
-                    EM3 = (inst >> 3) & 07;
-                set_dyn_map ();
-                }
-            break;
-            }                                           /* end if EOD */
-        if (inst & 00001)                               /* clr OV */
-            OV = 0;
-        if (inst & 00002)                               /* ion */
-            ion = 1;
-        else if (inst & 00004)                          /* iof */
-            ion = 0;
-        if ((inst & 00010) && (((X >> 1) ^ X) & EXPS))
-            OV = 1;
-        if (inst & 00020)                               /* alert sys int */
-            alert = POT_SYSI;
-        if (inst & 00100)                               /* arm clk pls */
-            rtc_pie = 1;
-        else if (inst & 00200)                          /* disarm pls */
-            rtc_pie = 0;
-        if ((inst & 01400) == 01400)                    /* alert RL4 */
-            alert = POT_RL4;
-        else if (inst & 00400)                          /* alert RL1 */
-            alert = POT_RL1;
-        else if (inst & 01000)                          /* alert RL2 */
-            alert = POT_RL2;
-        if (inst & 02000) {                             /* nml to mon */
-            cpu_mode = MON_MODE;
-            if (inst & 00400)
-                mon_usr_trap = 1;
-            }
-        break;
-
-    case 3:                                             /* special */
-        dev = I_GETDEV3 (inst);                         /* special device */
-        if (dev == DEV3_SMUX && !(cpu_unit.flags & UNIT_GENIE))
-            dev = DEV3_GMUX;
-        if (dev3_dsp[dev])                              /* defined? */
-            return dev3_dsp[dev] (IO_CONN, inst, NULL);
-        CRETINS;
-        }                                               /* end case */
-
-return SCPE_OK;
+    for (int i = 0; i < num_opl; i++)
+        if (opl_map[i].oplabel == oplabel)
+            return i;
+    return -1;
 }
 
-/* Skip if not signal */
-
-t_stat op_sks (uint32 inst, uint32 *dat)
+t_stat io_csv_1o(uint32 cb_addr, int zio)
 {
-uint32 mod = I_GETIOMD (inst);                          /* get mode */
-uint32 ch = I_GETSKCH (inst);                           /* get chan # */
-uint32 dev = inst & DEV_MASK;                           /* get dev # */
+    uint8  event, indicators, cmd, oplabel;
+    uint16 buffer_addr, byte_count;
+    uint32 err_branch = 0, extra = 0, timeout = 0, intr_lvl = 0;
+    int    opl_idx;
+    MINIBUS_DEV *dev;
 
-*dat = 0;
-if ((ch == 4) && !(inst & 037774)) {                    /* EM test */
-    if (((inst & 0001) && (EM2 != 2)) ||
-        ((inst & 0002) && (EM3 != 3)))
-        *dat = 1;
-    return SCPE_OK;
-    }
-switch (mod) {
+    /* Read fixed part of CB */
+    event      = read_byte(cb_addr + CB_EVENT, zio);
+    indicators = read_byte(cb_addr + CB_INDICATORS, zio);
+    cmd        = read_byte(cb_addr + CB_CMD, zio);
+    oplabel    = read_byte(cb_addr + CB_OPLABEL, zio);
+    buffer_addr= read_mem(cb_addr + CB_ADDR_LO, zio);
+    byte_count = read_mem(cb_addr + CB_COUNT_LO, zio);
 
-    case 1:                                             /* ch, dev */
-        if (dev) {                                      /* device */
-            if (INV_DEV (dev, ch))                      /* inv dev? err */
-                CRETDEV;
-            dev_dsp[dev][ch] (IO_SKS, inst, dat);       /* do test */
-            }
-        else {                                          /* channel */
-            if (((inst & 04000) && (chan_uar[ch] == 0)) ||
-                ((inst & 02000) && (chan_wcr[ch] == 0)) ||
-                ((inst & 01000) && ((chan_flag[ch] & CHF_ERR) == 0)) ||
-                ((inst & 00400) && (chan_flag[ch] & CHF_IREC)))
-                *dat = 1;
-            }
-        break;
+    /* Optional fields */
+    if (indicators & IND_E)
+        err_branch = read_mem(cb_addr + CB_ERRBR_LO, zio);
+    if (indicators & IND_S)
+        extra = read_mem(cb_addr + CB_EXTRA_LO, zio);
+    if (indicators & IND_T)
+        timeout = read_mem(cb_addr + CB_TIMEOUT_LO, zio);
+    if (indicators & IND_I)
+        intr_lvl = read_mem(cb_addr + CB_INTLEV_LO, zio) & 0x1F;
 
-    case 2:                                             /* internal test */
-        if (inst & 0001) {                              /* test OV */
-            *dat = OV ^ 1;                              /* skip if off */
-            OV = 0;                                     /* and reset */
-            break;
-            }
-        if (((inst & 00002) && !ion) ||                 /* ion, bpt test */
-            ((inst & 00004) && ion) ||
-            ((inst & 00010) && ((chan_flag[CHAN_W] & CHF_ERR) == 0)) ||
-            ((inst & 00020) && ((chan_flag[CHAN_Y] & CHF_ERR) == 0)) ||
-            ((inst & 00040) && ((bpt & 001) == 0)) ||
-            ((inst & 00100) && ((bpt & 002) == 0)) ||
-            ((inst & 00200) && ((bpt & 004) == 0)) ||
-            ((inst & 00400) && ((bpt & 010) == 0)) ||
-            ((inst & 01000) && (chan_uar[CHAN_W] == 0)) ||
-            ((inst & 02000) && (chan_uar[CHAN_Y] == 0)))
-            *dat = 1;
-        break;
-
-    case 3:                                             /* special */
-        dev = I_GETDEV3 (inst);                         /* special device */
-        if (dev == DEV3_SMUX && !(cpu_unit.flags & UNIT_GENIE))
-            dev = DEV3_GMUX;
-        if (dev3_dsp[dev])
-            dev3_dsp[dev] (IO_SKS, inst, dat);
-        else CRETINS;
-        }                                               /* end case */
-
-return SCPE_OK;
-}
-
-/* PIN/POT routines */
-
-t_stat pot_ilc (uint32 num, uint32 *dat)
-{
-uint32 ch = num - POT_ILCY;
-
-chan_mar[ch] = (chan_mar[ch] & ~CHI_M_MA) | CHI_GETMA (*dat);
-chan_wcr[ch] = (chan_wcr[ch] & ~CHI_M_WC) | CHI_GETWC (*dat);
-chan_flag[ch] = chan_flag[ch] | CHF_ILCE;
-return SCPE_OK;
-}
-
-t_stat pot_dcr (uint32 num, uint32 *dat)
-{
-uint32 ch = num - POT_DCRY;
-
-chan_dcr[ch] = (*dat) & (CHD_INT | CHD_PAGE);
-chan_flag[ch] = chan_flag[ch] | CHF_DCHN;
-return SCPE_OK;
-}
-
-t_stat pin_adr (uint32 num, uint32 *dat)
-{
-uint32 ch = num - POT_ADRY;
-
-*dat = chan_mar[ch] & PAMASK;
-return SCPE_OK;
-}
-
-/* System interrupt POT.
-
-   The SDS 940 timesharing system uses a permanently asserted
-   system interrupt as a way of forking the teletype input
-   interrupt handler to a lower priority.  The interrupt is
-   armed to set up the fork, and disarmed in the fork routine */
-
-t_stat pot_fork (uint32 num, uint32 *dat)
-{
-uint32 igrp = SYI_GETGRP (*dat);                        /* get group */
-uint32 fbit = (0100000 >> (VEC_FORK & 017));            /* bit in group */
-
-if (igrp == ((VEC_FORK-0200) / 020)) {                  /* right group? */
-    if ((*dat & SYI_ARM) && (*dat & fbit))              /* arm, bit set? */
-        int_req = int_req | INT_FORK;
-    if ((*dat & SYI_DIS) && !(*dat & fbit))             /* disarm, bit clr? */
-        int_req = int_req & ~INT_FORK;
-    }
-return SCPE_OK;
-}
-
-/* Channel read invokes the I/O device to get the next character and,
-   if not end of record, assembles it into the word assembly register.
-   If the interlace is on, the full word is stored in memory.
-   The key difference points for the various terminal functions are
-
-        end of record   comp: EOT interrupt
-                        IORD, IOSD: EOR interrupt, disconnect
-                        IORP, IOSP: EOR interrupt, interrecord
-        interlace off:  comp: EOW interrupt
-                        IORD, IORP: ignore
-                        IOSD, IOSP: overrun error
-        --wcr == 0:     comp: clear interlace
-                        IORD, IORP, IOSP: ZWC interrupt
-                        IOSD: ZWC interrupt, EOR interrupt, disconnect
-
-   Note that the channel can be disconnected if CHF_EOR is set, but must
-   not be if XFR_REQ is set */
-
-t_stat chan_read (int32 ch)
-{
-uint32 dat = 0;
-uint32 dev = chan_uar[ch] & DEV_MASK;
-uint32 tfnc = CHM_GETFNC (chan_mode[ch]);
-t_stat r = SCPE_OK;
-
-if ((dev != 0) && TST_XFR (dev, ch)) {                  /* ready to xfr? */
-    if (INV_DEV (dev, ch))                              /* can't read? */
-        CRETIOP;
-    r = dev_dsp[dev][ch] (IO_READ, dev, &dat);          /* read data */
-    if ((r != 0) || (chan_cnt[ch] > chan_cpw[ch]))      /* error or overrun? */
-        chan_flag[ch] = chan_flag[ch] | CHF_ERR;
-    else {                                              /* no, precess data */
-        if (chan_flag[ch] & CHF_24B)                    /* 24B? */
-            chan_war[ch] = dat;
-        else if (chan_flag[ch] & CHF_12B)               /* 12B? */
-            chan_war[ch] = ((chan_war[ch] << 12) | (dat & 07777)) & DMASK;
-        else chan_war[ch] = ((chan_war[ch] << 6) | (dat & 077)) & DMASK;
-        }
-    if (chan_flag[ch] & CHF_SCAN)                       /* scanning? */
-        chan_cnt[ch] = chan_cpw[ch];                    /* never full */
-    else chan_cnt[ch] = chan_cnt[ch] + 1;               /* insert char */
-    if (chan_cnt[ch] > chan_cpw[ch]) {                  /* full now? */
-        if (chan_flag[ch] & CHF_ILCE) {                 /* interlace on? */
-            chan_write_mem (ch);                        /* write to mem */
-            if (chan_wcr[ch] == 0) {                    /* wc zero? */
-                chan_flag[ch] = chan_flag[ch] & ~CHF_ILCE; /* clr interlace */
-                if ((tfnc != CHM_COMP) && (chan_mode[ch] & CHM_ZC))
-                    int_req = int_req | int_zc[ch];     /* zwc interrupt */
-                if (tfnc == CHM_IOSD) {                 /* IOSD? also EOR */
-                    if (chan_mode[ch] & CHM_ER)
-                        int_req = int_req | int_er[ch];
-                    dev_disc (ch, dev);                 /* disconnect */
-                    }                                   /* end if IOSD */
-                }                                       /* end if wcr == 0 */
-            }                                           /* end if ilce on */
-        else {                                          /* interlace off */
-            if (TST_EOR (ch))                           /* eor? */
-                return chan_eor (ch);
-            if (tfnc == CHM_COMP) {                     /* C: EOW, intr */
-                if (ion)
-                    int_req = int_req | int_zc[ch];
-                }
-            else if (tfnc & CHM_SGNL)                   /* Sx: error */
-                chan_flag[ch] = chan_flag[ch] | CHF_ERR;
-            else chan_cnt[ch] = chan_cpw[ch];           /* Rx: ignore */
-            }                                           /* end else ilce */
-        }                                               /* end if full */
-    }                                                   /* end if xfr */
-if (TST_EOR (ch)) {                                     /* end record? */
-    if (tfnc == CHM_COMP)                               /* C: fill war */
-        chan_flush_war (ch);
-    else if (chan_cnt[ch]) {                            /* RX, CX: fill? */
-        chan_flush_war (ch);                            /* fill war */
-        if (chan_flag[ch] & CHF_ILCE)                   /* ilce on? store */
-            chan_write_mem (ch);
-        }                                               /* end else if cnt */
-    return chan_eor (ch);                               /* eot/eor int */
-    }
-return r;
-}
-
-void chan_write_mem (int32 ch)
-{
-WriteP (chan_mar[ch], chan_war[ch]);                    /* write to mem */
-chan_mar[ch] = chan_mar_inc (ch);                       /* incr mar */
-chan_wcr[ch] = (chan_wcr[ch] - 1) & 077777;             /* decr wcr */
-chan_war[ch] = 0;                                       /* reset war */
-chan_cnt[ch] = 0;                                       /* reset cnt */
-return;
-}
-
-void chan_flush_war (int32 ch)
-{
-int32 i = (chan_cpw[ch] - chan_cnt[ch]) + 1;
-
-if (i) {
-    if (chan_flag[ch] & CHF_24B)
-        chan_war[ch] = 0;
-    else if (chan_flag[ch] & CHF_12B)
-        chan_war[ch] = (chan_war[ch] << 12) & DMASK;
-    else chan_war[ch] = (chan_war[ch] << (i * 6)) & DMASK;
-    chan_cnt[ch] = chan_cpw[ch] + 1;
-    }
-return;
-}
-
-/* Channel write gets the next character and sends it to the I/O device.
-   If this is the last character in an interlace operation, the end of
-   record operation is invoked.
-   The key difference points for the various terminal functions are
-
-        end of record:  comp: EOT interrupt
-                        IORD, IOSD: EOR interrupt, disconnect
-                        IORP, IOSP: EOR interrupt, interrecord
-        interlace off:  if not end of record, EOW interrupt
-        --wcr == 0:     comp: EOT interrupt, disconnect
-                        IORD, IORP: ignore
-                        IOSD: ZWC interrupt, disconnect
-                        IOSP: ZWC interrupt, interrecord
-*/
-t_stat chan_write (int32 ch)
-{
-uint32 dat = 0;
-uint32 dev = chan_uar[ch] & DEV_MASK;
-uint32 tfnc = CHM_GETFNC (chan_mode[ch]);
-t_stat r = SCPE_OK;
-
-if (dev && TST_XFR (dev, ch)) {                         /* ready to xfr? */
-    if (INV_DEV (dev, ch))                              /* invalid dev? */
-        CRETIOP;
-    if (chan_cnt[ch] == 0) {                            /* buffer empty? */
-        if (chan_flag[ch] & CHF_ILCE) {                 /* interlace on? */
-            chan_war[ch] = ReadP (chan_mar[ch]);
-            chan_mar[ch] = chan_mar_inc (ch);           /* incr mar */
-            chan_wcr[ch] = (chan_wcr[ch] - 1) & 077777; /* decr mar */
-            chan_cnt[ch] = chan_cpw[ch] + 1;            /* set cnt */
-            }
-        else {                                          /* ilce off */
-             if (TST_EOR (dev))                         /* EOR? */
-                return chan_eor (ch);
-            chan_flag[ch] = chan_flag[ch] | CHF_ERR;    /* rate err */
-            }                                           /* end else ilce */
-        }                                               /* end if cnt */
-    if (chan_cnt[ch] != 0) {                            /* if not underrun */
-        chan_cnt[ch] = chan_cnt[ch] - 1;                /* decr cnt */
-        if (chan_flag[ch] & CHF_24B)                    /* 24B? */
-            dat = chan_war[ch];
-        else if (chan_flag[ch] & CHF_12B) {             /* 12B? */
-            dat = (chan_war[ch] >> 12) & 07777;         /* get halfword */
-            chan_war[ch] = (chan_war[ch] << 12) & DMASK;/* remove from war */
-            }
-        else {                                          /* 6B */
-            dat = (chan_war[ch] >> 18) & 077;           /* get char */
-            chan_war[ch] = (chan_war[ch] << 6) & DMASK; /* remove from war */
-            }
-        }                                               /* end no underrun */
-    r = dev_dsp[dev][ch] (IO_WRITE, dev, &dat);         /* write */
-    if (r != 0)                                         /* error? */
-        chan_flag[ch] = chan_flag[ch] | CHF_ERR;
-    if (chan_cnt[ch] == 0) {                            /* buf empty? */
-        if (chan_flag[ch] & CHF_ILCE) {                 /* ilce on? */
-            if (chan_wcr[ch] == 0) {                    /* wc now 0? */
-                chan_flag[ch] = chan_flag[ch] & ~CHF_ILCE; /* ilc off */
-                if (tfnc == CHM_COMP) {                 /* compatible? */
-                    if (ion)
-                        int_req = int_req | int_zc[ch];
-                    dev_disc (ch, dev);                 /* disconnnect */
-                    }                                   /* end if comp */
-                else {                                  /* extended */
-                    if (chan_mode[ch] & CHM_ZC)         /* ZWC int */
-                        int_req = int_req | int_zc[ch];
-                    if (tfnc == CHM_IOSD) {             /* SD */
-                        if (chan_mode[ch] & CHM_ER)     /* EOR int */
-                            int_req = int_req | int_er[ch];
-                        dev_disc (ch, dev);             /* disconnnect */
-                        }                               /* end if SD */
-                    else if (!(tfnc && CHM_SGNL) ||     /* IORx or IOSP TOP? */
-                        (chan_flag[ch] & CHF_TOP))
-                        dev_disc (ch, dev);             /* R: disconnect */
-                    chan_flag[ch] = chan_flag[ch] & ~CHF_TOP;
-                    }                                   /* end else comp */
-                }                                       /* end if wcr */
-            }                                           /* end if ilce */
-        else if (chan_flag[ch] & CHF_TOP) {             /* off, TOP pending? */
-            chan_flag[ch] = chan_flag[ch] & ~CHF_TOP;   /* clear TOP */
-            dev_disc (ch, dev);                         /* disconnect */
-            }
-        else if (ion)                                   /* no TOP, EOW intr */
-            int_req = int_req | int_zc[ch];
-        }                                               /* end if cnt */
-   }                                                    /* end if xfr */
-if (TST_EOR (ch))                                       /* eor rcvd? */
-    return chan_eor (ch);
-return r;
-}
-
-/* MAR increment */
-
-uint32 chan_mar_inc (int32 ch)
-{
-uint32 t = (chan_mar[ch] + 1) & PAMASK;                 /* incr mar */
-
-if ((chan_flag[ch] & CHF_DCHN) && ((t & VA_POFF) == 0)) { /* chain? */
-    chan_flag[ch] = chan_flag[ch] & ~CHF_DCHN;          /* clr flag */
-    if (chan_dcr[ch] & CHD_INT)                         /* if armed, intr */
-        int_req = int_req | int_zc[ch];
-    t = (chan_dcr[ch] & CHD_PAGE) << VA_V_PN;           /* new mar */
-    }
-return t;
-}
-
-/* End of record action */
-
-t_stat chan_eor (int32 ch)
-{
-uint32 tfnc = CHM_GETFNC (chan_mode[ch]);
-uint32 dev = chan_uar[ch] & DEV_MASK;
-
-chan_flag[ch] = chan_flag[ch] & ~(CHF_EOR | CHF_ILCE);  /* clr eor, ilce */
-if (((tfnc == CHM_COMP) && ion) || (chan_mode[ch] & CHM_ER))
-    int_req = int_req | int_er[ch];                     /* EOT/EOR? */
-if (dev && (tfnc & CHM_PROC))                           /* P, still conn? */
-    chan_flag[ch] = chan_flag[ch] | CHF_IREC;           /* interrecord */
-else return dev_disc (ch, dev);                         /* disconnect */
-return SCPE_OK;
-}
-
-/* Utility routines */
-
-t_stat dev_disc (uint32 ch, uint32 dev)
-{
-chan_uar[ch] = 0;                                       /* disconnect */
-if (dev_dsp[dev][ch])
-    return dev_dsp[dev][ch] (IO_DISC, dev, NULL);
-return SCPE_OK;
-}
-
-t_stat dev_wreor (uint32 ch, uint32 dev)
-{
-if (dev_dsp[dev][ch])
-    return dev_dsp[dev][ch] (IO_WREOR, dev, NULL);
-chan_flag[ch] = chan_flag[ch] | CHF_EOR;                /* set eor */
-return SCPE_OK;
-}
-
-/* Externally visible routines */
-/* Channel driver */
-
-t_stat chan_process (void)
-{
-int32 i, dev;
-t_stat r;
-
-for (i = 0; i < NUM_CHAN; i++) {                        /* loop thru */
-    dev = chan_uar[i] & DEV_MASK;                       /* get dev */
-    if ((dev && TST_XFR (dev, i)) || TST_EOR (i)) {     /* chan active? */
-        if (dev & DEV_OUT)                              /* write */
-            r = chan_write (i);
-        else r = chan_read (i);                         /* read */
-        if (r)
-            return r;
-        }
-    }
-return SCPE_OK;
-}
-
-/* Test for channel active */
-
-t_bool chan_testact (void)
-{
-int32 i, dev;
-
-for (i = 0; i < NUM_CHAN; i++) {
-    dev = chan_uar[i] & DEV_MASK;
-    if ((dev && TST_XFR (dev, i)) || TST_EOR (i))
-        return 1;
-    }
-return 0;
-}
-
-/* Async output device ready for more data */
-
-void chan_set_ordy (int32 ch)
-{
-if ((ch >= 0) && (ch < NUM_CHAN)) {
-    int32 dev = chan_uar[ch] & DEV_MASK;                /* get dev */
-    if (chan_cnt[ch] || (chan_flag[ch] & CHF_ILCE))     /* buf or ilce? */
-        SET_XFR (dev, ch);                              /* set xfr flg */
-    else chan_flag[ch] = chan_flag[ch] | CHF_OWAK;      /* need wakeup */
-    }
-return;
-}
-
-/* Set flag in channel */
-
-void chan_set_flag (int32 ch, uint32 fl)
-{
-if ((ch >= 0) && (ch < NUM_CHAN))
-    chan_flag[ch] = chan_flag[ch] | fl;
-return;
-}
-
-/* Set UAR in channel */
-
-void chan_set_uar (int32 ch, uint32 dev)
-{
-if ((ch >= 0) && (ch < NUM_CHAN))
-    chan_uar[ch] = dev & DEV_MASK;
-return;
-}
-
-/* Disconnect channel */
-
-void chan_disc (int32 ch)
-{
-if ((ch >= 0) && (ch < NUM_CHAN))
-    chan_uar[ch] = 0;
-return;
-}
-
-/* Reset channels */
-
-t_stat chan_reset (DEVICE *dptr)
-{
-int32 i;
-
-xfr_req = 0;
-for (i = 0; i < NUM_CHAN; i++) {
-    chan_uar[i] = 0;
-    chan_wcr[i] = 0;
-    chan_mar[i] = 0;
-    chan_dcr[i] = 0;
-    chan_war[i] = 0;
-    chan_cpw[i] = 0;
-    chan_cnt[i] = 0;
-    chan_mode[i] = 0;
-    chan_flag[i] = 0;
-    }
-return SCPE_OK;
-}
-
-/* Channel assignment routines */
-
-t_stat set_chan (UNIT *uptr, int32 val, CONST char *sptr, void *desc)
-{
-DEVICE *dptr;
-DIB *dibp;
-int32 i;
-
-if (sptr == NULL)                                        /* valid args? */
-    return SCPE_ARG;
-if (uptr == NULL)
-    return SCPE_IERR;
-dptr = find_dev_from_unit (uptr);
-if (dptr == NULL)
-    return SCPE_IERR;
-dibp = (DIB *) dptr->ctxt;
-if (dibp == NULL)
-    return SCPE_IERR;
-for (i = 0; i < NUM_CHAN; i++) {                        /* match input */
-    if (strcmp (sptr, chname[i]) == 0) {                /* find string */
-        if (val && !(val & (1 << i)))                   /* legal? */
-            return SCPE_ARG;
-        dibp->chan = i;                                 /* store new */
+    opl_idx = find_device_by_oplabel(oplabel);
+    if (opl_idx < 0 || !minibus[opl_idx].used) {
+        write_byte(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
+        if (indicators & IND_E)
+            P = err_branch;
         return SCPE_OK;
-        }
     }
-return SCPE_ARG;
+
+    dev = &minibus[opl_idx];
+    if (dev->active) {
+        write_byte(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
+        if (indicators & IND_E)
+            P = err_branch;
+        return SCPE_OK;
+    }
+
+    /* Fill transfer parameters */
+    dev->cb_addr   = cb_addr;
+    dev->zio       = zio;
+    dev->buffer_addr = buffer_addr;
+    dev->bytes_left  = byte_count;
+    dev->extra_info  = extra;
+    dev->cmd         = cmd;
+    dev->timeout     = timeout;
+    dev->intr_level  = intr_lvl;
+    dev->active      = 1;
+    dev->eor         = 0;
+    dev->waiting     = 0;
+    dev->status      = 0;
+    dev->indicators  = indicators;
+
+    DEVHANDLER *h = &handlers[dev->handler_id];
+    if (h->init(cb_addr, (cmd & 0x20) ? 1 : 0, &extra)) {
+        write_byte(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
+        dev->active = 0;
+        if (indicators & IND_E)
+            P = err_branch;
+        return SCPE_OK;
+    }
+
+    write_byte(cb_addr + CB_EVENT, EV_ACTIVE, zio);
+    h->start(dev->unit);
+    return SCPE_OK;
 }
 
-t_stat show_chan (FILE *st, UNIT *uptr, int32 val, CONST void *desc)
+t_stat io_csv_wait(uint32 cb_addr, int zwat)
 {
-DEVICE *dptr;
-DIB *dibp;
+    MINIBUS_DEV *dev = NULL;
+    for (int i = 0; i < MAX_DEVICES; i++) {
+        if (minibus[i].used && minibus[i].cb_addr == cb_addr && minibus[i].active) {
+            dev = &minibus[i];
+            break;
+        }
+    }
+    if (!dev || !dev->active) {
+        if (dev && dev->intr_level)
+            intr_pending |= (1 << dev->intr_level);
+        return SCPE_OK;
+    }
+    dev->waiting = 1;
+    return SCPE_OK;
+}
 
-if (uptr == NULL)
-    return SCPE_IERR;
-dptr = find_dev_from_unit (uptr);
-if (dptr == NULL)
-    return SCPE_IERR;
-dibp = (DIB *) dptr->ctxt;
-if (dibp == NULL)
-    return SCPE_IERR;
-fprintf (st, "channel=%s", chname[dibp->chan]);
+/* Poll active devices (called from sim_instr) */
+void io_poll_devices(void)
+{
+    for (int i = 0; i < MAX_DEVICES; i++) {
+        MINIBUS_DEV *dev = &minibus[i];
+        if (!dev->used || !dev->active) continue;
+
+        DEVHANDLER *h = &handlers[dev->handler_id];
+        uint32 data;
+        int eor = 0;
+        int done = 0;
+        uint8 event = EV_ACTIVE;
+
+        if (h->poll(dev->unit, &data, &eor)) {
+            event = EV_ERROR | EV_PHYSERR;
+            dev->active = 0;
+            done = 1;
+        } else if (eor) {
+            dev->eor = 1;
+            if (dev->bytes_left == 0) {
+                event = 0;
+                dev->active = 0;
+                done = 1;
+            } else {
+                /* Intermediate record – treat as done for simplicity */
+                event = 0;
+                dev->active = 0;
+                done = 1;
+            }
+        } else if (dev->bytes_left > 0) {
+            if (dev->cmd & 0x20) { /* write to device */
+                data = read_mem(dev->buffer_addr, dev->zio);
+                dev->buffer_addr += 2;
+                dev->bytes_left -= 2;
+            } else { /* read from device */
+                write_mem(dev->buffer_addr, data, dev->zio);
+                dev->buffer_addr += 2;
+                dev->bytes_left -= 2;
+            }
+        }
+
+        write_byte(dev->cb_addr + CB_EVENT, event, dev->zio);
+
+        if (done && dev->waiting)
+            dev->waiting = 0;
+        if (done && dev->intr_level)
+            intr_pending |= (1 << dev->intr_level);
+    }
+}
+
+/* Interrupt dispatch */
+void io_interrupt_dispatch(void)
+{
+    for (int level = 31; level >= 0; level--) {
+        if ((intr_pending & (1 << level)) && !(intr_mask & (1 << level))) {
+            intr_pending &= ~(1 << level);
+            uint32 ctx_ptr = intr_context[level];
+            P = read_word(ctx_ptr + 6);
+            A = read_word(ctx_ptr + 3);
+            E = read_word(ctx_ptr + 2);
+            X = read_word(ctx_ptr + 1);
+            L = read_word(ctx_ptr + 5);
+            G = read_word(ctx_ptr + 4);
+            uint32 ind = read_word(ctx_ptr);
+            C = ind & 1;
+            OV = (ind >> 1) & 1;
+            MS = (ind >> 15) & 1;
+            MA = (ind >> 13) & 1;
+            PR = (ind >> 14) & 1;
+            break;
+        }
+    }
+}
+
+t_stat io_dit(void)
+{
+    uint32 cur_lvl = 0; /* FIXME: obtain current level from CPU */
+    uint32 ctx_ptr = intr_context[cur_lvl];
+    write_word(ctx_ptr,     (C & 1) | ((OV & 1) << 1) | ((MA & 1) << 13) | ((PR & 1) << 14) | ((MS & 1) << 15));
+    write_word(ctx_ptr + 1, X);
+    write_word(ctx_ptr + 2, E);
+    write_word(ctx_ptr + 3, A);
+    write_word(ctx_ptr + 4, G);
+    write_word(ctx_ptr + 5, L);
+    write_word(ctx_ptr + 6, P);
+    intr_armed[cur_lvl] = 0;
+    io_interrupt_dispatch();
+    return SCPE_OK;
+}
+
+t_stat io_ditr(void) { return io_dit(); }
+
+t_stat io_rd(uint16 e_reg, uint16 *data_out) { *data_out = 0; return SCPE_OK; }
+t_stat io_wd(uint16 e_reg, uint32 data) { return SCPE_OK; }
+
+/* Device handler stubs (to be replaced by real implementations) */
+static int ty_init(uint32 cb_addr, int write, uint32 *extra) { return 0; }
+static void ty_start(int unit) { }
+static int ty_poll(int unit, uint32 *data, int *eor) { return 0; }
+static void ty_interrupt(int unit) { }
+static void ty_attach(int unit, const char *file, int write) { }
+
+static int ptr_init(uint32 cb_addr, int write, uint32 *extra) { return 0; }
+static void ptr_start(int unit) { }
+static int ptr_poll(int unit, uint32 *data, int *eor) { return 0; }
+static void ptr_interrupt(int unit) { }
+static void ptr_attach(int unit, const char *file, int write) { }
+
+static int ptp_init(uint32 cb_addr, int write, uint32 *extra) { return 0; }
+static void ptp_start(int unit) { }
+static int ptp_poll(int unit, uint32 *data, int *eor) { return 0; }
+static void ptp_interrupt(int unit) { }
+static void ptp_attach(int unit, const char *file, int write) { }
+
+static int lpr_init(uint32 cb_addr, int write, uint32 *extra) { return 0; }
+static void lpr_start(int unit) { }
+static int lpr_poll(int unit, uint32 *data, int *eor) { return 0; }
+static void lpr_interrupt(int unit) { }
+static void lpr_attach(int unit, const char *file, int write) { }
+
+/* ---------------------------------------------------------------------- */
+/* Channel handling (DMA)                                                 */
+/* ---------------------------------------------------------------------- */
+t_stat chan_process(void)
+{
+    int32 i, dev;
+    t_stat r;
+    for (i = 0; i < NUM_CHAN; i++) {
+        dev = chan_uar[i] & DEV_MASK;
+        if ((dev && TST_XFR(dev, i)) || TST_EOR(i)) {
+            if (dev & DEV_OUT)
+                r = chan_write(i);
+            else
+                r = chan_read(i);
+            if (r) return r;
+        }
+    }
+    return SCPE_OK;
+}
+
+t_bool chan_testact(void)
+{
+    int32 i, dev;
+    for (i = 0; i < NUM_CHAN; i++) {
+        dev = chan_uar[i] & DEV_MASK;
+        if ((dev && TST_XFR(dev, i)) || TST_EOR(i))
+            return 1;
+    }
+    return 0;
+}
+
+void chan_set_ordy(int32 ch)
+{
+    if (ch >= 0 && ch < NUM_CHAN) {
+        int32 dev = chan_uar[ch] & DEV_MASK;
+        if (chan_cnt[ch] || (chan_flag[ch] & CHF_ILCE))
+            SET_XFR(dev, ch);
+        else
+            chan_flag[ch] |= CHF_OWAK;
+    }
+}
+
+void chan_set_flag(int32 ch, uint32 fl)
+{
+    if (ch >= 0 && ch < NUM_CHAN)
+        chan_flag[ch] |= fl;
+}
+
+void chan_set_uar(int32 ch, uint32 dev)
+{
+    if (ch >= 0 && ch < NUM_CHAN)
+        chan_uar[ch] = dev & DEV_MASK;
+}
+
+void chan_disc(int32 ch)
+{
+    if (ch >= 0 && ch < NUM_CHAN)
+        chan_uar[ch] = 0;
+}
+
+t_stat chan_reset(DEVICE *dptr)
+{
+    int32 i;
+    xfr_req = 0;
+    for (i = 0; i < NUM_CHAN; i++) {
+        chan_uar[i] = 0;
+        chan_wcr[i] = 0;
+        chan_mar[i] = 0;
+        chan_dcr[i] = 0;
+        chan_war[i] = 0;
+        chan_cpw[i] = 0;
+        chan_cnt[i] = 0;
+        chan_mode[i] = 0;
+        chan_flag[i] = 0;
+    }
+    return SCPE_OK;
+}
+
+/* Channel read: from device to memory */
+t_stat chan_read(int32 ch)
+{
+    uint32 dev = chan_uar[ch] & DEV_MASK;
+    uint32 data;
+    int eor = 0;
+
+    if (chan_cnt[ch] == 0) {
+        if (chan_cpw[ch] == 1) {
+            data = dev_read_byte(dev, &eor);
+            chan_war[ch] = (chan_war[ch] & 0xFF00) | (data & 0xFF);
+            chan_cnt[ch] = 1;
+        } else {
+            data = dev_read_word(dev, &eor);
+            chan_war[ch] = data;
+            chan_cnt[ch] = 2;
+        }
+    }
+
+    if (chan_cnt[ch] > 0) {
+        if (chan_cpw[ch] == 1) {
+            uint8 byte = (chan_war[ch] >> ((chan_cnt[ch] == 1) ? 0 : 8)) & 0xFF;
+            write_byte(chan_mar[ch], byte, 0);
+            chan_mar[ch] += 1;
+        } else {
+            write_word(chan_mar[ch], (uint16)chan_war[ch]);
+            chan_mar[ch] += 2;
+        }
+        chan_cnt[ch]--;
+        chan_wcr[ch]--;
+    }
+
+    if (eor || chan_wcr[ch] == 0) {
+        chan_flag[ch] |= CHF_EOR;
+        CLR_XFR(dev, ch);
+        if (chan_flag[ch] & CHF_ILCE)
+            pot_ilc(ch, NULL);
+        chan_eor(ch);
+    }
+    return SCPE_OK;
+}
+
+/* Channel write: from memory to device */
+t_stat chan_write(int32 ch)
+{
+    uint32 dev = chan_uar[ch] & DEV_MASK;
+    uint16 data;
+    int eor = 0;
+
+    if (chan_cnt[ch] == 0) {
+        if (chan_cpw[ch] == 1) {
+            data = read_byte(chan_mar[ch], 0);
+            chan_war[ch] = (chan_war[ch] & 0xFF00) | data;
+            chan_cnt[ch] = 1;
+        } else {
+            data = read_word(chan_mar[ch]);
+            chan_war[ch] = data;
+            chan_cnt[ch] = 2;
+        }
+        chan_mar[ch] += (chan_cpw[ch] == 1) ? 1 : 2;
+    }
+
+    if (chan_cnt[ch] > 0) {
+        if (chan_cpw[ch] == 1) {
+            uint8 byte = (chan_war[ch] >> ((chan_cnt[ch] == 1) ? 0 : 8)) & 0xFF;
+            dev_write_byte(dev, byte, &eor);
+        } else {
+            dev_write_word(dev, (uint16)chan_war[ch], &eor);
+        }
+        chan_cnt[ch]--;
+        chan_wcr[ch]--;
+    }
+
+    if (eor || chan_wcr[ch] == 0) {
+        chan_flag[ch] |= CHF_EOR;
+        CLR_XFR(dev, ch);
+        if (chan_flag[ch] & CHF_ILCE)
+            pot_ilc(ch, NULL);
+        chan_eor(ch);
+    }
+    return SCPE_OK;
+}
+
+/* End of record handling */
+t_stat chan_eor(int32 ch)
+{
+    if (chan_dcr[ch]) {
+        uint16 dcr_addr = chan_dcr[ch];
+        chan_mar[ch] = read_word(dcr_addr);
+        chan_wcr[ch] = read_word(dcr_addr + 2);
+        chan_dcr[ch] = read_word(dcr_addr + 4);
+        chan_cnt[ch] = 0;
+        SET_XFR(chan_uar[ch] & DEV_MASK, ch);
+        return SCPE_OK;
+    }
+    dev_complete(chan_uar[ch] & DEV_MASK, ch);
+    return SCPE_OK;
+}
+
+/* POT / PIN functions */
+t_stat pot_ilc(uint32 num, uint32 *dat)
+{
+    if (num < 32) intr_pending &= ~(1 << num);
+    return SCPE_OK;
+}
+t_stat pot_dcr(uint32 num, uint32 *dat) { return SCPE_OK; }
+t_stat pin_adr(uint32 num, uint32 *dat) { if(dat) *dat=0; return SCPE_OK; }
+t_stat pot_fork(uint32 num, uint32 *dat) { return SCPE_OK; }
+/* POT routines for RL1, RL2, RL4 */
+
+t_stat pot_RL1 (uint32 num, uint32 *dat)
+{
+RL1 = *dat;
+set_dyn_map ();
 return SCPE_OK;
 }
 
-/* Init device tables */
-
-t_bool io_init (void)
+t_stat pot_RL2 (uint32 num, uint32 *dat)
 {
-DEVICE *dptr;
-DIB *dibp;
-DSPT *tplp;
-int32 ch;
-uint32 i, j, dev, doff;
+RL2 = *dat;
+set_dyn_map ();
+return SCPE_OK;
+}
 
-/* Clear dispatch table, device map */
+t_stat pot_RL4 (uint32 num, uint32 *dat)
+{
+RL4 = (*dat) & 03737;
+set_dyn_map ();
+return SCPE_OK;
+}
 
-for (i = 0; i < NUM_CHAN; i++) {
-    for (j = 0; j < (DEV_MASK + 1); j++) {
-        dev_dsp[j][i] = NULL;
-        dev_map[j][i] = 0;
+/* Device callback stubs (to be implemented by real handlers) */
+uint32 dev_read_byte(uint32 dev, int *eor) { if(eor) *eor=0; return 0; }
+uint32 dev_read_word(uint32 dev, int *eor) { if(eor) *eor=0; return 0; }
+void dev_write_byte(uint32 dev, uint8 val, int *eor) { if(eor) *eor=0; }
+void dev_write_word(uint32 dev, uint16 val, int *eor) { if(eor) *eor=0; }
+void dev_complete(uint32 dev, int ch) { }
+
+/* ---------------------------------------------------------------------- */
+/* System initialisation and device mapping                              */
+/* ---------------------------------------------------------------------- */
+void io_init_system(void)
+{
+    memset(minibus, 0, sizeof(minibus));
+    next_free_dev = 0;
+    num_opl = 0;
+    intr_pending = 0;
+    intr_mask = 0;
+    io_assign_oplabel(OPL_M_OC, 0, 0);
+    io_assign_oplabel(OPL_M_SI, 1, 0);
+    io_assign_oplabel(OPL_M_LO, 2, 0);
+}
+
+void io_assign_oplabel(int oplabel, int handler_id, int unit)
+{
+    if (num_opl >= MAX_DEVICES) return;
+    if (find_device_by_oplabel(oplabel) >= 0) return;
+    MINIBUS_DEV *dev = &minibus[next_free_dev];
+    dev->used = 1;
+    dev->oplabel = oplabel;
+    dev->handler_id = handler_id;
+    dev->unit = unit;
+    dev->active = 0;
+    opl_map[num_opl].oplabel = oplabel;
+    opl_map[num_opl].handler_id = handler_id;
+    opl_map[num_opl].unit = unit;
+    num_opl++;
+    next_free_dev++;
+}
+
+t_stat set_chan(UNIT *uptr, int32 val, CONST char *sptr, void *desc)
+{
+    DEVICE *dptr;
+    DIB *dibp;
+    int32 i;
+    if (sptr == NULL) return SCPE_ARG;
+    if (uptr == NULL) return SCPE_IERR;
+    dptr = find_dev_from_unit(uptr);
+    if (dptr == NULL) return SCPE_IERR;
+    dibp = (DIB *) dptr->ctxt;
+    if (dibp == NULL) return SCPE_IERR;
+    for (i = 0; i < NUM_CHAN; i++) {
+        if (strcmp(sptr, chname[i]) == 0) {
+            if (val && !(val & (1 << i))) return SCPE_ARG;
+            dibp->chan = i;
+            return SCPE_OK;
         }
     }
+    return SCPE_ARG;
+}
 
-/* Test each device for conflict; add to map; init tables */
+t_stat show_chan(FILE *st, UNIT *uptr, int32 val, CONST void *desc)
+{
+    DEVICE *dptr;
+    DIB *dibp;
+    if (uptr == NULL) return SCPE_IERR;
+    dptr = find_dev_from_unit(uptr);
+    if (dptr == NULL) return SCPE_IERR;
+    dibp = (DIB *) dptr->ctxt;
+    if (dibp == NULL) return SCPE_IERR;
+    fprintf(st, "channel=%s", chname[dibp->chan]);
+    return SCPE_OK;
+}
 
-for (i = 0; (dptr = sim_devices[i]); i++) {             /* loop thru devices */
-    dibp = (DIB *) dptr->ctxt;                          /* get DIB */
-    if ((dibp == NULL) || (dptr->flags & DEV_DIS))      /* exist, enabled? */
-        continue;
-    ch = dibp->chan;                                    /* get channel */
-    dev = dibp->dev;                                    /* get device num */
-    if (ch < 0)                                         /* special device */
-        dev3_dsp[dev] = dibp->iop;
-    else {
-        if (dibp->tplt == NULL)                         /* must have template */
-            return TRUE;
-        for (tplp = dibp->tplt; tplp->num; tplp++) {    /* loop thru templates */
-            for (j = 0; j < tplp->num; j++) {           /* repeat as needed */
-                doff = dev + tplp->off + j;             /* get offset dnum */
-                if (dev_map[doff][ch]) {                /* slot in use? */
-                    sim_printf ("Device number conflict, chan = %s, devno = %02o\n",
-                                chname[ch], doff);
-                    return TRUE;
+t_bool io_init(void)
+{
+    DEVICE *dptr;
+    DIB *dibp;
+    DSPT *tplp;
+    int32 ch;
+    uint32 i, j, dev, doff;
+
+    for (i = 0; i < NUM_CHAN; i++)
+        for (j = 0; j < (DEV_MASK + 1); j++) {
+            dev_dsp[j][i] = NULL;
+            dev_map[j][i] = 0;
+        }
+
+    for (i = 0; (dptr = sim_devices[i]); i++) {
+        dibp = (DIB *) dptr->ctxt;
+        if ((dibp == NULL) || (dptr->flags & DEV_DIS)) continue;
+        ch = dibp->chan;
+        dev = dibp->dev;
+        if (ch < 0)
+            dev3_dsp[dev] = dibp->iop;
+        else {
+            if (dibp->tplt == NULL) return TRUE;
+            for (tplp = dibp->tplt; tplp->num; tplp++) {
+                for (j = 0; j < tplp->num; j++) {
+                    doff = dev + tplp->off + j;
+                    if (dev_map[doff][ch]) {
+                        sim_printf("Device number conflict, chan = %s, devno = %02o\n",
+                                   chname[ch], doff);
+                        return TRUE;
                     }
-                dev_map[doff][ch] = dibp->xfr;          /* set xfr flag */
-                dev_dsp[doff][ch] = dibp->iop;          /* set dispatch */
-                }                                       /* end for j */
-            }                                           /* end for tplt */
-        }                                               /* end else */
-    }                                                   /* end for i */
-return FALSE;
-}
-
-/* Display channel state */
-
-t_stat chan_show_reg (FILE *st, UNIT *uptr, int32 val, CONST void *desc)
-{
-if ((val < 0) || (val >= NUM_CHAN)) return SCPE_IERR;
-fprintf (st, "UAR:      %02o\n", chan_uar[val]);
-fprintf (st, "WCR:      %05o\n", chan_wcr[val]);
-fprintf (st, "MAR:      %06o\n", chan_mar[val]);
-fprintf (st, "DCR:      %02o\n", chan_dcr[val]);
-fprintf (st, "WAR:      %08o\n", chan_war[val]);
-fprintf (st, "CPW:      %o\n", chan_cpw[val]);
-fprintf (st, "CNT:      %o\n", chan_cnt[val]);
-fprintf (st, "MODE:     %03o\n", chan_mode[val]);
-fprintf (st, "FLAG:     %04o\n", chan_flag[val]);
-return SCPE_OK;
+                    dev_map[doff][ch] = dibp->xfr;
+                    dev_dsp[doff][ch] = dibp->iop;
+                }
+            }
+        }
+    }
+    return FALSE;
 }
