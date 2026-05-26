@@ -7,7 +7,11 @@
 #include <ctype.h>
 #include "mitra_io.h"
 
-/* External device declarations */
+/* External declarations from mitra_cpu.c */
+extern uint16 M[];
+extern uint32 MEMsize;
+extern void io_init_system(void);
+
 extern DEVICE cpu_dev;
 extern DEVICE rtc_dev;   /* Real-time clock */
 
@@ -384,12 +388,18 @@ t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag)
     return SCPE_OK;
 }
 
-/* CPU reset */
-t_stat cpu_reset(DEVICE *dptr)
+/* System initialization */
+t_stat mitra_sys_init(void)
 {
-    A = E = X = L = G = P = 0;
-    C = OV = MS = MA = PR = 0;
-    cpu_mode = 0;
-    int_req = 0;
+    io_init_system();
     return SCPE_OK;
 }
+
+/* Memory clear */
+void mitra_mem_clear(void)
+{
+    for (uint32 i = 0; i < MAX_MEM_WORDS; i++)
+        M[i] = 0;
+}
+
+/* Note: cpu_reset is defined in mitra_cpu.c - do NOT redefine here */

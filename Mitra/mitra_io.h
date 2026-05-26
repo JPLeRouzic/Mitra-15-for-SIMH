@@ -28,15 +28,6 @@
 #define CB_INTLEV_LO   14    /* interrupt level to trigger after transfer */
 #define CB_INTLEV_HI   15
 
-/* Event byte bits (CB byte 0) */
-#define EV_ACTIVE      0x01   /* 1 = transfer in progress */
-#define EV_ERROR       0x02   /* 1 = error/abnormal end */
-#define EV_PHYSERR     0x04   /* physical error (bit 2) */
-#define EV_LOGERR      0x08   /* logical error (bit 3) */
-#define EV_INITERR     0x10   /* error during initialization */
-#define EV_ENDERR      0x20   /* error after transfer end */
-#define EV_STATUS      0xC0   /* status info present */
-
 /* Command byte (CB byte 2) – see manual page VIII‑7 */
 #define CMD_READ_FWD   0x00
 #define CMD_READ_BWD   0x10
@@ -68,12 +59,29 @@
 /* External functions */
 t_stat io_csv_1o(uint32 cb_addr, int zio);
 t_stat io_csv_wait(uint32 cb_addr, int zwat);
-t_stat io_rd(uint32 e_reg, uint16 *data_out);
-t_stat io_wd(uint32 e_reg, uint32 data);
+t_stat io_rd(uint16 e_reg, uint16 *data_out);
+t_stat io_wd(uint16 e_reg, uint32 data);
 t_stat io_dit(void);
 t_stat io_ditr(void);
 void   io_interrupt_dispatch(void);
 int    io_check_ready(void);
 void   io_dev_attach(int oplabel, const char *file, int write);
+
+/*
+mitra_io.c:(.text+0x21d): undefined reference to `read_word'
+mitra_io.c:(.text+0x51f): undefined reference to `write_word'
+/usr/local/bin/ld: mitra_io.c:(.text+0xf93): undefined reference to `sim_tt_putc'
+/usr/local/bin/ld: mitra_io.c:(.text+0x1009): undefined reference to `sim_tt_getc'
+/usr/local/bin/ld: mitra_io.c:(.text+0x105f): undefined reference to `read_word'
+/usr/local/bin/ld: mitra_io.c:(.text+0x106b): undefined reference to `read_word'
+/usr/local/bin/ld: mitra_io.c:(.text+0x10da): undefined reference to `write_word'
+/usr/local/bin/ld: mitra_io.c:(.text+0x1110): undefined reference to `io_interrupt_dispatch'
+/usr/local/bin/ld: mitra_io.c:(.text+0x1127): undefined reference to `read_word'
+/usr/local/bin/ld: mitra_io.c:(.text+0x119d): undefined reference to `sim_tt_putc'
+/usr/local/bin/ld: mitra_io.c:(.text+0x11e3): undefined reference to `io_interrupt_dispatch'
+/usr/local/bin/ld: mitra_io.c:(.text+0x11f6): undefined reference to `sim_tt_putc'
+/usr/local/bin/ld: mitra_io.c:(.text+0x1211): undefined reference to `sim_tt_putc'
+mitra_io.c:(.text+0x1265): undefined reference to `io_interrupt_dispatch'
+*/
 
 #endif

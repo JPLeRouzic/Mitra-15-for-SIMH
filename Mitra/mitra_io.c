@@ -1,9 +1,235 @@
-/* mitra_io.c – Mitra 15 I/O subsystem: Minibus, handlers, CSV M:1O/M:WAIT
- *
- * Fully implemented with:
- *   - Typewriter (console) handler using SIMH terminal I/O
- *   - Fast access disk handler with sector addressing and file backing
- *   - Proper interrupt generation and CSV M:WAIT synchronization
+/* Mitra-15 I/O System 
+1. General organization of I/O operations
+
+The following describes how input/output (I/O) works under the control of the system monitor (the operating system core).
+
+Even though the mechanism is designed mainly for standard devices, it is flexible enough to handle non-standard devices and allows the user to verify whether transfers were successful.
+
+The 5 stages of an I/O operation
+
+An I/O operation is divided into five steps:
+
+Buffer allocation (optional)
+A memory buffer may be reserved using a supervisor call.
+Transfer request
+The program requests an I/O operation via a system call (M:1O or M:ZIO).
+Transfer initialization
+The monitor prepares the transfer (device setup, parameters, etc.).
+Transfer execution
+The data transfer happens independently of the user program.
+Transfer completion and validation
+The system checks the result and reports status or errors.
+Who performs each step?
+Steps 1–2: executed by the user program
+Step 3: executed by the monitor (control returns immediately after initialization)
+Steps 4–5: executed asynchronously by the system
+
+The user program may optionally wait for completion using M:WAIT (or M:ZWAT).
+
+What happens if the device is busy?
+
+Two behaviors are possible:
+
+1) Queuing mode
+
+The request is placed in a queue
+Control returns immediately to the program
+From the user’s perspective, the transfer appears to have started
+The waiting time includes both queue delay and actual transfer time
+
+2) Non-queuing mode
+
+The system waits until the device is available
+Control is returned only after initialization is actually done
+2. I/O system architecture
+Three levels of I/O processing
+
+The I/O system is organized into three abstraction levels:
+
+Level 0 — Physical level
+Device-specific operations
+Direct interaction with hardware
+Level 1 — I/O supervisor (core of the OS)
+
+Handles:
+
+Device allocation (busy/free)
+Request queuing
+Parameter setup
+Transfer initiation
+Error handling
+
+This level is always resident in memory.
+
+Level 2 and above — High-level services
+
+These include:
+
+File systems
+Record formatting (blocking/unblocking)
+Language-level I/O (e.g. FORTRAN)
+Specialized libraries
+
+They are typically implemented as subroutines linked to user programs.
+
+3. Handlers (device-specific modules)
+
+Each device type is controlled by a handler, which is a specialized software module.
+
+A handler manages:
+
+Transfer initialization
+Transfer execution
+Error detection
+Two parts of a handler
+Handler 1 — Initialization
+
+Runs at the caller’s priority level.
+
+Responsibilities:
+
+Check device status before starting
+Send the read/write command
+Detect immediate errors
+Return control to caller
+
+If an error is detected, the transfer is aborted and reported.
+
+Handler 2 — Transfer control (interrupt-driven)
+
+Runs at interrupt level.
+
+Responsibilities:
+
+Continue or monitor the transfer after interrupts
+Possibly re-call Handler 1
+Detect errors during transfer
+Signal transfer completion
+
+At the end:
+
+It notifies the I/O supervisor
+It disables the corresponding interrupt
+Two transfer modes
+
+Depending on the device:
+
+1) Block transfer
+
+Entire data block transferred in one operation
+
+2) Element-by-element transfer
+
+Data transferred piece by piece
+Handler 2 may repeatedly call Handler 1
+Multiple devices
+Several devices of the same type can share the same handler
+Their interrupts are grouped
+If one interrupt is being handled, others wait
+Queues and device state
+Each device may have its own request queue
+Queues are managed using linked elements
+A busy flag indicates whether a device is in use
+4. Transfer requests
+How to request an I/O operation
+
+A Control Block (CB) is used to describe the transfer:
+
+Input/output buffer address
+Parameters
+Status (filled after completion)
+
+Typical call sequence:
+
+LEA CB
+CSV M:1O
+
+For shared-memory I/O:
+
+CSV M:ZIO
+
+When the call is made:
+
+The system associates an event with the request
+Control returns once the transfer is started or queued
+5. Waiting for completion
+Using M:WAIT
+
+Purpose:
+
+Wait until the transfer finishes
+
+Behavior:
+
+If already finished → immediate return
+If still running:
+The task is suspended
+Lower-priority tasks can run
+The task resumes when the transfer ends
+
+Return value:
+
+A ≥ 0: success
+A < 0: error (details in the control block)
+Transfer validation modes
+Standard mode (U = 0)
+System interprets device status
+Returns simplified error codes
+Can branch to user-defined error handler
+Fatal errors may stop the program
+User mode (U = 1)
+Raw status bits are returned
+No interpretation by the system
+Program must handle errors itself
+6. Communication between supervisor and handlers
+Initialization phase (M:1O)
+
+The I/O supervisor:
+
+Resets status flags in the control block
+Checks if the device is busy
+Sets up transfer parameters
+Calls Handler 1
+
+After return:
+
+If no error → control returns to program
+If error → status is stored and handled depending on mode
+Transfer completion
+
+When the device signals completion via interrupt:
+
+Case 1 — Full block transfer
+
+Handler 2:
+
+Reads device status
+Verifies correct execution
+Calls M:1O2 (completion module)
+
+M:1O2:
+
+Handles errors
+Resets internal parameters
+Signals completion (activates event)
+Resumes the waiting program
+Case 2 — Incremental transfer
+
+Handler 2:
+
+Checks status after each step
+If not finished → restarts via Handler 1
+If finished → same as case 1
+7. Important behavior note
+
+Under the basic monitor:
+
+Only one I/O request per device is allowed at a time
+Additional requests will block until completion
+
+Under more advanced monitors:
+
+Multiple requests can be queued and processed sequentially
  */
 
 #include "mitra_io.h"
@@ -13,7 +239,29 @@
 #include <string.h>
 #include <errno.h>
 
-/* External references from mitra_cpu.c */
+/* ========== External References from mitra_cpu.c ========== */
+extern uint16 G;           /* general base register */
+extern uint16 P;           /* program counter */
+extern uint16 A, E, X, L;
+extern uint8 C, OV, MS, MA, PR;
+extern uint16 M[];         /* memory array */
+extern uint32 MEMsize;
+extern uint32 int_req;     /* interrupt request bits */
+extern uint32 xfr_req;     /* transfer request bits */
+extern void io_interrupt_dispatch(void);
+
+/* ========== SIMH Terminal I/O Functions ========== */
+extern int sim_poll_kbd(void);
+extern void sim_tt_putc(int ch);
+extern int sim_tt_inchar(void);
+extern int sim_tt_open(const char *file, int write);
+extern int sim_tt_close(void);
+
+/* ========== Memory Access Functions (forward declarations) ========== */
+/* These are defined in mitra_cpu.c - we need to make them accessible */
+extern uint8 read_byte(uint16 va);
+extern void write_byte(uint16 va, uint8 val);
+
 extern uint16 G;        /* general base register */
 extern uint16 P;        /* program counter */
 extern uint16 A, E, X, L;
@@ -36,12 +284,11 @@ extern int sim_tt_close(void);
 
 /* Forward declarations for memory access helpers */
 static uint32 read_mem(uint32 addr, int zio);
-static void write_mem(uint32 addr, uint32 val, int zio);
-static uint8 read_byte(uint32 addr, int zio);
-static void write_byte(uint32 addr, uint8 val, int zio);
+static void write_mem_io(uint32 addr, uint32 val, int zio);
+static void write_byte_io(uint32 addr, uint8 val, int zio);
 
 /* Device callbacks */
-uint32 dev_read_byte(uint32 dev, int *eor);
+static uint8 read_byte_io(uint32 dev, int eor);
 uint32 dev_read_word(uint32 dev, int *eor);
 void dev_write_byte(uint32 dev, uint8 val, int *eor);
 void dev_write_word(uint32 dev, uint16 val, int *eor);
@@ -49,8 +296,11 @@ void dev_complete(uint32 dev, int ch);
 
 /* Device mapping tables (existing) */
 uint32 dev_map[64][NUM_CHAN];
+/*
+* Not Mitra model of IO where the device sets the channel
 t_stat (*dev_dsp[64][NUM_CHAN])(uint32 fnc, uint32 dev, uint32 *dat) = { {NULL} };
 t_stat (*dev3_dsp[64])(uint32 fnc, uint32 dev, uint32 *dat) = { NULL };
+*/
 
 /* Indicators byte bits (byte 1) */
 #define IND_U         0x01
@@ -117,7 +367,7 @@ static uint32 read_mem(uint32 addr, int zio)
     }
 }
 
-static void write_mem(uint32 addr, uint32 val, int zio)
+static void write_mem_io(uint32 addr, uint32 val, int zio)
 {
     if (zio) {
         uint32 zc_base = read_word(G + 6);
@@ -127,20 +377,20 @@ static void write_mem(uint32 addr, uint32 val, int zio)
     }
 }
 
-static uint8 read_byte(uint32 addr, int zio)
+static uint8 read_byte_io(uint32 addr, int zio)
 {
     uint16 word = read_mem(addr & ~1, zio);
     return (addr & 1) ? (word >> 8) : (word & 0xFF);
 }
 
-static void write_byte(uint32 addr, uint8 val, int zio)
+static void write_byte_io(uint32 addr, uint8 val, int zio)
 {
     uint16 word = read_mem(addr & ~1, zio);
     if (addr & 1)
         word = (word & 0x00FF) | (val << 8);
     else
         word = (word & 0xFF00) | val;
-    write_mem(addr & ~1, word, zio);
+    write_mem_io(addr & ~1, word, zio);
 }
 
 /* ========== Operational label assignment ========== */
@@ -387,7 +637,7 @@ static int disk_poll(int unit, uint32 *data, int *eor)
             uint32 chunk = (remaining < DISK_SECTOR_SIZE) ? remaining : DISK_SECTOR_SIZE;
             /* read from memory into buffer */
             for (uint32 i = 0; i < chunk; i++) {
-                buf[i] = read_byte(mem_addr + i, dev->zio);
+                buf[i] = read_byte_io(mem_addr + i, dev->zio);
             }
             /* pad remainder with zeros */
             for (uint32 i = chunk; i < DISK_SECTOR_SIZE; i++) buf[i] = 0;
@@ -412,7 +662,7 @@ static int disk_poll(int unit, uint32 *data, int *eor)
                 return 1;
             }
             for (uint32 i = 0; i < chunk; i++) {
-                write_byte(mem_addr + i, buf[i], dev->zio);
+                write_byte_io(mem_addr + i, buf[i], dev->zio);
             }
             mem_addr += chunk;
             remaining -= chunk;
@@ -422,7 +672,7 @@ static int disk_poll(int unit, uint32 *data, int *eor)
     if (update) {
         dev->extra_info = sector + sectors_needed;
         /* Write back the updated extra field to CB if needed */
-        write_mem(dev->cb_addr + CB_EXTRA_LO, dev->extra_info, dev->zio);
+        write_mem_io(dev->cb_addr + CB_EXTRA_LO, dev->extra_info, dev->zio);
     }
 
     dev->bytes_left = 0;
@@ -471,10 +721,10 @@ t_stat io_csv_1o(uint32 cb_addr, int zio)
     MINIBUS_DEV *dev;
 
     /* Read fixed part of CB */
-    event      = read_byte(cb_addr + CB_EVENT, zio);
-    indicators = read_byte(cb_addr + CB_INDICATORS, zio);
-    cmd        = read_byte(cb_addr + CB_CMD, zio);
-    oplabel    = read_byte(cb_addr + CB_OPLABEL, zio);
+    event      = read_byte_io(cb_addr + CB_EVENT, zio);
+    indicators = read_byte_io(cb_addr + CB_INDICATORS, zio);
+    cmd        = read_byte_io(cb_addr + CB_CMD, zio);
+    oplabel    = read_byte_io(cb_addr + CB_OPLABEL, zio);
     buffer_addr= read_mem(cb_addr + CB_ADDR_LO, zio);
     byte_count = read_mem(cb_addr + CB_COUNT_LO, zio);
 
@@ -490,7 +740,7 @@ t_stat io_csv_1o(uint32 cb_addr, int zio)
 
     opl_idx = find_device_by_oplabel(oplabel);
     if (opl_idx < 0 || !minibus[opl_idx].used) {
-        write_byte(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
+        write_byte_io(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
         if (indicators & IND_E)
             P = err_branch;
         return SCPE_OK;
@@ -498,7 +748,7 @@ t_stat io_csv_1o(uint32 cb_addr, int zio)
 
     dev = &minibus[opl_idx];
     if (dev->active) {
-        write_byte(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
+        write_byte_io(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
         if (indicators & IND_E)
             P = err_branch;
         return SCPE_OK;
@@ -522,7 +772,7 @@ t_stat io_csv_1o(uint32 cb_addr, int zio)
     /* Call device init */
     if (dev->handler_id == 0) {  /* typewriter */
         if (ty_init(cb_addr, (cmd & 0x20) ? 1 : 0, &extra)) {
-            write_byte(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
+            write_byte_io(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
             dev->active = 0;
             if (indicators & IND_E) P = err_branch;
             return SCPE_OK;
@@ -530,7 +780,7 @@ t_stat io_csv_1o(uint32 cb_addr, int zio)
         ty_start(dev->unit);
     } else if (dev->handler_id == 1) { /* disk */
         if (disk_init(cb_addr, (cmd & 0x20) ? 1 : 0, &extra)) {
-            write_byte(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
+            write_byte_io(cb_addr + CB_EVENT, EV_ERROR | EV_INITERR, zio);
             dev->active = 0;
             if (indicators & IND_E) P = err_branch;
             return SCPE_OK;
@@ -538,7 +788,7 @@ t_stat io_csv_1o(uint32 cb_addr, int zio)
         disk_start(dev->unit);
     }
 
-    write_byte(cb_addr + CB_EVENT, EV_ACTIVE, zio);
+    write_byte_io(cb_addr + CB_EVENT, EV_ACTIVE, zio);
     return SCPE_OK;
 }
 
@@ -592,7 +842,7 @@ void io_poll_devices(void)
 
         if (!is_write && !err && dev->bytes_left > 0) {
             /* For read, data from device goes to memory */
-            write_mem(dev->buffer_addr, data, dev->zio);
+            write_mem_io(dev->buffer_addr, data, dev->zio);
             dev->buffer_addr += 2;
             dev->bytes_left -= 2;
             if (dev->bytes_left == 0) eor = 1;
@@ -609,7 +859,7 @@ void io_poll_devices(void)
             done = 1;
         }
 
-        write_byte(dev->cb_addr + CB_EVENT, event, dev->zio);
+        write_byte_io(dev->cb_addr + CB_EVENT, event, dev->zio);
 
         if (done && dev->waiting)
             dev->waiting = 0;
@@ -650,8 +900,11 @@ void chan_set_flag(int32 ch, uint32 fl) {}
 void chan_set_ordy(int32 ch) {}
 void chan_disc(int32 ch) {}
 void chan_set_uar(int32 ch, uint32 dev) {}
+/*
+* Not Mitra model of IO where the device sets the channel
 t_stat set_chan(UNIT *uptr, int32 val, CONST char *cptr, void *desc) { return SCPE_OK; }
 t_stat show_chan(FILE *st, UNIT *uptr, int32 val, CONST void *desc) { return SCPE_OK; }
+*/
 
 /* System initialisation */
 void io_init_system(void)
@@ -671,8 +924,10 @@ t_bool io_init(void)
 }
 
 /* Device callbacks (unused but required) */
-uint32 dev_read_byte(uint32 dev, int *eor) { if(eor) *eor=0; return 0; }
+uint32 dev_read_byte_io(uint32 dev, int *eor) { if(eor) *eor=0; return 0; }
 uint32 dev_read_word(uint32 dev, int *eor) { if(eor) *eor=0; return 0; }
-void dev_write_byte(uint32 dev, uint8 val, int *eor) { if(eor) *eor=0; }
+void dev_write_byte_io(uint32 dev, uint8 val, int *eor) { if(eor) *eor=0; }
 void dev_write_word(uint32 dev, uint16 val, int *eor) { if(eor) *eor=0; }
 void dev_complete(uint32 dev, int ch) { }
+
+

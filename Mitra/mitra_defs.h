@@ -38,14 +38,13 @@
 #endif
 
 /* Simulator stop codes */
-
 #define STOP_IONRDY     1                               /* I/O dev not ready */
 #define STOP_HALT       2                               /* HALT */
 #define STOP_IBKPT      3                               /* breakpoint */
 #define STOP_INVDEV     4                               /* invalid dev */
 #define STOP_INVINS     5                               /* invalid instr */
 #define STOP_INVIOP     6                               /* invalid I/O op */
-// #define STOP_INDLIM     7                               /* indirect limit */
+#define STOP_INDLIM     7                               /* indirect limit */
 #define STOP_EXULIM     8                               /* EXU limit */
 #define STOP_MMINT      9                               /* mm in intr */
 #define STOP_MMTRP      10                              /* mm in trap */
@@ -58,16 +57,13 @@
 #define STOP_UBKPT      17                              /* user-mode breakpoint */
 #define STOP_DBKPT      18                              /* step-over (dynamic) breakpoint */
 
-
 /* Trap codes */
-
 #define MM_PRVINS       -040                            /* privileged */
 #define MM_NOACC        -041                            /* no access */
 #define MM_WRITE        -043                            /* write protect */
 #define MM_MONUSR       -044                            /* mon to user */
 
 /* Conditional error returns */
-
 #define CRETINS         return ((stop_invins)? STOP_INVINS: SCPE_OK)
 #define CRETDEV         return ((stop_invdev)? STOP_INVDEV: SCPE_OK)
 #define CRETIOP         return ((stop_inviop)? STOP_INVIOP: SCPE_OK)
@@ -318,34 +314,35 @@ typedef struct sdsdib DIB;
 #define INT_DRM         (1 << INT_V_DRM)
 #define INT_FORK        (1 << INT_V_FORK)
 
-#define VEC_PWRO        0036
-#define VEC_PWRF        0037
-#define VEC_CPAR        0056
-#define VEC_IPAR        0057
-#define VEC_RTCS        0074
-#define VEC_RTCP        0075
-#define VEC_YZWC        0030
-#define VEC_WZWC        0031
-#define VEC_YEOR        0032
-#define VEC_WEOR        0033
-#define VEC_CZWC        0060
-#define VEC_CEOR        0061
-#define VEC_DZWC        0062
-#define VEC_DEOR        0063
-#define VEC_EZWC        0064
-#define VEC_EEOR        0065
-#define VEC_FZWC        0066
-#define VEC_FEOR        0067
-#define VEC_GZWC        0070
-#define VEC_GEOR        0071
-#define VEC_HZWC        0072
-#define VEC_HEOR        0073
-#define VEC_MUXR        0200                            /* term mux rcv */
-#define VEC_MUXT        0201                            /* term mux xmt */
-#define VEC_MUXCO       0202                            /* SDS: mux carrier on */
-#define VEC_MUXCF       0203                            /* SDS: mux carrier off */
-#define VEC_DRM         0202                            /* Genie: drum */
-#define VEC_FORK        0216                            /* "fork" */
+/* Interrupt vectors (from manual) */
+#define VEC_FORK        0x08
+#define VEC_DRM         0x0A
+#define VEC_MUXCF       0x0C
+#define VEC_MUXCO       0x0E
+#define VEC_MUXT        0x10
+#define VEC_MUXR        0x12
+#define VEC_HEOR        0x14
+#define VEC_HZWC        0x16
+#define VEC_GEOR        0x18
+#define VEC_GZWC        0x1A
+#define VEC_FEOR        0x1C
+#define VEC_FZWC        0x1E
+#define VEC_EEOR        0x20
+#define VEC_EZWC        0x22
+#define VEC_DEOR        0x24
+#define VEC_DZWC        0x26
+#define VEC_CEOR        0x28
+#define VEC_CZWC        0x2A
+#define VEC_WEOR        0x2C
+#define VEC_YEOR        0x2E
+#define VEC_WZWC        0x30
+#define VEC_YZWC        0x32
+#define VEC_RTCP        0x34
+#define VEC_RTCS        0x36
+#define VEC_IPAR        0x38
+#define VEC_CPAR        0x3A
+#define VEC_PWRF        0x3C
+#define VEC_PWRO        0x3E
 
 /* Device constants */
 
@@ -406,6 +403,97 @@ typedef struct sdsdib DIB;
 #define POT_DSK         (POT_RADA + 1)                  /* mhd sec/addr */
 #define POT_SYSI        (POT_DSK + 1)                   /* sys intr */
 #define POT_MUX         (POT_SYSI + 1)                  /* multiplexor */
+
+/* Memory size */
+#define MAX_MEM_WORDS 32768
+
+/* Control Block offsets (bytes) */
+#define CB_EVENT        0
+#define CB_INDICATORS   1
+#define CB_CMD          2
+#define CB_OPLABEL      3
+#define CB_ADDR_LO      4
+#define CB_ADDR_HI      5
+#define CB_COUNT_LO     6
+#define CB_COUNT_HI     7
+#define CB_ERRBR_LO     8
+#define CB_ERRBR_HI     9
+#define CB_EXTRA_LO     10
+#define CB_EXTRA_HI     11
+#define CB_TIMEOUT_LO   12
+#define CB_TIMEOUT_HI   13
+#define CB_INTLEV_LO    14
+#define CB_INTLEV_HI    15
+
+/* Event byte bits (CB byte 0) */
+#define EV_ACTIVE      0x01   /* 1 = transfer in progress */
+#define EV_ERROR       0x02   /* 1 = error/abnormal end */
+#define EV_PHYSERR     0x04   /* physical error (bit 2) */
+#define EV_LOGERR      0x08   /* logical error (bit 3) */
+#define EV_INITERR     0x10   /* error during initialization */
+#define EV_ENDERR      0x20   /* error after transfer end */
+#define EV_STATUS      0xC0   /* status info present */
+#define EV_EOF          0x40
+
+/* Operational labels */
+#define OPL_M_BI        1
+#define OPL_M_BO        2
+#define OPL_M_CI        3
+#define OPL_M_OC        4
+#define OPL_M_EI        5
+#define OPL_M_EO        6
+#define OPL_M_LO        7
+#define OPL_M_LL        8
+#define OPL_M_DO        9
+#define OPL_M_SI        10
+#define OPL_M_SL        11
+#define OPL_M_UL        12
+#define OPL_M_SY        13
+#define OPL_M_EP        14
+#define OPL_M_GI        15
+#define OPL_M_GO        16
+
+/* Trap types */
+#define TRAP_INVINS     0
+#define TRAP_PRVINS     1
+#define TRAP_NXM        2
+#define TRAP_PROT       3
+#define TRAP_PARITY     4
+#define TRAP_WDOG       5
+
+/* SIMH integration 
+extern int32 sim_interval;
+extern int32 sim_brk_summ;
+extern t_stat sim_process_event(void);
+extern t_stat sim_activate(UNIT *uptr, int32 delay);
+extern int32 sim_rtcn_calb(int32 freq, int32 base);
+extern int32 sim_rtcn_init(int32 wait, int32 base);
+extern int32 sim_poll_kbd(void);
+extern void sim_putc(int ch);
+extern t_bool get_yn(const char *prompt, t_bool def);
+extern uint32 get_uint(const char *cptr, int32 base, uint32 max, t_stat *r);
+extern uint32 sim_brk_test(t_addr addr, uint32 type);
+*/
+
+/* I/O functions */
+t_stat io_csv_1o(uint32 cb_addr, int zio);
+t_stat io_csv_wait(uint32 cb_addr, int zwat);
+t_stat io_rd(uint16 e_reg, uint16 *data_out);
+t_stat io_wd(uint16 e_reg, uint32 data);
+t_stat io_dit(void);
+t_stat io_ditr(void);
+void io_poll_devices(void);
+void io_init_system(void);
+t_bool io_init(void);
+void io_assign_oplabel(int oplabel, int handler_id, int unit);
+
+/* Channel functions */
+t_stat chan_process(void);
+t_bool chan_testact(void);
+void chan_set_flag(int32 ch, uint32 fl);
+void chan_set_ordy(int32 ch);
+void chan_disc(int32 ch);
+void chan_set_uar(int32 ch, uint32 dev);
 
 /* Opcodes */
 
