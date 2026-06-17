@@ -1,5 +1,5 @@
 # Mitra-15-for-SIMH
-An attempt at creating a branch for Mitra-15 in SIMH. Works in progress.
+An attempt at creating a branch for Mitra-15 in SIMH. Work in progress...
 
 This is a very early attempt.
 At the moment I can compile my code, but its not really a Mitra-15 simulator but something in between limbo and Mitra-15.
