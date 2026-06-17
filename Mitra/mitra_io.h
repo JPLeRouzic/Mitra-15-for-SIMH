@@ -60,28 +60,13 @@
 t_stat io_csv_1o(uint32 cb_addr, int zio);
 t_stat io_csv_wait(uint32 cb_addr, int zwat);
 t_stat io_rd(uint16 e_reg, uint16 *data_out);
-t_stat io_wd(uint16 e_reg, uint32 data);
+t_stat io_wd(uint16 e_reg, uint16 data);
 t_stat io_dit(void);
 t_stat io_ditr(void);
 void   io_interrupt_dispatch(void);
 int    io_check_ready(void);
 void   io_dev_attach(int oplabel, const char *file, int write);
-
-/*
-mitra_io.c:(.text+0x21d): undefined reference to `read_word'
-mitra_io.c:(.text+0x51f): undefined reference to `write_word'
-/usr/local/bin/ld: mitra_io.c:(.text+0xf93): undefined reference to `sim_tt_putc'
-/usr/local/bin/ld: mitra_io.c:(.text+0x1009): undefined reference to `sim_tt_getc'
-/usr/local/bin/ld: mitra_io.c:(.text+0x105f): undefined reference to `read_word'
-/usr/local/bin/ld: mitra_io.c:(.text+0x106b): undefined reference to `read_word'
-/usr/local/bin/ld: mitra_io.c:(.text+0x10da): undefined reference to `write_word'
-/usr/local/bin/ld: mitra_io.c:(.text+0x1110): undefined reference to `io_interrupt_dispatch'
-/usr/local/bin/ld: mitra_io.c:(.text+0x1127): undefined reference to `read_word'
-/usr/local/bin/ld: mitra_io.c:(.text+0x119d): undefined reference to `sim_tt_putc'
-/usr/local/bin/ld: mitra_io.c:(.text+0x11e3): undefined reference to `io_interrupt_dispatch'
-/usr/local/bin/ld: mitra_io.c:(.text+0x11f6): undefined reference to `sim_tt_putc'
-/usr/local/bin/ld: mitra_io.c:(.text+0x1211): undefined reference to `sim_tt_putc'
-mitra_io.c:(.text+0x1265): undefined reference to `io_interrupt_dispatch'
-*/
+t_stat read_byte_io(uint32 addr, uint8 *val, int zio) ;
+void write_byte_io(uint32 addr, uint8 val, int zio) ;
 
 #endif

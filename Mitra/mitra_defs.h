@@ -1,6 +1,7 @@
 /* mitra_defs.h: Mitra-15 simulator definitions
 
    Copyright (c) 2001-2020, Robert M. Supnik
+   Copyright (c) 2026, Jean-Pierre Le Rouzic
 
    Permission is hereby granted, free of charge, to any person obtaining a
    copy of this software and associated documentation files (the "Software"),
@@ -34,8 +35,32 @@
 #include "sim_defs.h"                                   /* simulator defns */
 
 #if defined(USE_INT64) || defined(USE_ADDR64)
-#error "SDS 940 does not support 64b values!"
+#error "Mitra 15 does not support 64b values!"
 #endif
+
+/* Minibus device slots */
+#define MAX_DEVICES 32
+typedef struct {
+    int         used;
+    int         oplabel;
+    int         handler_id;
+    int         unit;
+    uint32      cb_addr;
+    int         zio;
+    uint32      buffer_addr;
+    uint32      bytes_left;
+    uint32      extra_info;
+    int         cmd;
+    int         status;
+    int         eor;
+    int         waiting;
+    uint32      wait_task;
+    uint32      intr_level;
+    uint32      timeout;
+    int         active;
+    uint8       indicators;
+    void        *priv;      /* private data for device */
+} MINIBUS_DEV;
 
 /* Simulator stop codes */
 #define STOP_IONRDY     1                               /* I/O dev not ready */
@@ -196,18 +221,6 @@ struct sdsdib {
     };
 
 typedef struct sdsdib DIB;
-
-/* Channels */
-
-#define NUM_CHAN        8                               /* max num chan */
-#define CHAN_W          0                               /* TMCC */
-#define CHAN_Y          1
-#define CHAN_C          2
-#define CHAN_D          3
-#define CHAN_E          4                               /* DACC */
-#define CHAN_F          5
-#define CHAN_G          6
-#define CHAN_H          7
 
 /* I/O control EOM */
 
@@ -479,7 +492,7 @@ extern uint32 sim_brk_test(t_addr addr, uint32 type);
 t_stat io_csv_1o(uint32 cb_addr, int zio);
 t_stat io_csv_wait(uint32 cb_addr, int zwat);
 t_stat io_rd(uint16 e_reg, uint16 *data_out);
-t_stat io_wd(uint16 e_reg, uint32 data);
+t_stat io_wd(uint16 e_reg, uint16 data);
 t_stat io_dit(void);
 t_stat io_ditr(void);
 void io_poll_devices(void);
@@ -487,40 +500,32 @@ void io_init_system(void);
 t_bool io_init(void);
 void io_assign_oplabel(int oplabel, int handler_id, int unit);
 
-/* Channel functions */
-t_stat chan_process(void);
-t_bool chan_testact(void);
-void chan_set_flag(int32 ch, uint32 fl);
-void chan_set_ordy(int32 ch);
-void chan_disc(int32 ch);
-void chan_set_uar(int32 ch, uint32 dev);
-
 /* Opcodes */
 
 enum opcodes {
-    HLT, BRU, EOM, EOD = 006,
-    MIY = 010, BRI, MIW, POT, ETR, MRG = 016, EOR,
-    NOP, OVF = 022, EXU,
-    YIM = 030, WIM = 032, PIN, STA = 035, STB, STX,
-    SKS, BRX, BRM = 043, RCH = 046,
-    SKE = 050, BRR, SKB, SKN, SUB, ADD, SUC, ADC,
-    SKR, MIN, XMA, ADM, MUL, DIV, RSH, LSH,
-    SKM, LDX, SKA, SKG, SKD, LDB, LDA, EAX
+    LDA, LDE, LDX, EOR, LEA, ADD, SUB, IOR,
+    DIV, AND, CPS, CMP, MUL, LBL, LBR, LBX,
+
+    DLD, STA, STE, STX, SBL, SBR, DST, ADM,
+    SPA, STS, FAD, FSU, FMU, FDV, TRS, MVS,
+
+    SHR, SRG, ICX, DCX,   ICL, DCL, CSV,
+    CLS, LDR, STR, LDP, SHC, TES,
+
+    BCT, BRX, BOT, BCF, BAN, BAZ, BOF, BRU,
     };
-
-/* Channel function prototypes */
-
-void chan_set_flag (int32 ch, uint32 fl);
-void chan_set_ordy (int32 ch);
-void chan_disc (int32 ch);
-void chan_set_uar (int32 ch, uint32 dev);
-t_stat set_chan (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-t_stat show_chan (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
-t_stat chan_process (void);
-t_bool chan_testact (void);
 
 /* Translation tables */
 extern const int8 odd_par[64];
+
+/*
+ * I/O operations
+ */
+enum IOstatus {
+  IO_REPLY,                             /* Device sent a reply */
+  IO_REJECT,                            /* Device sent a reject */
+  IO_INTERNALREJECT                     /* I/O rejected internally */
+};
 
 
 #endif

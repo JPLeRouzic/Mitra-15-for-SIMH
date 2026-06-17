@@ -5,12 +5,12 @@
  * The Mitra-15 is a 16-bit word-addressable computer with:
  * - 16-bit word size
  * - Byte-addressable (even addresses = word boundaries)
- * - Up to 32K words of memory
+ * - Up to 32K words of memory, the bit 0 of program counter is always at 0.
  * - 86 instructions (Mitra-15/30)
  * - 32 interrupt levels
  * - Master/Slave modes with memory protection
  */
-
+ 
 #include "mitra_defs.h"
 #include "mitra_io.h"
 
@@ -129,7 +129,7 @@ uint16 ion_defer;
 uint32 int_reqhi = 0;
 uint32 api_lvl = 0;
 uint32 api_lvlhi = 0;
-t_bool chan_req;
+t_bool dma_req;
 
 /* Debug and history */
 uint32 bpt;
@@ -169,6 +169,15 @@ uint32 MEMsize = MEM_32K;
 
 // uint16 TRAP_INVINS;
 uint16 MM_INVINS;
+
+/* Front panel / CPU control state */
+int cpu_running = 0;           /* 1 = running, 0 = stopped */
+int interrupts_enabled = 0;
+int routing_enabled = 0;
+
+/* Panel lights - exported so debugger can see them */
+extern uint16 panel_addr_lights;
+extern uint16 panel_data_lights;
 
 /* ========== Function Prototypes ========== */
 
@@ -210,7 +219,7 @@ static t_stat check_interrupts(void);
 t_stat cpu_set_size(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_set_hist(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_show_hist(FILE *st, UNIT *uptr, int32 val, CONST void *desc);
-
+void panel_reset(void);
 
 /* ========== SIMH Device Tables ========== */
 
@@ -246,6 +255,11 @@ REG cpu_reg[] = {
     { DRDATA(INDLIM, ind_lim, 8), REG_NZ + PV_LEFT },
     { DRDATA(EXULIM, exu_lim, 8), REG_NZ + PV_LEFT },
     { ORDATA(WRU, sim_int_char, 8) },
+    { ORDATA(PANEL_ADDR, panel_addr_lights, 16) },
+    { ORDATA(PANEL_DATA, panel_data_lights, 16) },
+    { FLDATA(CPU_RUNNING, cpu_running, 0) },
+    { FLDATA(INT_ENABLED, interrupts_enabled, 0) },
+    { FLDATA(ROUTING_ENABLED, routing_enabled, 0) },
     { NULL }
 };
 
@@ -386,10 +400,210 @@ static uint16 ea_class2(uint16 inst)
     return addr;
 }
 
+/* ========== Effective Address Calculation ========== 
+The manual defines three instruction classes and addressing modes:
+0:	DL, P, DG, IL, IGX, ILX			load/arithmetic
+0':	DL, DG, IL, IGX, ILX (same but no P)	store/complex
+1:	P, PX, DL				shift, index, base and system operations
+2:	RP, RM, IL, IG				conditional or unconditional branch instructions
+
+Addressing mode LBL: Load Byte Left in A (Class 0)
+DL	OX	000 0 1101	0
+P	2X	001 0 1101	1
+DG	4X	010 0 1101	2
+IL	6X	011 0 1101	3
+IGX	8X	100 0 1101	4
+ILX	AX	101 0 1101	5
+
+Addressing mode SBL: Store Byte left in A (Class 0')
+DL	1X	000 1 0100	0
+DG	5X	010 1 0100	2
+IL	7X	011 1 0100	3
+IGX	9X	100 1 0100	4
+ILX	BX	101 1 0100	5
+
+Addressing mode STR: STore Register	 (Class ?)
+DL	3A	001 1 1010	1	X9, XA
+DG	EA	111 0 1010	7
+IL	FA	111 1 1010	7
+
+Addressing mode ICX: InCrement X	 (Class 1)
+DL	32	001 1 0010	1 	X1, X7, X8, XB, XD, 
+PX	E2	111 0 0010	7	also uses bits 11 to 14 for instruction decoding 
+P	F2	111 1 0010	7
+
+Addressing mode ICX: InCrement X	 (Class 1)
+DL	32	001 1 0010	1 	X2, X3, X4, X5, X9
+PX	E2	111 0 0010	7	
+P	F2	111 1 0010	7
+
+Addressing mode SLLD: Shift Left, Logical, DoublE	 (Class 1)
+PX	EC	111 0 1100	7	X0, XC
+P	FC	111 1 1100	7	also uses bits 8 to 10 for instruction decoding 
+
+Addressing mode XAE: eXchange contents of A and E	 (Class 1)
+P	F1	111 1 0001	7	FX except F1
+
+Addressing mode XAE: eXchange contents of A and E	 (Class 1)
+P	F1	111 1 0001	7	F11C to F1FD
+	also uses bits 11 to 14 for instruction decoding 
+
+Addressing mode BRU: BRanch Unconditional	 (Class 2)
+RP	C7	110 0 0111	6	C6 to DE
+RM	CF	110 0 1111	6
+IL	D7	110 1 0111	6
+IG	DF	110 1 1111	6
+
+Addressing Mode:	 			Used in Instruction Class	Notes
+DL – Direct Local				Class 0	Y = (L) + D
+IL – Indirect Local				Class 0	Y = G' + ((L) + D)
+ILX – Indirect Local Indexed			Class 0	Y = G' + ((L) + D) + X
+DG – Direct General				Class 0	Y = (G) + D
+IG – Indirect General				Class 2 branch to Y=G'+((G}+D}
+IGX – Indirect General Indexed			Class 0	Y = G' + ((G) + D) + X
+P – Parameter (Immediate)			Class 0 / Class 1		Operand = D (no memory access)
+PX – Parameter Indexed				Class 1 only			Usually for indexed parameter ops
+RP – Relative Plus				Class 2 (branches)		branch Y = (P) + 2×D
+RM – Relative Minus				Class 2 (branches)		branch Y = (P) – 2×D
+
+-IG (Indirect General) is not directly listed with its own mode number in the code. It appears to be handled under mode 4 (DG) in some contexts or combined with other modes in ea_class2().
+*/
+/*
+ * ea_calculate - Compute the effective address (or immediate parameter value)
+ * for an instruction, based on the full 8-bit opcode byte (inst >> 8).
+ *
+ * The addressing mode is fully determined by the opcode byte; bits 0-2 of
+ * the instruction word alone do NOT suffice (they are overloaded across
+ * classes).  The mapping below is derived directly from the per-opcode
+ * (addressing-mode, instruction) table in the CII Mitra-15 reference manual.
+ *
+ * Addressing mode formulae (D = 8-bit displacement, G' = G in slave mode / 0
+ * in master mode):
+ *
+ *   DL  – Direct Local          : Y = (L + D) & 0x7FFF
+ *   P   – Parameter/Immediate   : Y = D            (no memory indirection)
+ *   PX  – Parameter Indexed     : Y = D            (Class 1, same as P for EA)
+ *   DG  – Direct General        : Y = (G + D) & 0x7FFF
+ *   IL  – Indirect Local        : Y = (G' + mem[L + D]) & 0x7FFF
+ *   IGX – Indirect General Idx  : Y = (G' + mem[G + D] + X) & 0x7FFF
+ *   ILX – Indirect Local Idx    : Y = (G' + mem[L + D] + X) & 0x7FFF
+ *   RP  – Relative Plus  (br)   : Y = (P + 2*D) & 0x7FFF
+ *   RM  – Relative Minus (br)   : Y = (P - 2*D) & 0x7FFF
+ *   IG  – Indirect General (br) : Y = (G' + mem[G + D]) & 0x7FFF
+ *
+ * Opcodes 34, 3E, 3F, E4, EE, EF, FE, FF are not implemented; this
+ * function returns 0 for them (the caller is responsible for rejection).
+ */
 static uint16 ea_calculate(uint16 inst)
 {
-    uint16 mode = (inst >> I_MODE_SHIFT) & 0x07;
-    return (mode >= 4) ? ea_class2(inst) : ea_class0(inst);
+    uint16 op  = inst >> 8;          /* full 8-bit opcode byte              */
+    uint16 d   = inst & I_DISP_MASK; /* 8-bit unsigned displacement / param */
+    uint16 tmp;
+
+    /* ------------------------------------------------------------------ */
+    /* 00-1F : DL  –  Direct Local                                         */
+    /* Covers Class 0 (00-0F load/arith) and Class 0' (10-1F store)       */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0x1F)
+        return (L + d) & 0x7FFF;
+
+    /* ------------------------------------------------------------------ */
+    /* 20-2F : P  –  Parameter (immediate)                                 */
+    /* Same 16 instructions as 00-0F but operand IS the displacement.     */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0x2F)
+        return d;
+
+    /* ------------------------------------------------------------------ */
+    /* 30-3F : DL  –  Direct Local  (Class 1 shift/index/system group)    */
+    /* 34, 3E, 3F are not implemented but still share DL addressing.      */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0x3F)
+        return (L + d) & 0x7FFF;
+
+    /* ------------------------------------------------------------------ */
+    /* 40-4F : DG  –  Direct General  (Class 0 load/arith, DG mode)       */
+    /* 50-5F : DG  –  Direct General  (Class 0' store, DG mode)           */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0x5F)
+        return (G + d) & 0x7FFF;
+
+    /* ------------------------------------------------------------------ */
+    /* 60-6F : IL  –  Indirect Local  (Class 0 load/arith, IL mode)       */
+    /* 70-7F : IL  –  Indirect Local  (Class 0' store, IL mode)           */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0x7F) {
+        tmp = read_word(L + d);
+        return (GPRIME + tmp) & 0x7FFF;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 80-8F : IGX – Indirect General Indexed (Class 0 load/arith)        */
+    /* 90-9F : IGX – Indirect General Indexed (Class 0' store)            */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0x9F) {
+        tmp = read_word(G + d);
+        return (GPRIME + tmp + X) & 0x7FFF;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* A0-AF : ILX – Indirect Local Indexed  (Class 0 load/arith)         */
+    /* B0-BF : ILX – Indirect Local Indexed  (Class 0' store)             */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0xBF) {
+        tmp = read_word(L + d);
+        return (GPRIME + tmp + X) & 0x7FFF;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* C0-CF : Class 2 branches – RP (C0-C7) and RM (C8-CF)              */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0xC7)                          /* RP: Relative Plus          */
+        return (P + 2 * d) & 0x7FFF;
+    if (op <= 0xCF)                          /* RM: Relative Minus         */
+        return (P - 2 * d) & 0x7FFF;
+
+    /* ------------------------------------------------------------------ */
+    /* D0-DF : Class 2 branches – IL (D0-D7) and IG (D8-DF)              */
+    /* ------------------------------------------------------------------ */
+    if (op <= 0xD7) {                        /* IL: Indirect Local         */
+        tmp = read_word(L + d);
+        return (GPRIME + tmp) & 0x7FFF;
+    }
+    if (op <= 0xDF) {                        /* IG: Indirect General       */
+        tmp = read_word(G + d);
+        return (GPRIME + tmp) & 0x7FFF;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* E0-EF : Class 1 system/index group (PX mode), with two exceptions: */
+    /*   EA  → DG  (STR instruction, Direct General)                      */
+    /*   E4, EE, EF → not implemented                                     */
+    /* All remaining Ex opcodes use PX, which like P returns d directly.  */
+    /* ------------------------------------------------------------------ */
+    if (op == 0xEA)                          /* STR – DG mode              */
+        return (G + d) & 0x7FFF;
+    /* E4, EE, EF: not implemented – return 0, caller handles it */
+    if (op == 0xE4 || op == 0xEE || op == 0xEF)
+        return 0;
+    if (op <= 0xEF)                          /* PX: parameter indexed      */
+        return d;
+
+    /* ------------------------------------------------------------------ */
+    /* F0-FF : Class 1 system group (P mode), with two exceptions:        */
+    /*   FA  → IL  (STR instruction, Indirect Local)                      */
+    /*   FE, FF → not implemented                                          */
+    /* All remaining Fx opcodes use P, which returns d directly.          */
+    /* ------------------------------------------------------------------ */
+    if (op == 0xFA) {                        /* STR – IL mode              */
+        tmp = read_word(L + d);
+        return (GPRIME + tmp) & 0x7FFF;
+    }
+    /* FE, FF: not implemented – return 0, caller handles it */
+    if (op == 0xFE || op == 0xFF)
+        return 0;
+    /* F0-FD (except FA): P mode – operand is the displacement itself     */
+    return d;
 }
 
 /* ========== Condition Code Functions (per manual section II-6) ========== */
@@ -828,6 +1042,158 @@ typedef enum {
     SRG_CHX = 0x1E    /* Compute Half X */
 } srg_op_t;
 
+/*
+* Rough instruction binary layout
+*
+* Bits 0 to 3:	4 bits, addressing mode / class selector
+* Bits 4 to 7:	4 bits, instruction opcode
+* Bits 8 to 15:	8 bits, displacement
+
+Bits 0-2 do not completely specify the address mode:
+0	000:	DL, 
+1	001:	P, DL, 
+2	010:	DG, 
+3	011:	IL,
+4	100:	IGX, 
+5	101:	ILX,
+6	110:	RP, RM, IL, IG
+7	111:	DG, IL, PX, P,
+
+Data width:
+The Mitra-15 is fundamentally a 16-bit word-addressable machine. Data size is chosen implicitly by the opcode (bits 4–7), not by any extra control bits in the instruction. Examples:
+	Byte: LBL (Load Byte Left into A)
+	Word: LDA, STA, ADD, SUB, AND, IOR, etc.
+	Double word: DLD (Double Load): loads two words → E and A
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | 0 0  0 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*	()
+    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | 0 0  0 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*	()
+    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | 0 0  1 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      (P addressing mode) 
+    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | 0 0  1 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    
+    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
+    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    "",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | 0 1  0 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    (DG addressing mode) 
+    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | 0 1  0 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    
+    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | 0 1  1 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    (IL addressing mode) 
+    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | 0 1  1 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    
+    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  0  0 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    (IGX addressing mode)
+    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  0  0 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    
+    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  0  1 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    (ILX addressing mode)
+    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  0  1 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    
+    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  1  0 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    (Class 2 - RP addressing mode)
+    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
+    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  1  0 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    (Class 2 - RM/IL/IG addressing modes)
+    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
+    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  1  1 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    (Class 1 - PX addressing mode)
+    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
+    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    "",
+*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  1  1 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    (Class 1 and system - P mode)
+    "SHR", "SRG", "ICX", "DCX", "SYS", "ICL", "DCL", "CSV",
+    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    ""
+};
+*/
 t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
 {
     uint16 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
@@ -1285,6 +1651,9 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         case 0x37:  /* CSV - Call Supervisor */
+/*
+ * In Slave mode (modern user mode) the I/O programs use CSV instruction which is a call to the Master mode (modern kernel mode)
+*/
             {
                 uint16 section = ea;
                 /* Save context in TWB (first 3 words of CDS) */
@@ -1960,6 +2329,9 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         case 0xE7:  /* CSV in PX mode */
+/*
+ * In Slave mode (modern user mode) the program uses CSV instruction which is a call to the Master mode (modern kernel mode)
+*/
             {
                 uint16 section = ea;
                 write_word(G, P - GPRIME);
@@ -2115,6 +2487,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             
         case 0xF4:  /* SYS family (privileged) */
             if (mode != 1) return MM_PRVINS;
+			// Bits 14, 15 decode 4 intructions: STM, DIT, RD, WD
             switch (disp) {
                 case 0x00:  /* STM - Set Interrupt Mask */
                     MA = 1;
@@ -2151,10 +2524,38 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                     }
                     break;
                 case 0x02:  /* RD - Read Direct */
+/*
+ * In Slave mode (modern user mode) the program uses CSV instruction which is a call to the Master mode (modern kernel mode)
+ * In Master mode I/O is done with RD or WD instructions.
+
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |          F4           |                 | 1  0|
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+	  The mode is determined by the contents of E-register.
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |   cylinder 0-407         | T| sector 0-23  | D|
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*/
                     return io_rd(E, &A);
                 case 0x03:  /* WD - Write Direct */
+/*
+ * In Slave mode (modern user mode) the program uses CSV instruction which is a call to the Master mode (modern kernel mode)
+ * In Master mode I/O is done with RD or WD instructions.
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |          F4           |                 | 1  0|
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+	  The mode is determined by the contents of E-register.
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |   cylinder 0-407         | T| sector 0-23  | D|
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*/
                     return io_wd(E, A);
                 case 0x08:  /* CLM - Clear Interrupt Mask */
+					/* FIXME The reference manual is unclear here page B-4 says it exists but page VII-104 says disp is 2 bits*/
                     MA = 0;
                     break;
                 default:
@@ -2172,6 +2573,9 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         case 0xF7:  /* CSV (P mode) */
+/*
+ * In Slave mode (modern user mode) the program uses CSV instruction which is a call to the Master mode (modern kernel mode)
+*/
             {
                 uint16 section = ea;
                 write_word(G, P - GPRIME);
@@ -2292,8 +2696,10 @@ t_stat sim_instr(void)
     int_req = int_req & ~1;
     api_lvl = api_lvl & ~1;
     set_dyn_map();
+    
+    io_poll_devices(); // also for checking front panel
+    
     int_reqhi = api_findreq();
-    chan_req = chan_testact();
 
     while (reason == 0) {
         if (cpu_astop) {
@@ -2305,14 +2711,6 @@ t_stat sim_instr(void)
             if ((reason = sim_process_event()))
                 break;
             int_reqhi = api_findreq();
-            chan_req = chan_testact();
-        }
-
-        if (chan_req) {
-            if ((reason = chan_process()))
-                break;
-            int_reqhi = api_findreq();
-            chan_req = chan_testact();
         }
 
         sim_interval--;
@@ -2447,6 +2845,16 @@ t_stat cpu_reset(DEVICE *dptr)
     ion_defer = 0;
     int_req = 0;
     int_lvl = 0;
+    
+	/* Front panel reset */
+    cpu_running = 0;
+    interrupts_enabled = 0;
+    routing_enabled = 0;
+    panel_addr_lights = 0;
+    panel_data_lights = 0;
+
+    panel_reset();   /* call the panel reset too */
+    
     return SCPE_OK;
 }
 
@@ -2587,5 +2995,3 @@ t_stat cpu_show_hist(FILE *st, UNIT *uptr, int32 val, CONST void *desc)
     }
     return SCPE_OK;
 }
-
-
