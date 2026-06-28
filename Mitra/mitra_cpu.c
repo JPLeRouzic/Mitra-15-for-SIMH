@@ -97,6 +97,18 @@ static const uint32 api_mask[32] = {
 
 /* ========== Type Definitions ========== */
 
+/* 
+* CPU registers 
+* Each register has a unique address form 0 to 63 (or 127)
+* A high-speed interrupt causes an automatic switching of the register block. 
+* In the new block, the registers have then the same assignment as in block 0, but for other programs
+*/
+uint16 A, E, X, L, G, P, S;
+uint32 MREG;
+uint16 V, W, U;
+uint8 C, OV, MS;
+uint16 MA, PR;
+
 typedef struct {
     uint32 typ;
     uint16 P;
@@ -105,15 +117,14 @@ typedef struct {
     uint16 X;
     uint16 L;
     uint16 G;
+    uint16 S;
     uint8 C;
     uint8 OV;
     uint8 MS;
     uint16 MA;
     uint16 PR;
-    uint16 S;
     uint16 MREG;
-    uint16 U;
-    uint16 V, W;
+    uint16 U, V, W;
     uint32 ea;
 } InstHistory;
 
@@ -124,8 +135,6 @@ uint16 cpu_mode;        /* 0=Normal/Slave, 1=Master */
 uint16 RL1, RL2, RL4;
 uint16 int_req;
 uint16 int_lvl;
-uint16 ion;
-uint16 ion_defer;
 uint32 int_reqhi = 0;
 uint32 api_lvl = 0;
 uint32 api_lvlhi = 0;
@@ -155,13 +164,6 @@ uint32 hst_exclude = BAD_MODE;
 InstHistory *hst = NULL;
 int32 rtc_pie = 0;
 int32 rtc_tps = 60;
-
-/* CPU registers */
-uint16 A, E, X, L, G, P, S;
-uint32 MREG;
-uint16 V, W, U;
-uint8 C, OV, MS;
-uint16 MA, PR;
 
 /* Memory - word addressable */
 uint16 M[MAX_MEM_WORDS];
@@ -213,9 +215,7 @@ t_stat rtc_reset(DEVICE *dptr);
 t_stat rtc_set_freq(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat rtc_show_freq(FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 uint32 RelocC(int32 va, int32 sw);
-static t_stat handle_interrupt(int lvl);
 static int get_highest_interrupt(void);
-static t_stat check_interrupts(void);
 t_stat cpu_set_size(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_set_hist(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_show_hist(FILE *st, UNIT *uptr, int32 val, CONST void *desc);
@@ -246,8 +246,6 @@ REG cpu_reg[] = {
     { ORDATA(W, W, 16) },
     { ORDATA(INT_REQ, int_req, 32) },
     { ORDATA(INT_LVL, int_lvl, 5) },
-    { FLDATA(ION, ion, 0) },
-    { FLDATA(ION_DEFER, ion_defer, 0) },
     { ORDATA(RL1, RL1, 16) },
     { ORDATA(RL2, RL2, 16) },
     { ORDATA(RL4, RL4, 16) },
@@ -356,6 +354,7 @@ static uint16 ea_class0(uint16 inst)
             addr = (GPRIME + tmp + X) & 0x7FFF;
             break;
         case AM_DG:
+            /* DG: Direct General: Y = (G) + D  (manual section V, table) */
             addr = (G + disp) & 0x7FFF;
             break;
         case AM_IGX:
@@ -381,17 +380,18 @@ static uint16 ea_class2(uint16 inst)
     
     switch (mode) {
         case AM_RP:
-            addr = (P + 2 * disp) & 0x7FFF;
+            addr = ((P -2) + (2 * disp)) & 0x7FFF;
             break;
         case AM_RM:
-            addr = (P - 2 * disp) & 0x7FFF;
+            addr = ((P -2) - (2 * disp)) & 0x7FFF;
             break;
         case AM_IL:
             tmp = read_word(L + disp);
             addr = (GPRIME + tmp) & 0x7FFF;
             break;
         case AM_DG:
-            addr = (GPRIME + G + disp) & 0x7FFF;
+            tmp = read_word(G + disp);
+            addr = (G + tmp) & 0x7FFF;
             break;
         default:
             addr = disp;
@@ -856,16 +856,21 @@ static int normalize(uint16 *E_reg, uint16 *A_reg, uint16 *X_reg, int max_steps)
     *A_reg = double_word & 0xFFFF;
     *X_reg -= steps;
     
-    /* Set condition codes per manual */
+    /* Set condition codes per manual 
+    	C	Meaning
+    	00	Normalization 01 (stopped normally)
+	01	Stop on zero count
+	10	Normalization 10 (sign change during shift)
+    */
     if (steps == 0) {
-        C = 1;  /* Stop on zero count */
-        OV = 0;
+        C = 0;  /* Stop on zero count */
+        OV = 1;
     } else if (steps == max_steps) {
-        C = 0;
-        OV = 1;  /* Stop on max */
+        C = 1;
+        OV = 0;  /* Stop on max */
     } else {
         C = 0;
-        OV = 0;  /* Normalized */
+        OV = 0;  /* Normalization 01 (stopped normally) */
     }
     return steps;
 }
@@ -925,7 +930,12 @@ static void double_to_mitra(double v, uint16 *A, uint16 *E)
 uint32 api_findreq(void)
 {
     uint32 i, t;
-    t = (int_req & ~1) & api_mask[api_lvlhi];
+    /* FIXME
+    * it's not clear if int_lvl or api_lvlhi should be used to index the API mask.
+    * The api_mask table masks out all levels below the current highest active level.
+    * But api_lvlhi is never updated in sim_instr after an interrupt is accepted or when DIT fires.
+    */
+    t = (int_req & ~1) & api_mask[int_lvl];
     for (i = 31; t && (i > 0); i--) {
         if ((t >> i) & 1) return i;
     }
@@ -934,25 +944,74 @@ uint32 api_findreq(void)
 
 /* ========== Trap Handling ========== */
 
+/* ========== Trap mechanism (manual section II-8.3) ========== *
+ *
+ * Trap causes: VM=mode violation(0), PM=protect violation(1), AI=non-existing addr(2),
+ *              PA=parity(3), II=invalid instruction(4), ES=I/O error(5), watchdog(6)
+ *
+ * Trap processing micro-program:
+ *  1. Sets the corresponding bit in absolute memory WORD 1 (byte address 2).
+ *     Bit layout in word 1 (bit 0=MSB in Mitra convention):
+ *       bit 0 = VM (mode violation)
+ *       bit 1 = PM (memory protection)
+ *       bit 2 = AI (non-existing address)
+ *       bit 3 = PA (parity)
+ *       bit 4 = II (invalid instruction)
+ *       bit 5 = ES (I/O error)
+ *  2. Saves L-G', P-G', and indicators into bytes 4-9 (words 2,3,4 in byte addressing,
+ *     i.e. WORD addresses 2,3,4 if byte=word on Mitra, but since the machine is
+ *     word-addressable "bytes 4-9" = word addresses 2 and 3 and 4):
+ *       M[word_addr 2] = P - G'  (faulting instruction address)
+ *       M[word_addr 3] = L - G'
+ *       M[word_addr 4] = indicators (C, OV, MS packed)
+ *  3. Calls supervisor section 0 via PRTS at absolute address 12 (decimal):
+ *       PR and MS are forced to 1 (master mode, protection override)
+ *       L = PRTS[section_0_Lbase] + G
+ *       P = PRTS[section_0_Pbase] + G
+ *
+ * Trap constants for trap argument:
+ *   TRAP_VM=0, TRAP_PM=1, TRAP_AI=2, TRAP_PA=3, TRAP_II=4, TRAP_ES=5
+ */
+#define TRAP_VM  0   /* Mode violation */
+#define TRAP_PM  1   /* Memory protection violation */
+#define TRAP_AI  2   /* Non-existing address */
+#define TRAP_PA  3   /* Parity error */
+#define TRAP_II  4   /* Invalid (non-implemented) instruction */
+#define TRAP_ES  5   /* I/O error */
+
 t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc)
 {
-    /* Store trap information in memory word 2 (per manual section II-8.3) */
-    uint16 trap_word = read_word(2);
-    trap_word |= (1 << trap);
-    write_word(2, trap_word);
-    
-    /* Save registers in memory bytes 4-9 */
-    write_word(4, L - GPRIME);
-    write_word(6, P - GPRIME);
-    write_word(8, ((C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0)));
-    
-    /* Call supervisor section 0 */
-    uint16 svc_addr = read_word(12);  /* PRTS pointer */
-    L = read_word(svc_addr + 2) + G;
-    P = read_word(svc_addr) + G;
-    MS = 1;
-    PR = 1;
-    
+    uint16 trap_word, prts_ptr, sect0_Lbase, sect0_Pbase;
+    uint16 ind_word;
+
+    /* Step 1: Set trap cause bit in absolute memory word 1 (byte address 2) */
+    trap_word = read_word(1);   /* word address 1 = byte address 2 */
+    trap_word |= (0x8000u >> trap);  /* bit 0 (MSB) = VM, bit 1 = PM, ... */
+    write_word(1, trap_word);
+
+    /* Step 2: Protect bytes 4-9 with faulting context
+     * "bytes 4-9" = word addresses 2, 3, 4 (2 bytes per word) */
+    write_word(2, (pc - GPRIME) & 0x7FFF);      /* P of faulting instruction */
+    write_word(3, (L - GPRIME) & 0x7FFF);       /* L register */
+    ind_word = ((PR  & 1) << 15) | ((MA  & 1) << 14) |
+               ((MS  & 1) << 13) | ((OV  & 1) << 12) | ((C & 1) << 11);
+    write_word(4, ind_word);                      /* indicators */
+
+    /* Step 3: Call supervisor section 0
+     * Absolute address 12 (decimal) holds the PRTS pointer.
+     * PRTS entry for section N is at PRTS_base - 4*N:
+     *   word 0 (at PRTS_base - 4*N)   = P-base of section
+     *   word 1 (at PRTS_base - 4*N+2) = L-base of section
+     * Section 0 entry is at PRTS_base itself (N=0). */
+    prts_ptr = read_word(6);     /* word address 6 = byte address 12 = absolute addr 12 */
+    sect0_Pbase = read_word(prts_ptr);
+    sect0_Lbase = read_word(prts_ptr + 1);
+    MS = 1;    /* Master mode */
+    PR = 1;    /* Protection override */
+    MA = 1;    /* Mask interrupts during trap handling */
+    L = (sect0_Lbase + G) & 0x7FFF;
+    P = (sect0_Pbase + G) & 0x7FFF;
+
     *trappc = pc;
     return SCPE_OK;
 }
@@ -1309,14 +1368,17 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         case 0x0E:  /* LBR - Load Byte Right */
+            /* Manual: Y loaded in A[8-15], A[0-7] cleared. Byte order: bit 0=MSB. */
+            /* On Mitra-15 bit 0 is leftmost (MSB). Byte "right" = bits 8-15 = low byte. */
             data = read_word(ea);
-            A = (data & 0x00FF) | ((data << 8) & 0xFF00);
+            A = data & 0x00FF;   /* low byte into A, high byte cleared */
             set_condition_codes_load(A);
             break;
             
         case 0x0F:  /* LBX - Load Byte Right into X */
+            /* Manual: rightmost byte of Y loaded into X[8-15], X[0-7] cleared. */
             data = read_word(ea);
-            X = (data & 0x00FF) | ((data << 8) & 0xFF00);
+            X = data & 0x00FF;
             set_condition_codes_load(X);
             break;
             
@@ -1346,7 +1408,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             
         case 0x15:  /* SBR - Store Byte Right */
             data = read_word(ea);
-            write_word(ea, (data & 0xFF00) | ((A << 8) & 0x00FF));
+            write_word(ea, (data & 0xFF00) | (A & 0x00FF));
             break;
             
         case 0x16:  /* DST - Double Store */
@@ -1364,7 +1426,10 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         case 0x18:  /* SPA - Store Program Address */
-            A = (pc + 4 + GPRIME) & 0x7FFF;
+            /* Manual: (P)+G' --> Y2. P has already been incremented by 2 (after fetch).
+             * "current address incremented by four" = original_pc+4 = (P+2)+G'.
+             * So: store (P + 2 + GPRIME). Equivalent to pc+4+GPRIME when P=pc+2. */
+            A = ((P + 2) + GPRIME) & 0x7FFF;
             write_word(ea, A);
             break;
             
@@ -1508,14 +1573,14 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                     A = (A & 0x00FF) | (data & 0xFF00);
                     set_condition_codes_load(A);
                     break;
-                case 0x0E:
+                case 0x0E:  /* LBR P mode: load right byte into A, left byte cleared */
                     data = read_word(ea);
-                    A = (data & 0x00FF) | ((data << 8) & 0xFF00);
+                    A = data & 0x00FF;
                     set_condition_codes_load(A);
                     break;
-                case 0x0F:
+                case 0x0F:  /* LBX P mode: load right byte into X, left byte cleared */
                     data = read_word(ea);
-                    X = (data & 0x00FF) | ((data << 8) & 0xFF00);
+                    X = data & 0x00FF;
                     set_condition_codes_load(X);
                     break;
             }
@@ -1561,8 +1626,10 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                 srg_op_t srg_op = (disp >> 1) & 0x1F;
                 switch (srg_op) {
                     case SRG_RTS:  /* RTS - Return Section */
-                        P = read_word(L + GPRIME);
-                        L = read_word(L + 2 + GPRIME);
+                        uint16 saved_P = read_word(L) + GPRIME;
+			uint16 saved_L = read_word(L + 2) + GPRIME;
+			P = saved_P;
+			L = saved_L;
                         break;
                     case SRG_XAE:  /* XAE - Exchange A and E */
                         data = A; A = E; E = data;
@@ -1580,15 +1647,20 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                         E = ~E & 0xFFFF;
                         break;
                     case SRG_RSV:  /* RSV - Return Supervisor (privileged) */
+                        /* Manual: ((G)+4)->indicators; (G)+((G)+2)->L; (G)+2+((G))->P; MS cleared */
                         if (mode != 1) return MM_PRVINS;
-                        P = read_word(G);
-                        L = read_word(G + 2);
                         {
                             uint16 saved_flags = read_word(G + 4);
-                            C = (saved_flags >> 0) & 1;
-                            OV = (saved_flags >> 1) & 1;
+                            C  = (saved_flags >> 14) & 1;   /* bit 1 in Mitra bit-order = C */
+                            OV = (saved_flags >> 13) & 1;   /* bit 2 = O */
+                            /* MS bit (bit 3): manual says RSV clears MS (returns to slave) */
                             MS = 0;
+                            /* MA restored from saved_flags bit 12 */
+                            MA = (saved_flags >> 12) & 1;
+                            PR = (saved_flags >> 11) & 1;
                         }
+                        L = (G + read_word(G + 2)) & 0x7FFF;
+                        P = (G + 2 + read_word(G)) & 0x7FFF;
                         break;
                     case SRG_ACE:  /* ACE - Add Carry to E */
                         E = (E + C) & 0xFFFF;
@@ -1661,23 +1733,29 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                 write_word(G + 2, L - GPRIME);
                 write_word(G + 4, (C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0));
                 /* Load new context from PRTS */
-                L = read_word(12 - 4 * section) + G;
-                P = read_word(12 - 4 * section + 2) + G;
+                uint16 PRTS_addr = read_word(12);
+                L = (PRTS_addr - (4*section)) + G;
+                P = (PRTS_addr - (4*section) + 2) + G;
                 MS = 1;  /* Enter master mode */
                 PR = 1;  /* Override protection */
             }
             break;
             
         case 0x38:  /* CLS - Call Section */
-            if (mode == 0) return MM_PRVINS;
+            /* Manual: CLS is NON-PRIVILEGED, available in both master and slave mode. */
+            /* Remove the mode check - manual says non-privileged. */
             {
                 uint16 section = ea;
-                /* Save return address in called section's LDS */
-                write_word(L, P - GPRIME);
-                write_word(L + 2, L - GPRIME);
-                /* Load new section from PRT */
-                L = read_word(G - 4 * section + 2) + G;
-                P = read_word(G - 4 * section) + G;
+                /* PRT entry for section N is at (G - 4*N): word 0 = P-base, word 2 = L-base */
+                uint16 called_Lbase = read_word((G - 4 * section + 2) & 0x7FFF);
+                uint16 called_Pbase = read_word((G - 4 * section) & 0x7FFF);
+                uint16 LDS = (called_Lbase + G) & 0x7FFF;
+                /* Save return info (calling section's P-G', L-G') in called section's LDS[0],[2] */
+                write_word(LDS,       (P - GPRIME) & 0x7FFF);
+                write_word(LDS + 2,   (L - GPRIME) & 0x7FFF);
+                /* Load called section's bases */
+                L = LDS;   /* called section's LDS base IS its L */
+                P = (called_Pbase + G) & 0x7FFF;
             }
             break;
             
@@ -1722,11 +1800,16 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                     case 0:  /* SLLD - Shift Left Logical Double */
                         shift_lld(&E, &A, count);
                         break;
-                    case 1:  /* DITR - Deactivate high-speed interrupt (privileged) */
+                    case 1:  /* DITR - Deactivate High-Speed Interrupt (privileged) */
+                        /* Manual DITR: saves indicators to R6 of reserved block; clears R12;
+                         * de-activates the high-speed level; restores previous indicators from
+                         * R6 of block 0. This is a register-block operation, not a memory
+                         * context swap. Simplified emulation: just deactivate the level. */
                         if (mode != 1) return MM_PRVINS;
-                        /* High-speed interrupt deactivation */
+                        if (!(cpu_unit.flags & UNIT_HSINT)) return MM_INVINS;
+                        /* Deactivate the high-speed interrupt level */
                         int_req &= ~(1u << int_lvl);
-                        int_lvl = 0;
+                        int_lvl = get_highest_interrupt();
                         break;
                     case 2:  /* PTY - Compute parity */
                         E = compute_parity(&A, count);
@@ -1817,14 +1900,14 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                     A = (A & 0x00FF) | (data & 0xFF00);
                     set_condition_codes_load(A);
                     break;
-                case 0x0E:
+                case 0x0E:  /* LBR P mode: load right byte into A, left byte cleared */
                     data = read_word(ea);
-                    A = (data & 0x00FF) | ((data << 8) & 0xFF00);
+                    A = data & 0x00FF;
                     set_condition_codes_load(A);
                     break;
-                case 0x0F:
+                case 0x0F:  /* LBX P mode: load right byte into X, left byte cleared */
                     data = read_word(ea);
-                    X = (data & 0x00FF) | ((data << 8) & 0xFF00);
+                    X = data & 0x00FF;
                     set_condition_codes_load(X);
                     break;
             }
@@ -1851,7 +1934,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
         case 0x55:  /* SBR (DG mode) */
             data = read_word(ea);
-            write_word(ea, (data & 0xFF00) | ((A << 8) & 0x00FF));
+            write_word(ea, (data & 0xFF00) | (A & 0x00FF));
             break;
         case 0x56:  /* DST (DG mode) */
             write_word(ea, E);
@@ -1866,7 +1949,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             set_condition_codes_arithmetic(result, carry, overflow);
             break;
         case 0x58:  /* SPA (DG mode) */
-            A = (pc + 4 + GPRIME) & 0x7FFF;
+            A = ((P + 2) + GPRIME) & 0x7FFF;
             write_word(ea, A);
             break;
         case 0x59:  /* STS (DG mode) */
@@ -2003,14 +2086,14 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                     A = (A & 0x00FF) | (data & 0xFF00);
                     set_condition_codes_load(A);
                     break;
-                case 0x0E:
+                case 0x0E:  /* LBR P mode: load right byte into A, left byte cleared */
                     data = read_word(ea);
-                    A = (data & 0x00FF) | ((data << 8) & 0xFF00);
+                    A = data & 0x00FF;
                     set_condition_codes_load(A);
                     break;
-                case 0x0F:
+                case 0x0F:  /* LBX P mode: load right byte into X, left byte cleared */
                     data = read_word(ea);
-                    X = (data & 0x00FF) | ((data << 8) & 0xFF00);
+                    X = data & 0x00FF;
                     set_condition_codes_load(X);
                     break;
             }
@@ -2037,7 +2120,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
         case 0x75:  /* SBR (IL mode) */
             data = read_word(ea);
-            write_word(ea, (data & 0xFF00) | ((A << 8) & 0x00FF));
+            write_word(ea, (data & 0xFF00) | (A & 0x00FF));
             break;
         case 0x76:  /* DST (IL mode) */
             write_word(ea, E);
@@ -2052,7 +2135,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             set_condition_codes_arithmetic(result, carry, overflow);
             break;
         case 0x78:  /* SPA (IL mode) */
-            A = (pc + 4 + GPRIME) & 0x7FFF;
+            A = ((P + 2) + GPRIME) & 0x7FFF;
             write_word(ea, A);
             break;
         case 0x79:  /* STS (IL mode) */
@@ -2277,7 +2360,12 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             {
                 srg_op_t srg_op = (disp >> 1) & 0x1F;
                 switch (srg_op) {
-                    case SRG_RTS: P = read_word(L + GPRIME); L = read_word(L + 2 + GPRIME); break;
+                    case SRG_RTS: 
+			uint16 saved_P = read_word(L) + GPRIME;
+			uint16 saved_L = read_word(L + 2) + GPRIME;
+			P = saved_P;
+			L = saved_L;
+                    break;
                     case SRG_XAE: data = A; A = E; E = data; break;
                     case SRG_XAX: data = A; A = X; X = data; break;
                     case SRG_XEX: data = E; E = X; X = data; break;
@@ -2285,13 +2373,16 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                     case SRG_CCE: E = ~E & 0xFFFF; break;
                     case SRG_RSV:
                         if (mode != 1) return MM_PRVINS;
-                        P = read_word(G); L = read_word(G + 2);
                         {
                             uint16 saved_flags = read_word(G + 4);
-                            C = (saved_flags >> 0) & 1;
-                            OV = (saved_flags >> 1) & 1;
+                            C  = (saved_flags >> 14) & 1;
+                            OV = (saved_flags >> 13) & 1;
+                            MA = (saved_flags >> 12) & 1;
+                            PR = (saved_flags >> 11) & 1;
                             MS = 0;
                         }
+                        L = (G + read_word(G + 2)) & 0x7FFF;
+                        P = (G + 2 + read_word(G)) & 0x7FFF;
                         break;
                     case SRG_ACE: E = (E + C) & 0xFFFF; break;
                     case SRG_CCA: A = ~A & 0xFFFF; set_condition_codes_load(A); break;
@@ -2337,21 +2428,25 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                 write_word(G, P - GPRIME);
                 write_word(G + 2, L - GPRIME);
                 write_word(G + 4, (C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0));
-                L = read_word(12 - 4 * section) + G;
-                P = read_word(12 - 4 * section + 2) + G;
+                /* Load new context from PRTS */
+                uint16 PRTS_addr = read_word(12);
+                L = (PRTS_addr - (4*section)) + G;
+                P = (PRTS_addr - (4*section) + 2) + G;
                 MS = 1;
                 PR = 1;
             }
             break;
             
         case 0xE8:  /* CLS in PX mode */
-            if (mode == 0) return MM_PRVINS;
             {
                 uint16 section = ea;
-                write_word(L, P - GPRIME);
-                write_word(L + 2, L - GPRIME);
-                L = read_word(G - 4 * section + 2) + G;
-                P = read_word(G - 4 * section) + G;
+                uint16 called_Lbase = read_word((G - 4 * section + 2) & 0x7FFF);
+                uint16 called_Pbase = read_word((G - 4 * section) & 0x7FFF);
+                uint16 LDS = (called_Lbase + G) & 0x7FFF;
+                write_word(LDS,     (P - GPRIME) & 0x7FFF);
+                write_word(LDS + 2, (L - GPRIME) & 0x7FFF);
+                L = LDS;
+                P = (called_Pbase + G) & 0x7FFF;
             }
             break;
             
@@ -2445,7 +2540,14 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             {
                 srg_op_t srg_op = (disp >> 1) & 0x1F;
                 switch (srg_op) {
-                    case SRG_RTS: P = read_word(L + GPRIME); L = read_word(L + 2 + GPRIME); break;
+                    case SRG_RTS: {
+                        /* Manual: ((L))+G' -> P,  ((L)+2)+G' -> L */
+                        uint16 saved_P = read_word(L) + GPRIME;
+                        uint16 saved_L = read_word(L + 2) + GPRIME;
+                        P = saved_P;
+                        L = saved_L;
+                        break;
+                    }
                     case SRG_XAE: data = A; A = E; E = data; break;
                     case SRG_XAX: data = A; A = X; X = data; break;
                     case SRG_XEX: data = E; E = X; X = data; break;
@@ -2453,13 +2555,16 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                     case SRG_CCE: E = ~E & 0xFFFF; break;
                     case SRG_RSV:
                         if (mode != 1) return MM_PRVINS;
-                        P = read_word(G); L = read_word(G + 2);
                         {
                             uint16 saved_flags = read_word(G + 4);
-                            C = (saved_flags >> 0) & 1;
-                            OV = (saved_flags >> 1) & 1;
+                            C  = (saved_flags >> 14) & 1;
+                            OV = (saved_flags >> 13) & 1;
+                            MA = (saved_flags >> 12) & 1;
+                            PR = (saved_flags >> 11) & 1;
                             MS = 0;
                         }
+                        L = (G + read_word(G + 2)) & 0x7FFF;
+                        P = (G + 2 + read_word(G)) & 0x7FFF;
                         break;
                     case SRG_ACE: E = (E + C) & 0xFFFF; break;
                     case SRG_CCA: A = ~A & 0xFFFF; set_condition_codes_load(A); break;
@@ -2486,41 +2591,63 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         case 0xF4:  /* SYS family (privileged) */
-            if (mode != 1) return MM_PRVINS;
-			// Bits 14, 15 decode 4 intructions: STM, DIT, RD, WD
-            switch (disp) {
-                case 0x00:  /* STM - Set Interrupt Mask */
+            if (mode != 1) 
+            	return MM_PRVINS;
+	    // Bits 14, 15 decode 4 intructions: STM, DIT, RD, WD
+            /* F4xx family: bits 3:0 of displacement select function */
+            /* F400=CLM, F401=DIT, F402=RD, F403=WD, F408=STM             */
+            switch (disp & 0x000F) {
+                case 0x00:  /* CLM - Clear Interrupt Mask */
+                    MA = 0;
+                    break;
+                case 0x08:  /* STM - Set Interrupt Mask */
                     MA = 1;
                     break;
-                case 0x01:  /* DIT - Deactivate Interrupt */
+                case 0x01:  
+                /* 
+                * DIT - Deactivate Interrupt 
+                * The function of DIT is to terminate this interrupt subroutine and to return control to the interrupted program.
+                * The program context comprises the current contents of X, E, A, G, L, P registers and indicators.
+                */
                     {
-                        /* Save context at context pointer address */
-                        uint16 ctx_ptr = int_vec[int_lvl];
-                        write_word(ctx_ptr, ((C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0)));
-                        write_word(ctx_ptr + 2, X);
-                        write_word(ctx_ptr + 4, E);
-                        write_word(ctx_ptr + 6, A);
-                        write_word(ctx_ptr + 8, G);
-                        write_word(ctx_ptr + 10, L);
-                        write_word(ctx_ptr + 12, P);
-                        /* Deactivate current level */
+                        /* Manual DIT: P += 2 (already done by fetch); save context of current
+                         * level; deactivate it; accept highest-priority waiting level; restore
+                         * context. Context save area layout (7 words per manual):
+                         *   word 0: Indicators (PR|MA|MS|OV|C packed), words 1-6: X,E,A,G,L,P
+                         * CPT (Context Pointer Table) is at address M[10].
+                         * CPT[i] = address of save area for interrupt level i.             */
+                        uint16 cpt_base = M[10];  /* absolute word address of CPT */
+                        uint16 ctx_ptr;
+                        uint16 ind_word;
+                        /* --- Save current level context --- */
+                        ctx_ptr = read_word(cpt_base + int_lvl);
+                        ind_word = ((PR  & 1) << 15) | ((MA  & 1) << 14) |
+                                   ((MS  & 1) << 13) | ((OV  & 1) << 12) | ((C & 1) << 11);
+                        write_word(ctx_ptr,      ind_word);
+                        write_word(ctx_ptr + 1,  X);
+                        write_word(ctx_ptr + 2,  E);
+                        write_word(ctx_ptr + 3,  A);
+                        write_word(ctx_ptr + 4,  G);
+                        write_word(ctx_ptr + 5,  L);
+                        write_word(ctx_ptr + 6,  P);
+                        /* --- Deactivate current level --- */
                         int_req &= ~(1u << int_lvl);
-                        /* Find next highest priority level */
+                        /* --- Accept highest-priority waiting level --- */
                         int_lvl = get_highest_interrupt();
-                        /* Restore context */
-                        ctx_ptr = int_vec[int_lvl];
-                        {
-                            uint16 saved_flags = read_word(ctx_ptr);
-                            C = (saved_flags >> 0) & 1;
-                            OV = (saved_flags >> 1) & 1;
-                            MS = (saved_flags >> 2) & 1;
-                        }
-                        X = read_word(ctx_ptr + 2);
-                        E = read_word(ctx_ptr + 4);
-                        A = read_word(ctx_ptr + 6);
-                        G = read_word(ctx_ptr + 8);
-                        L = read_word(ctx_ptr + 10);
-                        P = read_word(ctx_ptr + 12);
+                        /* --- Restore new level context --- */
+                        ctx_ptr = read_word(cpt_base + int_lvl);
+                        ind_word = read_word(ctx_ptr);
+                        PR = (ind_word >> 15) & 1;
+                        MA = (ind_word >> 14) & 1;
+                        MS = (ind_word >> 13) & 1;
+                        OV = (ind_word >> 12) & 1;
+                        C  = (ind_word >> 11) & 1;
+                        X = read_word(ctx_ptr + 1);
+                        E = read_word(ctx_ptr + 2);
+                        A = read_word(ctx_ptr + 3);
+                        G = read_word(ctx_ptr + 4);
+                        L = read_word(ctx_ptr + 5);
+                        P = read_word(ctx_ptr + 6);
                     }
                     break;
                 case 0x02:  /* RD - Read Direct */
@@ -2554,10 +2681,6 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 */
                     return io_wd(E, A);
-                case 0x08:  /* CLM - Clear Interrupt Mask */
-					/* FIXME The reference manual is unclear here page B-4 says it exists but page VII-104 says disp is 2 bits*/
-                    MA = 0;
-                    break;
                 default:
                     if (stop_invins) return STOP_INVINS;
                     break;
@@ -2581,8 +2704,10 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                 write_word(G, P - GPRIME);
                 write_word(G + 2, L - GPRIME);
                 write_word(G + 4, (C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0));
-                L = read_word(12 - 4 * section) + G;
-                P = read_word(12 - 4 * section + 2) + G;
+                /* Load new context from PRTS */
+                uint16 PRTS_addr = read_word(12);
+                L = (PRTS_addr - (4*section)) + G;
+                P = (PRTS_addr - (4*section) + 2) + G;
                 MS = 1;
                 PR = 1;
             }
@@ -2592,8 +2717,9 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             if (mode == 0) return MM_PRVINS;
             {
                 uint16 section = ea;
-                write_word(L, P - GPRIME);
-                write_word(L + 2, L - GPRIME);
+                uint LDS = read_word(G - 4 * section + 2) + G;
+                write_word(LDS, P - GPRIME);
+                write_word(LDS + 2, L - GPRIME);
                 L = read_word(G - 4 * section + 2) + G;
                 P = read_word(G - 4 * section) + G;
             }
@@ -2714,46 +2840,65 @@ t_stat sim_instr(void)
         }
 
         sim_interval--;
+        
+        /* Check for traps
+        * Traps are not implemented in the current simulator FIXME
+        * The manual (section II-8.2) describes a hardware suspension system distinct from interrupts, operating at the micro-program level with a 4-deep stack.
+        * Suspensions are used to couple peripherals requiring "urgent or frequent transfers" with a 300 μs maximum response time. 
+        * Currently the emulator has no suspension machinery whatsoever ( xfr_req is declared but never processed). 
+	* For DMA-style peripherals relying on suspensions, this means those transfer paths are non-functional.
+	*/
 
         /* Check for interrupts */
-        if (ion && !ion_defer && int_reqhi && int_reqhi > int_lvl) {
+        if ((MA == 0) && int_reqhi && int_reqhi > int_lvl) {
             uint16 pa = int_vec[int_reqhi];
             if (pa == 0) {
                 reason = STOP_ILLVEC;
                 break;
             }
             
-            /* Save context for current level */
-            uint16 ctx_ptr = int_vec[int_lvl];
-            write_word(ctx_ptr, ((C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0)));
-            write_word(ctx_ptr + 2, X);
-            write_word(ctx_ptr + 4, E);
-            write_word(ctx_ptr + 6, A);
-            write_word(ctx_ptr + 8, G);
-            write_word(ctx_ptr + 10, L);
-            write_word(ctx_ptr + 12, P);
-            
-            /* Switch to new level */
-            int_lvl = int_reqhi;
-            ctx_ptr = int_vec[int_lvl];
+            /* Save context of currently-running level (per DIT manual section)
+             * CPT is a 32-word table at absolute address M[10].
+             * CPT[i] = word address of the context save area for level i.
+             * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P */
             {
-                uint16 saved_flags = read_word(ctx_ptr);
-                C = (saved_flags >> 0) & 1;
-                OV = (saved_flags >> 1) & 1;
-                MS = (saved_flags >> 2) & 1;
+                uint16 cpt_base = M[10];
+                uint16 ctx_ptr, ind_word;
+                /* --- Save old level --- */
+                ctx_ptr = read_word(cpt_base + int_lvl);
+                ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
+                           ((MS & 1) << 13) | ((OV & 1) << 12) | ((C & 1) << 11);
+                write_word(ctx_ptr,     ind_word);
+                write_word(ctx_ptr + 1, X);
+                write_word(ctx_ptr + 2, E);
+                write_word(ctx_ptr + 3, A);
+                write_word(ctx_ptr + 4, G);
+                write_word(ctx_ptr + 5, L);
+                write_word(ctx_ptr + 6, P);
+                /* --- Switch to new level --- */
+                int_lvl = int_reqhi;
+                /* --- Load new level's context (P comes from the save area = entry point) --- */
+                ctx_ptr = read_word(cpt_base + int_lvl);
+                ind_word = read_word(ctx_ptr);
+                PR = (ind_word >> 15) & 1;
+                MA = (ind_word >> 14) & 1;
+                MS = (ind_word >> 13) & 1;
+                OV = (ind_word >> 12) & 1;
+                C  = (ind_word >> 11) & 1;
+                X = read_word(ctx_ptr + 1);
+                E = read_word(ctx_ptr + 2);
+                A = read_word(ctx_ptr + 3);
+                G = read_word(ctx_ptr + 4);
+                L = read_word(ctx_ptr + 5);
+                P = read_word(ctx_ptr + 6);  /* Entry point of interrupt handler */
             }
-            X = read_word(ctx_ptr + 2);
-            E = read_word(ctx_ptr + 4);
-            A = read_word(ctx_ptr + 6);
-            G = read_word(ctx_ptr + 8);
-            L = read_word(ctx_ptr + 10);
-            P = read_word(ctx_ptr + 12);
             
             /* Acknowledge interrupt */
             if (pa != VEC_RTCP && rtc_pie) {
                 int_req |= INT_RTCP;
             }
             int_reqhi = api_findreq();
+            
         } else {
             /* Normal instruction fetch */
             if (sim_brk_summ) {
@@ -2781,7 +2926,6 @@ t_stat sim_instr(void)
             P = (P + 2) & 0x7FFF;  /* Instructions are word-aligned */
             
             if (inst != 0) {
-                ion_defer = 0;
                 reason = one_inst(inst, save_P, cpu_mode, &trap_P);
                 if (reason > 0 && reason != STOP_HALT) {
                     P = save_P;
@@ -2841,8 +2985,6 @@ t_stat cpu_reset(DEVICE *dptr)
     C = OV = MS = 0;
     MA = PR = 0;
     cpu_mode = 0;
-    ion = 0;
-    ion_defer = 0;
     int_req = 0;
     int_lvl = 0;
     
