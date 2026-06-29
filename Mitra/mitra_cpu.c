@@ -333,8 +333,14 @@ void write_byte(uint16 va, uint8 val)
     write_word(word_addr, word);
 }
 
-/* ========== Effective Address Calculation ========== */
-
+/* ========== Effective Address Calculation for Class 0, class 0', class 1 ========== 
+* return the effective address
+* for immediate addressing, it returns the content of P, the program counter
+* Note: In the Mitra-15 manual, (R) means "the contents of register R" — it does not mean 
+* "dereference register R as a memory pointer." 
+* The registers L and G are base address registers whose values you add to displacements; 
+* they are not pointers that need to be read through. Only the double-parenthesis forms like ((L)+D) in IL mode represent an actual memory read.
+*/
 static uint16 ea_class0(uint16 inst)
 {
     uint16 mode = (inst >> I_MODE_SHIFT) & 0x07;
@@ -342,29 +348,31 @@ static uint16 ea_class0(uint16 inst)
     uint16 tmp, addr;
     
     switch (mode) {
-        case AM_DL:
+        case AM_DL: // Y = (L) + D
             addr = (L + disp) & 0x7FFF;
             break;
-        case AM_IL:
+        case AM_IL: // Y = G' + ((L)+D)
             tmp = read_word(L + disp);
             addr = (GPRIME + tmp) & 0x7FFF;
             break;
-        case AM_ILX:
+        case AM_ILX: // Y = G' + ((L)+D)+(X)
             tmp = read_word(L + disp);
             addr = (GPRIME + tmp + X) & 0x7FFF;
             break;
-        case AM_DG:
+        case AM_DG: // Y=(G) + D
             /* DG: Direct General: Y = (G) + D  (manual section V, table) */
             addr = (G + disp) & 0x7FFF;
             break;
-        case AM_IGX:
+        case AM_IGX: // Y = (G) + ((G)+D) + (X)
             tmp = read_word(G + disp);
             addr = (GPRIME + tmp + X) & 0x7FFF;
             break;
-        case AM_P:
-        case AM_PX:
+        case AM_P: // Y = (P) parameter or immediate
             addr = disp;
             break;
+	case AM_PX:
+	    addr = (disp + X) & 0x7FFF;   // operand value IS D + (X)
+	    break;
         default:
             addr = disp;
             break;
@@ -453,6 +461,99 @@ RP	C7	110 0 0111	6	C6 to DE
 RM	CF	110 0 1111	6
 IL	D7	110 1 0111	6
 IG	DF	110 1 1111	6
+
+The addressing mode for each instruction:
+DL	OX
+DL	1X
+P	2X
+DL	30
+DL	31
+DL	32
+DL	33
+	34	NOT IMPLEMENTED	
+DL	35
+DL	36
+DL	37
+DL	38
+DL	39
+DL	3A
+DL	3B
+DL	3C
+DL	3D
+	3E	NOT IMPLEMENTED
+	3F	NOT IMPLEMENTED
+DG	4X
+DG	5X
+IL	6X
+IL	7X
+IGX	8X
+IGX	9X
+ILX	AX
+ILX	BX
+RP	C0
+RP	C1
+RP	C2
+RP	C3
+RP	C4
+RP	C5
+RP	C6
+RP	C7
+RM	C8
+RM	C9
+RM	CA
+RM	CB
+RM	CC
+RM	CD
+RM	CE
+RM	CF
+IL	D0
+IL	D1
+IL	D2
+IL	D3
+IL	D4
+IL	D5
+IL	D6
+IL	D7
+IG	D8
+IG	D9
+IG	DA
+IG	DB
+IG	DC
+IG	DD
+IG	DE
+IG	DF
+PX	E0
+PX	E1
+PX	E2
+PX	E3
+	E4	NOT IMPLEMENTED
+PX	E5
+PX	E6
+PX	E7
+PX	E8
+PX	E9
+DG	EA
+PX	EB
+PX	EC
+PX	ED
+	EE	NOT IMPLEMENTED
+	EF	NOT IMPLEMENTED
+P	F0
+P	F1
+P	F2
+P	F3
+P	F4
+P	F5
+P	F6
+P	F7
+P	F8
+P	F9
+IL	FA
+P	FB
+P	FC
+P	FD
+	FE	NOT IMPLEMENTED
+	FF	NOT IMPLEMENTED
 
 Addressing Mode:	 			Used in Instruction Class	Notes
 DL – Direct Local				Class 0	Y = (L) + D
@@ -942,8 +1043,6 @@ uint32 api_findreq(void)
     return 0;
 }
 
-/* ========== Trap Handling ========== */
-
 /* ========== Trap mechanism (manual section II-8.3) ========== *
  *
  * Trap causes: VM=mode violation(0), PM=protect violation(1), AI=non-existing addr(2),
@@ -992,7 +1091,8 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc)
     /* Step 2: Protect bytes 4-9 with faulting context
      * "bytes 4-9" = word addresses 2, 3, 4 (2 bytes per word) */
     write_word(2, (pc - GPRIME) & 0x7FFF);      /* P of faulting instruction */
-    write_word(3, (L - GPRIME) & 0x7FFF);       /* L register */
+    write_word(3, (L - GPRIME) & 0x7FFF);       /* L register 
+    */
     ind_word = ((PR  & 1) << 15) | ((MA  & 1) << 14) |
                ((MS  & 1) << 13) | ((OV  & 1) << 12) | ((C & 1) << 11);
     write_word(4, ind_word);                      /* indicators */
@@ -1002,7 +1102,8 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc)
      * PRTS entry for section N is at PRTS_base - 4*N:
      *   word 0 (at PRTS_base - 4*N)   = P-base of section
      *   word 1 (at PRTS_base - 4*N+2) = L-base of section
-     * Section 0 entry is at PRTS_base itself (N=0). */
+     * Section 0 entry is at PRTS_base itself (N=0). 
+     */
     prts_ptr = read_word(6);     /* word address 6 = byte address 12 = absolute addr 12 */
     sect0_Pbase = read_word(prts_ptr);
     sect0_Lbase = read_word(prts_ptr + 1);
@@ -1428,7 +1529,8 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
         case 0x18:  /* SPA - Store Program Address */
             /* Manual: (P)+G' --> Y2. P has already been incremented by 2 (after fetch).
              * "current address incremented by four" = original_pc+4 = (P+2)+G'.
-             * So: store (P + 2 + GPRIME). Equivalent to pc+4+GPRIME when P=pc+2. */
+             * So: store (P + 2 + GPRIME). Equivalent to pc+4+GPRIME when P=pc+2. 
+	     */
             A = ((P + 2) + GPRIME) & 0x7FFF;
             write_word(ea, A);
             break;
@@ -1587,35 +1689,23 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         /* ========== Shift and Index Instructions (30-3F) ========== */
-        case 0x30:  /* SHR - Shift Register */
-            count = (disp >> 3) & 0x1F;
+        case 0x30:  /* SHR - Shift Register (DL mode: shift word read from memory) */
+            /* Shift word from memory (16-bit); use low byte for parameters.
+             * Bit layout of shift parameter byte: bits[7:5]=type, bits[4:0]=count.
+             * Verified: &23h=SRCS3, &E8h=SRCD8, &41h=SAD1. */
             {
-                shift_type_t type = (disp >> 0) & 0x07;
+                uint8 shr_word = (uint8)(read_word(ea) & 0xFF);
+                shift_type_t type = (shr_word >> 5) & 0x07;
+                count = shr_word & 0x1F;
                 switch (type) {
-                    case SHIFT_SLLS:  /* Shift Left Logical Single */
-                        A = shift_lls(A, count);
-                        break;
-                    case SHIFT_SRCS:  /* Shift Right Circular Single */
-                        A = shift_srcs(A, count);
-                        break;
-                    case SHIFT_SAD:   /* Shift Arithmetic Right Double */
-                        shift_sad(&E, &A, count);
-                        break;
-                    case SHIFT_SLCD:  /* Shift Left Circular Double */
-                        shift_lcd(&E, &A, count);
-                        break;
-                    case SHIFT_SLCS:  /* Shift Left Circular Single */
-                        A = shift_slcs(A, count);
-                        break;
-                    case SHIFT_SAS:   /* Shift Arithmetic Right Single */
-                        A = shift_sas(A, count);
-                        break;
-                    case SHIFT_SRLS:  /* Shift Right Logical Single */
-                        A = shift_rls(A, count);
-                        break;
-                    case SHIFT_SRCD:  /* Shift Right Circular Double */
-                        shift_rcd(&E, &A, count);
-                        break;
+                    case SHIFT_SLLS: A = shift_lls(A, count); break;
+                    case SHIFT_SRCS: A = shift_srcs(A, count); break;
+                    case SHIFT_SAD:  shift_sad(&E, &A, count); break;
+                    case SHIFT_SLCD: shift_lcd(&E, &A, count); break;
+                    case SHIFT_SLCS: A = shift_slcs(A, count); break;
+                    case SHIFT_SAS:  A = shift_sas(A, count); break;
+                    case SHIFT_SRLS: A = shift_rls(A, count); break;
+                    case SHIFT_SRCD: shift_rcd(&E, &A, count); break;
                 }
                 set_condition_codes_load(A);
             }
@@ -1623,7 +1713,8 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             
         case 0x31:  /* SRG - Set Register (inter-register operations) */
             {
-                srg_op_t srg_op = (disp >> 1) & 0x1F;
+                /* SRG operand is the displacement directly (even values 0x00..0x1E map to ops 0-F) */
+                srg_op_t srg_op = disp & 0x1E;  /* mask bit 0, use raw disp as case value */
                 switch (srg_op) {
                     case SRG_RTS:  /* RTS - Return Section */
                         uint16 saved_P = read_word(L) + GPRIME;
@@ -1701,25 +1792,26 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             }
             break;
             
-        case 0x32:  /* ICX - Increment X (Class 1, P mode) */
-            X = (X + disp) & 0x7FFF;
+        case 0x32:  /* ICX - Increment X (DL mode: operand = read_word(L+D)) */
+            /* Manual: (X) + Y2 -> X. In DL mode, Y2 = contents of memory at L+D. */
+            X = (X + read_word(ea)) & 0x7FFF;
             set_condition_codes_load(X);
             break;
             
-        case 0x33:  /* DCX - Decrement X */
-            X = (X - disp) & 0x7FFF;
+        case 0x33:  /* DCX - Decrement X (DL mode: operand = read_word(L+D)) */
+            X = (X - read_word(ea)) & 0x7FFF;
             set_condition_codes_load(X);
             break;
             
         case 0x34:  /* Reserved */
             break;
             
-        case 0x35:  /* ICL - Increment L */
-            L = (L + disp) & 0x7FFF;
+        case 0x35:  /* ICL - Increment L (DL mode: operand = read_word(L+D)) */
+            L = (L + read_word(ea)) & 0x7FFF;
             break;
             
-        case 0x36:  /* DCL - Decrement L */
-            L = (L - disp) & 0x7FFF;
+        case 0x36:  /* DCL - Decrement L (DL mode: operand = read_word(L+D)) */
+            L = (L - read_word(ea)) & 0x7FFF;
             break;
             
         case 0x37:  /* CSV - Call Supervisor */
@@ -1759,31 +1851,38 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             }
             break;
             
-        case 0x39:  /* LDR - Load Register (Class 1) */
+        case 0x39:  /* LDR - Load A from register Rn where n=(Y) */
+            /* Manual: (Rn) -> A. Block 0 assignment: R0=A,R1=E,R2=P,R3=X,R4=L,R5=G,R6=V,R7=W */
             {
-                uint16 reg_num = read_word(ea) & 0x3F;
-                /* Register access would need full register block implementation */
-                /* For now, only registers 0-5 are implemented */
-                if (reg_num == 0) A = read_word(ea);
-                else if (reg_num == 1) E = read_word(ea);
-                else if (reg_num == 2) X = read_word(ea);
-                else if (reg_num == 3) L = read_word(ea);
-                else if (reg_num == 4) G = read_word(ea);
-                else if (reg_num == 5) P = read_word(ea);
+                uint16 reg_num = ea & 0x3F;   /* register number IS the computed operand */
+                switch (reg_num & 0x07) {     /* only low 3 bits select within block 0 */
+                    case 0: A = A; break;     /* LDR R0 = read A into A (no-op) */
+                    case 1: A = E; break;
+                    case 2: A = P; break;
+                    case 3: A = X; break;
+                    case 4: A = L; break;
+                    case 5: A = G; break;
+                    /* R6=V, R7=W are micro-program use; not program-accessible */
+                    default: break;
+                }
                 set_condition_codes_load(A);
             }
             break;
             
-        case 0x3A:  /* STR - Store Register (privileged) */
+        case 0x3A:  /* STR - Store A into register Rn where n=(Y) (privileged) */
+            /* Manual: (A) -> Rn. Block 0: R0=A,R1=E,R2=P,R3=X,R4=L,R5=G */
             if (mode != 1) return MM_PRVINS;
             {
-                uint16 reg_num = read_word(ea) & 0x3F;
-                if (reg_num == 0) write_word(ea, A);
-                else if (reg_num == 1) write_word(ea, E);
-                else if (reg_num == 2) write_word(ea, X);
-                else if (reg_num == 3) write_word(ea, L);
-                else if (reg_num == 4) write_word(ea, G);
-                else if (reg_num == 5) write_word(ea, P);
+                uint16 reg_num = ea & 0x3F;
+                switch (reg_num & 0x07) {
+                    case 0: A = A; break;   /* STR R0 = write A to A (no-op) */
+                    case 1: E = A; break;
+                    case 2: P = A & 0x7FFF; break;
+                    case 3: X = A; break;
+                    case 4: L = A & 0x7FFF; break;
+                    case 5: G = A; break;
+                    default: break;
+                }
             }
             break;
             
@@ -1792,10 +1891,13 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             PR = read_word(ea) & 1;
             break;
             
-        case 0x3C:  /* SHC - Shift Special */
-            count = (disp >> 3) & 0x1F;
+        case 0x3C:  /* SHC - Shift Special (DL mode: shift word from memory) */
+            /* Same bit layout: bits[7:5]=type, bits[4:0]=count (in 8-bit param byte).
+             * SHC types: 0=SLLD, 1=DITR, 2=PTY, 3=DITR, 4=SRLD, 5=DITR, 6=NLZ, 7=DITR. */
             {
-                uint8 shc_type = (disp >> 0) & 0x07;
+                uint8 shc_word = (uint8)(read_word(ea) & 0xFF);
+                uint8 shc_type = (shc_word >> 5) & 0x07;
+                count = shc_word & 0x1F;
                 switch (shc_type) {
                     case 0:  /* SLLD - Shift Left Logical Double */
                         shift_lld(&E, &A, count);
@@ -2120,7 +2222,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
         case 0x75:  /* SBR (IL mode) */
             data = read_word(ea);
-            write_word(ea, (data & 0xFF00) | (A & 0x00FF));
+            write_word(ea, write_word(ea, (data & 0xFF00) | (A & 0x00FF)););
             break;
         case 0x76:  /* DST (IL mode) */
             write_word(ea, E);
@@ -2349,16 +2451,29 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         /* ========== PX Mode Instructions (E0-EF) ========== */
-        case 0xE0:  /* SHR in PX mode */
-            count = disp & 0x1F;
-            A = shift_sas(A, count);
-            set_condition_codes_load(A);
+        case 0xE0:  /* SHR in PX mode (operand = displacement byte) */
+            {
+                shift_type_t type = (disp >> 5) & 0x07;
+                count = disp & 0x1F;
+                switch (type) {
+                    case SHIFT_SLLS: A = shift_lls(A, count); break;
+                    case SHIFT_SRCS: A = shift_srcs(A, count); break;
+                    case SHIFT_SAD:  shift_sad(&E, &A, count); break;
+                    case SHIFT_SLCD: shift_lcd(&E, &A, count); break;
+                    case SHIFT_SLCS: A = shift_slcs(A, count); break;
+                    case SHIFT_SAS:  A = shift_sas(A, count); break;
+                    case SHIFT_SRLS: A = shift_rls(A, count); break;
+                    case SHIFT_SRCD: shift_rcd(&E, &A, count); break;
+                }
+                set_condition_codes_load(A);
+            }
             break;
             
         case 0xE1:  /* SRG in PX mode */
             /* Handled same as 0x31 */
             {
-                srg_op_t srg_op = (disp >> 1) & 0x1F;
+                /* SRG operand is the displacement directly (even values 0x00..0x1E map to ops 0-F) */
+                srg_op_t srg_op = disp & 0x1E;  /* mask bit 0, use raw disp as case value */
                 switch (srg_op) {
                     case SRG_RTS: 
 			uint16 saved_P = read_word(L) + GPRIME;
@@ -2398,25 +2513,26 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             }
             break;
             
-        case 0xE2:  /* ICX in PX mode */
-            X = (X + 1) & 0x7FFF;
+        case 0xE2:  /* ICX in PX mode (operand = displacement, not memory) */
+            /* In PX mode, Y2 = D (the displacement byte itself as a value). */
+            X = (X + ea) & 0x7FFF;
             set_condition_codes_load(X);
             break;
             
         case 0xE3:  /* DCX in PX mode */
-            X = (X - 1) & 0x7FFF;
+            X = (X - ea) & 0x7FFF;
             set_condition_codes_load(X);
             break;
             
         case 0xE4:  /* Reserved */
             break;
             
-        case 0xE5:  /* ICL in PX mode */
-            L = (L + 1) & 0x7FFF;
+        case 0xE5:  /* ICL in PX mode (operand = displacement) */
+            L = (L + ea) & 0x7FFF;
             break;
             
         case 0xE6:  /* DCL in PX mode */
-            L = (L - 1) & 0x7FFF;
+            L = (L - ea) & 0x7FFF;
             break;
             
         case 0xE7:  /* CSV in PX mode */
@@ -2452,13 +2568,16 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             
         case 0xE9:  /* LDR in PX mode */
             {
-                uint16 reg_num = read_word(ea) & 0x3F;
-                if (reg_num == 0) A = read_word(ea);
-                else if (reg_num == 1) E = read_word(ea);
-                else if (reg_num == 2) X = read_word(ea);
-                else if (reg_num == 3) L = read_word(ea);
-                else if (reg_num == 4) G = read_word(ea);
-                else if (reg_num == 5) P = read_word(ea);
+                uint16 reg_num = ea & 0x3F;
+                switch (reg_num & 0x07) {
+                    case 0: A = A; break;
+                    case 1: A = E; break;
+                    case 2: A = P; break;
+                    case 3: A = X; break;
+                    case 4: A = L; break;
+                    case 5: A = G; break;
+                    default: break;
+                }
                 set_condition_codes_load(A);
             }
             break;
@@ -2466,13 +2585,16 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
         case 0xEA:  /* STR in PX mode (privileged) */
             if (mode != 1) return MM_PRVINS;
             {
-                uint16 reg_num = read_word(ea) & 0x3F;
-                if (reg_num == 0) write_word(ea, A);
-                else if (reg_num == 1) write_word(ea, E);
-                else if (reg_num == 2) write_word(ea, X);
-                else if (reg_num == 3) write_word(ea, L);
-                else if (reg_num == 4) write_word(ea, G);
-                else if (reg_num == 5) write_word(ea, P);
+                uint16 reg_num = ea & 0x3F;
+                switch (reg_num & 0x07) {
+                    case 0: A = A; break;
+                    case 1: E = A; break;
+                    case 2: P = A & 0x7FFF; break;
+                    case 3: X = A; break;
+                    case 4: L = A & 0x7FFF; break;
+                    case 5: G = A; break;
+                    default: break;
+                }
             }
             break;
             
@@ -2518,17 +2640,17 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
             
         /* ========== P Mode System Instructions (F0-FF) ========== */
-        case 0xF0:  /* SHR (P mode) */
-            count = disp & 0x1F;
+        case 0xF0:  /* SHR (P mode: operand = displacement byte) */
             {
-                shift_type_t type = (disp >> 0) & 0x07;
+                shift_type_t type = (disp >> 5) & 0x07;
+                count = disp & 0x1F;
                 switch (type) {
                     case SHIFT_SLLS: A = shift_lls(A, count); break;
                     case SHIFT_SRCS: A = shift_srcs(A, count); break;
-                    case SHIFT_SAD: shift_sad(&E, &A, count); break;
+                    case SHIFT_SAD:  shift_sad(&E, &A, count); break;
                     case SHIFT_SLCD: shift_lcd(&E, &A, count); break;
                     case SHIFT_SLCS: A = shift_slcs(A, count); break;
-                    case SHIFT_SAS: A = shift_sas(A, count); break;
+                    case SHIFT_SAS:  A = shift_sas(A, count); break;
                     case SHIFT_SRLS: A = shift_rls(A, count); break;
                     case SHIFT_SRCD: shift_rcd(&E, &A, count); break;
                 }
@@ -2538,7 +2660,8 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             
         case 0xF1:  /* SRG (P mode) */
             {
-                srg_op_t srg_op = (disp >> 1) & 0x1F;
+                /* SRG operand is the displacement directly (even values 0x00..0x1E map to ops 0-F) */
+                srg_op_t srg_op = disp & 0x1E;  /* mask bit 0, use raw disp as case value */
                 switch (srg_op) {
                     case SRG_RTS: {
                         /* Manual: ((L))+G' -> P,  ((L)+2)+G' -> L */
@@ -2580,13 +2703,13 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             }
             break;
             
-        case 0xF2:  /* ICX (P mode) */
-            X = (X + 1) & 0x7FFF;
+        case 0xF2:  /* ICX (P mode: operand = displacement) */
+            X = (X + ea) & 0x7FFF;
             set_condition_codes_load(X);
             break;
             
         case 0xF3:  /* DCX (P mode) */
-            X = (X - 1) & 0x7FFF;
+            X = (X - ea) & 0x7FFF;
             set_condition_codes_load(X);
             break;
             
@@ -2615,7 +2738,8 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
                          * context. Context save area layout (7 words per manual):
                          *   word 0: Indicators (PR|MA|MS|OV|C packed), words 1-6: X,E,A,G,L,P
                          * CPT (Context Pointer Table) is at address M[10].
-                         * CPT[i] = address of save area for interrupt level i.             */
+                         * CPT[i] = address of save area for interrupt level i.             
+			*/
                         uint16 cpt_base = M[10];  /* absolute word address of CPT */
                         uint16 ctx_ptr;
                         uint16 ind_word;
@@ -2687,12 +2811,12 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             }
             break;
             
-        case 0xF5:  /* ICL (P mode) */
-            L = (L + 1) & 0x7FFF;
+        case 0xF5:  /* ICL (P mode: operand = displacement) */
+            L = (L + ea) & 0x7FFF;
             break;
             
         case 0xF6:  /* DCL (P mode) */
-            L = (L - 1) & 0x7FFF;
+            L = (L - ea) & 0x7FFF;
             break;
             
         case 0xF7:  /* CSV (P mode) */
@@ -2727,13 +2851,16 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             
         case 0xF9:  /* LDR (P mode) */
             {
-                uint16 reg_num = read_word(ea) & 0x3F;
-                if (reg_num == 0) A = read_word(ea);
-                else if (reg_num == 1) E = read_word(ea);
-                else if (reg_num == 2) X = read_word(ea);
-                else if (reg_num == 3) L = read_word(ea);
-                else if (reg_num == 4) G = read_word(ea);
-                else if (reg_num == 5) P = read_word(ea);
+                uint16 reg_num = ea & 0x3F;
+                switch (reg_num & 0x07) {
+                    case 0: A = A; break;
+                    case 1: A = E; break;
+                    case 2: A = P; break;
+                    case 3: A = X; break;
+                    case 4: A = L; break;
+                    case 5: A = G; break;
+                    default: break;
+                }
                 set_condition_codes_load(A);
             }
             break;
@@ -2741,13 +2868,16 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
         case 0xFA:  /* STR (P mode, privileged) */
             if (mode != 1) return MM_PRVINS;
             {
-                uint16 reg_num = read_word(ea) & 0x3F;
-                if (reg_num == 0) write_word(ea, A);
-                else if (reg_num == 1) write_word(ea, E);
-                else if (reg_num == 2) write_word(ea, X);
-                else if (reg_num == 3) write_word(ea, L);
-                else if (reg_num == 4) write_word(ea, G);
-                else if (reg_num == 5) write_word(ea, P);
+                uint16 reg_num = ea & 0x3F;
+                switch (reg_num & 0x07) {
+                    case 0: A = A; break;
+                    case 1: E = A; break;
+                    case 2: P = A & 0x7FFF; break;
+                    case 3: X = A; break;
+                    case 4: L = A & 0x7FFF; break;
+                    case 5: G = A; break;
+                    default: break;
+                }
             }
             break;
             
@@ -2756,10 +2886,10 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             PR = read_word(ea) & 1;
             break;
             
-        case 0xFC:  /* SHC (P mode) */
-            count = disp & 0x1F;
+        case 0xFC:  /* SHC (P mode: operand = displacement byte) */
             {
-                uint8 shc_type = (disp >> 0) & 0x07;
+                uint8 shc_type = (disp >> 5) & 0x07;
+                count = disp & 0x1F;
                 switch (shc_type) {
                     case 0: shift_lld(&E, &A, count); break;
                     case 1:
