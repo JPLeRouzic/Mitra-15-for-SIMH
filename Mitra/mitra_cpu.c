@@ -2222,7 +2222,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
             break;
         case 0x75:  /* SBR (IL mode) */
             data = read_word(ea);
-            write_word(ea, write_word(ea, (data & 0xFF00) | (A & 0x00FF)););
+            write_word(ea, (data & 0xFF00) | ((A << 8) & 0x00FF));
             break;
         case 0x76:  /* DST (IL mode) */
             write_word(ea, E);
