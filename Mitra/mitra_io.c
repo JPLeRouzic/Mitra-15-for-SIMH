@@ -1,5 +1,5 @@
 /*
-you must:
+We must:
 
     Extend mitra_io.c to:
 
@@ -40,9 +40,7 @@ Each device provides:
 The main emulator must call the poll functions for all active devices inside its instruction loop (or via a timer). The interrupt levels used (4,5,6,7,8,9,2,3) are examples; they can be adjusted to match the actual Mitra-15 interrupt assignments.
 */
 
-
-
-
+#include <stdbool.h>
 
 /* Mitra-15 I/O System 
 1. General organization of I/O operations
@@ -375,7 +373,7 @@ extern uint16 M[];                   /* memory array */
 extern uint32 MEMsize;
 extern uint32 int_req;               /* interrupt request bits */
 extern uint32 xfr_req;               /* transfer request bits */
-extern void io_interrupt_dispatch(void);
+void io_interrupt_dispatch(uint16 intr_lvl, t_bool hgh_spd);
 
 /* Memory Access Functions (defined in mitra_cpu.c) */
 extern uint16 read_word(uint16 addr);

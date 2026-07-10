@@ -95,6 +95,7 @@ All devices will follow the same integration pattern, they provide:
 #include "mitra_io.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 extern uint32 int_req;               /* interrupt request bits */
 
@@ -121,7 +122,8 @@ static LP_DEV printer_dev = {0};
 static void lp_interrupt(void)
 {
     int_req |= (1 << 2);   /* typical interrupt level for printer_dev */
-    io_interrupt_dispatch();
+    io_interrupt_dispatch(int_req, false);
+
 }
 
 /* Simple output – converts EBCDIC to ASCII (basic mapping) */

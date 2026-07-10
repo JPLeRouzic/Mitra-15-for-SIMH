@@ -10,12 +10,13 @@
  * - 32 interrupt levels
  * - Master/Slave modes with memory protection
  */
- 
+
+#include <stdbool.h>
+#include <math.h>
 #include "mitra_defs.h"
 #include "mitra_io.h"
 
 /* ========== Constants and Definitions ========== */
-
 #define PCQ_SIZE        64
 #define PCQ_MASK        (PCQ_SIZE - 1)
 #define PCQ_ENTRY       pcq[pcq_p = (pcq_p - 1) & PCQ_MASK] = pc
@@ -66,33 +67,24 @@
 #define I_MODE_SHIFT    13
 #define I_OPCODE_MASK   0x1F00
 #define I_OPCODE_SHIFT  8
+#define I_GROUP_SHIFT   9
 #define I_DISP_MASK     0x00FF
 
-#define GPRIME ((MS) ? G : 0)
+/* Fixed GPRIME macro to correctly reference the G register in the current block */
+#define GPRIME ((MS) ? reg_block[curr_bloc].G : 0)
+
 #define VA_TO_PA(va) ((va) & 0x7FFF)
 
 /* Interrupt vectors */
 static const uint32 int_vec[32] = {
-    0, 0, 0, 0,
-    VEC_FORK, VEC_DRM, VEC_MUXCF, VEC_MUXCO,
-    VEC_MUXT, VEC_MUXR, VEC_HEOR, VEC_HZWC,
-    VEC_GEOR, VEC_GZWC, VEC_FEOR, VEC_FZWC,
-    VEC_EEOR, VEC_EZWC, VEC_DEOR, VEC_DZWC,
-    VEC_CEOR, VEC_CZWC, VEC_WEOR, VEC_YEOR,
-    VEC_WZWC, VEC_YZWC, VEC_RTCP, VEC_RTCS,
-    VEC_IPAR, VEC_CPAR, VEC_PWRF, VEC_PWRO
-};
-
-/* API mask for interrupt priority */
-static const uint32 api_mask[32] = {
-    0xFFFFFFFE, 0xFFFFFFFC, 0xFFFFFFF8, 0xFFFFFFF0,
-    0xFFFFFFE0, 0xFFFFFFC0, 0xFFFFFF80, 0xFFFFFF00,
-    0xFFFFFE00, 0xFFFFFC00, 0xFFFFF800, 0xFFFFF000,
-    0xFFFFE000, 0xFFFFC000, 0xFFFF8000, 0xFFFF0000,
-    0xFFFE0000, 0xFFFC0000, 0xFFF80000, 0xFFF00000,
-    0xFFE00000, 0xFFC00000, 0xFF800000, 0xFF000000,
-    0xFE000000, 0xFC000000, 0xF8000000, 0xF0000000,
-    0xE0000000, 0xC0000000, 0x80000000, 0x00000000
+0, 0, 0, 0,
+VEC_FORK, VEC_DRM, VEC_MUXCF, VEC_MUXCO,
+VEC_MUXT, VEC_MUXR, VEC_HEOR, VEC_HZWC,
+VEC_GEOR, VEC_GZWC, VEC_FEOR, VEC_FZWC,
+VEC_EEOR, VEC_EZWC, VEC_DEOR, VEC_DZWC,
+VEC_CEOR, VEC_CZWC, VEC_WEOR, VEC_YEOR,
+VEC_WZWC, VEC_YZWC, VEC_RTCP, VEC_RTCS,
+VEC_IPAR, VEC_CPAR, VEC_PWRF, VEC_PWRO
 };
 
 /* ========== Type Definitions ========== */
@@ -103,11 +95,37 @@ static const uint32 api_mask[32] = {
 * A high-speed interrupt causes an automatic switching of the register block. 
 * In the new block, the registers have then the same assignment as in block 0, but for other programs
 */
-uint16 A, E, X, L, G, P, S;
+#define REG_BLOCS 8
+uint8 curr_bloc = 0;
+struct {
+	uint16 A;
+	uint16 E;
+	uint16 X;
+	uint8 C, OV;
+	uint16 P;
+	uint16 L;
+	uint16 G;
+	uint16 V;
+	uint16 W;
+} reg_block[REG_BLOCS];
+
 uint32 MREG;
-uint16 V, W, U;
-uint8 C, OV, MS;
-uint16 MA, PR;
+uint16 S;
+uint16 U;
+
+/* Normal or "slave" mode */
+// In normal mode, priviledged instructions cannot be executed and any attempt to execute such an instruction causes: A "mode violation" trap. 
+// MS indicator is reset (MS = 0).
+
+/* Priviledged or "master" mode */
+// In master mode all instructions, whether priviledged or not, are executable. 
+// MS indicator is set (MS = 1).
+// The various OSes are examples of programs which must be executed in master mode. (See CSV and RSV instructions).
+// It should be noted that addressing modes are different in master and slave modes (see Chapter V "Addressing modes") to provide absolute addressing capability in master mode.
+uint16  MS;
+uint16  PR; // Access to protected areos
+// Interrupt mask
+uint16 MA;
 
 typedef struct {
     uint32 typ;
@@ -129,15 +147,41 @@ typedef struct {
 } InstHistory;
 
 /* ========== Global State ========== */
-
-uint32 xfr_req = 0;
 uint16 cpu_mode;        /* 0=Normal/Slave, 1=Master */
 uint16 RL1, RL2, RL4;
-uint16 int_req;
-uint16 int_lvl;
-uint32 int_reqhi = 0;
-uint32 api_lvl = 0;
-uint32 api_lvlhi = 0;
+
+
+
+// Interrupts save context in an area pointed by an index to the CPT table.
+// the CPT itself is pointed to by the contents of absolute address 10: M[10]
+// There is a "high-speed" interrupt mechanism that uses register block switching instead of memory-based context saves.
+struct {			
+uint16 intrp_level;
+t_bool  high_speed;
+} int_req;
+
+uint16 int_lvl;			// current interrupt level
+uint32 int_reqhi = 0; 		// Highest interrupt request
+
+// The suspension system is able to interrupt the current micro-program at the end of every micro-instruction, and to launch a special micro-program. 
+// The suspension request is either issued by a peripheral or internal to the CPU.
+// On occurence of a suspension, the CPU status, i.e. the contents of U, J, T registers and of B, Tz, To, Ao indicators are transferred in a 
+// The suspension micro-program is then executed.
+// At the end of the suspension program, the initial context is restored from the values previously saved in the stack.
+uint16 susp_req;		// suspension requests
+uint16 susp_lvl;		// suspension trap level
+uint32 susp_reqhi = 0; 		// Highest suspension request
+
+// Traps
+// The origin of a trap is an abnormal condition detected at the end of a micro-instruction.
+// The trap processing microcode:
+// - protects bytes 4 to 9 of the memory which contain L- and P-register values and the indicators status of the context of the instruction which initiated the trap;
+// - signals the cause of the trap by settinga bit in memory word 2;
+// - performs a call to supervisor section 0.
+uint16 trp_req;			// trap requests
+uint16 trp_lvl;			// current trap level
+uint32 trp_reqhi = 0; 		// Highest trap request
+
 t_bool dma_req;
 
 /* Debug and history */
@@ -169,7 +213,6 @@ int32 rtc_tps = 60;
 uint16 M[MAX_MEM_WORDS];
 uint32 MEMsize = MEM_32K;
 
-// uint16 TRAP_INVINS;
 uint16 MM_INVINS;
 
 /* Front panel / CPU control state */
@@ -182,13 +225,10 @@ extern uint16 panel_addr_lights;
 extern uint16 panel_data_lights;
 
 /* ========== Function Prototypes ========== */
-
 uint16 read_word(uint16 va);
 void write_word(uint16 va, uint16 val);
 uint8 read_byte(uint16 va);
 void write_byte(uint16 va, uint8 val);
-static uint16 ea_class0(uint16 inst);
-static uint16 ea_class2(uint16 inst);
 static uint16 add16(uint16 a, uint16 b, uint16 *carry, uint16 *overflow);
 static uint16 sub16(uint16 a, uint16 b, uint16 *carry, uint16 *overflow);
 static void set_condition_codes_load(uint16 result);
@@ -198,8 +238,7 @@ static void mul32(uint16 a, uint16 b, uint16 *high, uint16 *low);
 static int div32(uint16 high, uint16 low, uint16 divisor, uint16 *quot, uint16 *rem);
 static void double_to_mitra(double v, uint16 *A, uint16 *E);
 static double mitra_to_double(uint16 A, uint16 E);
-t_stat mitra_trap(int trap, uint16 pc, uint16* trappc);
-uint32 api_findreq(void);
+t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc);
 void set_dyn_map(void);
 t_stat set_cc(void);
 t_stat cpu_ex(t_value *vptr, t_addr addr, UNIT *uptr, int32 sw);
@@ -216,196 +255,129 @@ t_stat rtc_set_freq(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat rtc_show_freq(FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 uint32 RelocC(int32 va, int32 sw);
 static int get_highest_interrupt(void);
-t_stat cpu_set_size(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_set_hist(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_show_hist(FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 void panel_reset(void);
 
-/* ========== SIMH Device Tables ========== */
+uint16 group_1(uint16 target_address, uint16 inst);
+uint16 group_2(uint16 inst, uint16 address, uint32 mode);
 
+uint16 group_1_DL(uint16 inst);
+uint16 group_2_DL(uint16 inst, uint32 mode);
+uint16 group_1_P(uint16 inst);
+uint16 group_3_DL(uint16 inst, uint32 mode);
+uint16 group_1_DG(uint16 inst);
+uint16 group_2_DG(uint16 inst, uint32 mode);
+uint16 group_1_IL(uint16 inst);
+uint16 group_2_IL(uint16 inst, uint32 mode);
+uint16 group_1_IGX(uint16 inst);
+uint16 group_2_IGX(uint16 inst, uint32 mode);
+uint16 group_1_ILX(uint16 inst);
+uint16 group_2_ILX(uint16 inst, uint32 mode);
+uint16 group_4_RP(uint16 inst);
+uint16 group_4_RM(uint16 inst);
+uint16 group_5_IL(uint16 inst);
+uint16 group_5_IG(uint16 inst);
+uint16 group_3_PX(uint16 inst, uint32 mode);
+uint16 group_3_P(uint16 inst, uint32 mode);
+
+/* ========== SIMH Device Tables ========== */
 UNIT cpu_unit = {
-    UDATA(NULL, UNIT_FIX + UNIT_BINK, MAX_MEM_WORDS)
+	UDATA(NULL, UNIT_FIX + UNIT_BINK, MAX_MEM_WORDS)
 };
 
 REG cpu_reg[] = {
-    { ORDATA(P, P, 16) },
-    { ORDATA(A, A, 16) },
-    { ORDATA(E, E, 16) },
-    { ORDATA(X, X, 16) },
-    { ORDATA(L, L, 16) },
-    { ORDATA(G, G, 16) },
-    { FLDATA(C, C, 0) },
-    { FLDATA(OV, OV, 0) },
-    { FLDATA(MS, MS, 0) },
-    { FLDATA(MA, MA, 0) },
-    { FLDATA(PR, PR, 0) },
-    { ORDATA(S, S, 15) },
-    { ORDATA(MREG, MREG, 18) },
-    { ORDATA(U, U, 16) },
-    { ORDATA(V, V, 16) },
-    { ORDATA(W, W, 16) },
-    { ORDATA(INT_REQ, int_req, 32) },
-    { ORDATA(INT_LVL, int_lvl, 5) },
-    { ORDATA(RL1, RL1, 16) },
-    { ORDATA(RL2, RL2, 16) },
-    { ORDATA(RL4, RL4, 16) },
-    { ORDATA(CPU_MODE, cpu_mode, 2) },
-    { DRDATA(INDLIM, ind_lim, 8), REG_NZ + PV_LEFT },
-    { DRDATA(EXULIM, exu_lim, 8), REG_NZ + PV_LEFT },
-    { ORDATA(WRU, sim_int_char, 8) },
-    { ORDATA(PANEL_ADDR, panel_addr_lights, 16) },
-    { ORDATA(PANEL_DATA, panel_data_lights, 16) },
-    { FLDATA(CPU_RUNNING, cpu_running, 0) },
-    { FLDATA(INT_ENABLED, interrupts_enabled, 0) },
-    { FLDATA(ROUTING_ENABLED, routing_enabled, 0) },
-    { NULL }
+{ ORDATA(reg_block, reg_block, 16) },
+{ FLDATA(MS, MS, 0) },
+{ FLDATA(MA, MA, 0) },
+{ FLDATA(PR, PR, 0) },
+{ ORDATA(S, S, 15) },
+{ ORDATA(MREG, MREG, 18) },
+{ ORDATA(U, U, 16) },
+{ ORDATA(INT_REQ, int_req, 32) },
+{ ORDATA(INT_LVL, int_lvl, 5) },
+{ ORDATA(INT_REQ, susp_req, 32) },
+{ ORDATA(INT_LVL, susp_lvl, 5) },
+{ ORDATA(INT_REQ, trp_req, 32) },
+{ ORDATA(INT_LVL, trp_lvl, 5) },
+{ ORDATA(RL1, RL1, 16) },
+{ ORDATA(RL2, RL2, 16) },
+{ ORDATA(RL4, RL4, 16) },
+{ ORDATA(CPU_MODE, cpu_mode, 2) },
+{ DRDATA(INDLIM, ind_lim, 8), REG_NZ + PV_LEFT },
+{ DRDATA(EXULIM, exu_lim, 8), REG_NZ + PV_LEFT },
+{ ORDATA(WRU, sim_int_char, 8) },
+{ ORDATA(PANEL_ADDR, panel_addr_lights, 16) },
+{ ORDATA(PANEL_DATA, panel_data_lights, 16) },
+{ FLDATA(CPU_RUNNING, cpu_running, 0) },
+{ FLDATA(INT_ENABLED, interrupts_enabled, 0) },
+{ FLDATA(ROUTING_ENABLED, routing_enabled, 0) },
+{ NULL }
 };
 
 MTAB cpu_mod[] = {
-    { UNIT_MSIZE, 4096, NULL, "4K", &cpu_set_size },
-    { UNIT_MSIZE, 8192, NULL, "8K", &cpu_set_size },
-    { UNIT_MSIZE, 16384, NULL, "16K", &cpu_set_size },
-    { UNIT_MSIZE, 32768, NULL, "32K", &cpu_set_size },
-    { MTAB_XTD|MTAB_VDV|MTAB_NMO|MTAB_SHP, 0, "HISTORY", "HISTORY",
-      &cpu_set_hist, &cpu_show_hist },
-    { 0 }
+	{ UNIT_MSIZE, 4096, NULL,  "4K ",  &cpu_set_size },
+	{ UNIT_MSIZE, 8192, NULL,  "8K ",  &cpu_set_size },
+	{ UNIT_MSIZE, 16384, NULL,  "16K ",  &cpu_set_size },
+	{ UNIT_MSIZE, 32768, NULL,  "32K ",  &cpu_set_size },
+	{ MTAB_XTD|MTAB_VDV|MTAB_NMO|MTAB_SHP, 0,  "HISTORY ",  "HISTORY ",
+	 &cpu_set_hist,  &cpu_show_hist },
+	{ 0 }
 };
 
 DEVICE cpu_dev = {
-    "CPU", &cpu_unit, cpu_reg, cpu_mod,
-    1, 8, 16, 1, 8, 16,
-    &cpu_ex, &cpu_dep, &cpu_reset,
-    NULL, NULL, NULL, NULL, 0
+"CPU", &cpu_unit, cpu_reg, cpu_mod,
+1, 8, 16, 1, 8, 16,
+&cpu_ex, &cpu_dep, &cpu_reset,
+NULL, NULL, NULL, NULL, 0
 };
 
 UNIT rtc_unit = { UDATA(&rtc_svc, 0, 0), 16000 };
-
 REG rtc_reg[] = {
-    { FLDATA(PIE, rtc_pie, 0) },
-    { DRDATA(TIME, rtc_unit.wait, 24), REG_NZ + PV_LEFT },
-    { DRDATA(TPS, rtc_tps, 8), PV_LEFT + REG_HRO },
-    { NULL }
+{ FLDATA(PIE, rtc_pie, 0) },
+{ DRDATA(TIME, rtc_unit.wait, 24), REG_NZ + PV_LEFT },
+{ DRDATA(TPS, rtc_tps, 8), PV_LEFT + REG_HRO },
+{ NULL }
 };
-
 MTAB rtc_mod[] = {
-    { MTAB_XTD|MTAB_VDV, 50, NULL, "50HZ", &rtc_set_freq, NULL, NULL },
-    { MTAB_XTD|MTAB_VDV, 60, NULL, "60HZ", &rtc_set_freq, NULL, NULL },
-    { MTAB_XTD|MTAB_VDV, 0, "FREQUENCY", NULL, NULL, &rtc_show_freq, NULL },
-    { 0 }
+{ MTAB_XTD|MTAB_VDV, 50, NULL, "50HZ", &rtc_set_freq, NULL, NULL },
+{ MTAB_XTD|MTAB_VDV, 60, NULL, "60HZ", &rtc_set_freq, NULL, NULL },
+{ MTAB_XTD|MTAB_VDV, 0, "FREQUENCY", NULL, NULL, &rtc_show_freq, NULL },
+{ 0 }
 };
-
 DEVICE rtc_dev = {
-    "RTC", &rtc_unit, rtc_reg, rtc_mod,
-    1, 8, 8, 1, 8, 8,
-    NULL, NULL, &rtc_reset, NULL, NULL, NULL
+"RTC", &rtc_unit, rtc_reg, rtc_mod,
+1, 8, 8, 1, 8, 8,
+NULL, NULL, &rtc_reset, NULL, NULL, NULL
 };
 
 /* ========== Memory Access Functions ========== */
-
 uint16 read_word(uint16 va)
 {
-    uint16 pa = VA_TO_PA(va);
-    if (pa >= MEMsize) return 0;
-    return M[pa];
+uint16 pa = VA_TO_PA(va);
+if (pa >= MEMsize) return 0;
+return M[pa];
 }
-
 void write_word(uint16 va, uint16 val)
 {
-    uint16 pa = VA_TO_PA(va);
-    if (pa < MEMsize) M[pa] = val;
+uint16 pa = VA_TO_PA(va);
+if (pa < MEMsize) M[pa] = val;
 }
-
 uint8 read_byte(uint16 va)
 {
-    uint16 word_addr = va >> 1;
-    uint16 word = read_word(word_addr);
-    return (va & 1) ? (word & 0xFF) : ((word >> 8) & 0xFF);
+uint16 word_addr = va >> 1;
+uint16 word = read_word(word_addr);
+return (va & 1) ? (word & 0xFF) : ((word >> 8) & 0xFF);
 }
-
 void write_byte(uint16 va, uint8 val)
 {
-    uint16 word_addr = va >> 1;
-    uint16 word = read_word(word_addr);
-    if (va & 1)
-        word = (word & 0xFF00) | val;
-    else
-        word = (word & 0x00FF) | (val << 8);
-    write_word(word_addr, word);
-}
-
-/* ========== Effective Address Calculation for Class 0, class 0', class 1 ========== 
-* return the effective address
-* for immediate addressing, it returns the content of P, the program counter
-* Note: In the Mitra-15 manual, (R) means "the contents of register R" — it does not mean 
-* "dereference register R as a memory pointer." 
-* The registers L and G are base address registers whose values you add to displacements; 
-* they are not pointers that need to be read through. Only the double-parenthesis forms like ((L)+D) in IL mode represent an actual memory read.
-*/
-static uint16 ea_class0(uint16 inst)
-{
-    uint16 mode = (inst >> I_MODE_SHIFT) & 0x07;
-    uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp, addr;
-    
-    switch (mode) {
-        case AM_DL: // Y = (L) + D
-            addr = (L + disp) & 0x7FFF;
-            break;
-        case AM_IL: // Y = G' + ((L)+D)
-            tmp = read_word(L + disp);
-            addr = (GPRIME + tmp) & 0x7FFF;
-            break;
-        case AM_ILX: // Y = G' + ((L)+D)+(X)
-            tmp = read_word(L + disp);
-            addr = (GPRIME + tmp + X) & 0x7FFF;
-            break;
-        case AM_DG: // Y=(G) + D
-            /* DG: Direct General: Y = (G) + D  (manual section V, table) */
-            addr = (G + disp) & 0x7FFF;
-            break;
-        case AM_IGX: // Y = (G) + ((G)+D) + (X)
-            tmp = read_word(G + disp);
-            addr = (GPRIME + tmp + X) & 0x7FFF;
-            break;
-        case AM_P: // Y = (P) parameter or immediate
-            addr = disp;
-            break;
-	case AM_PX:
-	    addr = (disp + X) & 0x7FFF;   // operand value IS D + (X)
-	    break;
-        default:
-            addr = disp;
-            break;
-    }
-    return addr;
-}
-
-static uint16 ea_class2(uint16 inst)
-{
-    uint16 mode = (inst >> I_MODE_SHIFT) & 0x07;
-    uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp, addr;
-    
-    switch (mode) {
-        case AM_RP:
-            addr = ((P -2) + (2 * disp)) & 0x7FFF;
-            break;
-        case AM_RM:
-            addr = ((P -2) - (2 * disp)) & 0x7FFF;
-            break;
-        case AM_IL:
-            tmp = read_word(L + disp);
-            addr = (GPRIME + tmp) & 0x7FFF;
-            break;
-        case AM_DG:
-            tmp = read_word(G + disp);
-            addr = (G + tmp) & 0x7FFF;
-            break;
-        default:
-            addr = disp;
-            break;
-    }
-    return addr;
+uint16 word_addr = va >> 1;
+uint16 word = read_word(word_addr);
+if (va & 1)
+word = (word & 0xFF00) | val;
+else
+word = (word & 0x00FF) | (val << 8);
+write_word(word_addr, word);
 }
 
 /* ========== Effective Address Calculation ========== 
@@ -415,165 +387,9 @@ The manual defines three instruction classes and addressing modes:
 1:	P, PX, DL				shift, index, base and system operations
 2:	RP, RM, IL, IG				conditional or unconditional branch instructions
 
-Addressing mode LBL: Load Byte Left in A (Class 0)
-DL	OX	000 0 1101	0
-P	2X	001 0 1101	1
-DG	4X	010 0 1101	2
-IL	6X	011 0 1101	3
-IGX	8X	100 0 1101	4
-ILX	AX	101 0 1101	5
-
-Addressing mode SBL: Store Byte left in A (Class 0')
-DL	1X	000 1 0100	0
-DG	5X	010 1 0100	2
-IL	7X	011 1 0100	3
-IGX	9X	100 1 0100	4
-ILX	BX	101 1 0100	5
-
-Addressing mode STR: STore Register	 (Class ?)
-DL	3A	001 1 1010	1	X9, XA
-DG	EA	111 0 1010	7
-IL	FA	111 1 1010	7
-
-Addressing mode ICX: InCrement X	 (Class 1)
-DL	32	001 1 0010	1 	X1, X7, X8, XB, XD, 
-PX	E2	111 0 0010	7	also uses bits 11 to 14 for instruction decoding 
-P	F2	111 1 0010	7
-
-Addressing mode ICX: InCrement X	 (Class 1)
-DL	32	001 1 0010	1 	X2, X3, X4, X5, X9
-PX	E2	111 0 0010	7	
-P	F2	111 1 0010	7
-
-Addressing mode SLLD: Shift Left, Logical, DoublE	 (Class 1)
-PX	EC	111 0 1100	7	X0, XC
-P	FC	111 1 1100	7	also uses bits 8 to 10 for instruction decoding 
-
-Addressing mode XAE: eXchange contents of A and E	 (Class 1)
-P	F1	111 1 0001	7	FX except F1
-
-Addressing mode XAE: eXchange contents of A and E	 (Class 1)
-P	F1	111 1 0001	7	F11C to F1FD
-	also uses bits 11 to 14 for instruction decoding 
-
-Addressing mode BRU: BRanch Unconditional	 (Class 2)
-RP	C7	110 0 0111	6	C6 to DE
-RM	CF	110 0 1111	6
-IL	D7	110 1 0111	6
-IG	DF	110 1 1111	6
-
-The addressing mode for each instruction:
-DL	OX
-DL	1X
-P	2X
-DL	30
-DL	31
-DL	32
-DL	33
-	34	NOT IMPLEMENTED	
-DL	35
-DL	36
-DL	37
-DL	38
-DL	39
-DL	3A
-DL	3B
-DL	3C
-DL	3D
-	3E	NOT IMPLEMENTED
-	3F	NOT IMPLEMENTED
-DG	4X
-DG	5X
-IL	6X
-IL	7X
-IGX	8X
-IGX	9X
-ILX	AX
-ILX	BX
-RP	C0
-RP	C1
-RP	C2
-RP	C3
-RP	C4
-RP	C5
-RP	C6
-RP	C7
-RM	C8
-RM	C9
-RM	CA
-RM	CB
-RM	CC
-RM	CD
-RM	CE
-RM	CF
-IL	D0
-IL	D1
-IL	D2
-IL	D3
-IL	D4
-IL	D5
-IL	D6
-IL	D7
-IG	D8
-IG	D9
-IG	DA
-IG	DB
-IG	DC
-IG	DD
-IG	DE
-IG	DF
-PX	E0
-PX	E1
-PX	E2
-PX	E3
-	E4	NOT IMPLEMENTED
-PX	E5
-PX	E6
-PX	E7
-PX	E8
-PX	E9
-DG	EA
-PX	EB
-PX	EC
-PX	ED
-	EE	NOT IMPLEMENTED
-	EF	NOT IMPLEMENTED
-P	F0
-P	F1
-P	F2
-P	F3
-P	F4
-P	F5
-P	F6
-P	F7
-P	F8
-P	F9
-IL	FA
-P	FB
-P	FC
-P	FD
-	FE	NOT IMPLEMENTED
-	FF	NOT IMPLEMENTED
-
-Addressing Mode:	 			Used in Instruction Class	Notes
-DL – Direct Local				Class 0	Y = (L) + D
-IL – Indirect Local				Class 0	Y = G' + ((L) + D)
-ILX – Indirect Local Indexed			Class 0	Y = G' + ((L) + D) + X
-DG – Direct General				Class 0	Y = (G) + D
-IG – Indirect General				Class 2 branch to Y=G'+((G}+D}
-IGX – Indirect General Indexed			Class 0	Y = G' + ((G) + D) + X
-P – Parameter (Immediate)			Class 0 / Class 1		Operand = D (no memory access)
-PX – Parameter Indexed				Class 1 only			Usually for indexed parameter ops
-RP – Relative Plus				Class 2 (branches)		branch Y = (P) + 2×D
-RM – Relative Minus				Class 2 (branches)		branch Y = (P) – 2×D
-
 -IG (Indirect General) is not directly listed with its own mode number in the code. It appears to be handled under mode 4 (DG) in some contexts or combined with other modes in ea_class2().
-*/
-/*
- * ea_calculate - Compute the effective address (or immediate parameter value)
- * for an instruction, based on the full 8-bit opcode byte (inst >> 8).
  *
- * The addressing mode is fully determined by the opcode byte; bits 0-2 of
+ * The addressing mode is determined most of time by the opcode byte; bits 0-2 of
  * the instruction word alone do NOT suffice (they are overloaded across
  * classes).  The mapping below is derived directly from the per-opcode
  * (addressing-mode, instruction) table in the CII Mitra-15 reference manual.
@@ -594,126 +410,21 @@ RM – Relative Minus				Class 2 (branches)		branch Y = (P) – 2×D
  *
  * Opcodes 34, 3E, 3F, E4, EE, EF, FE, FF are not implemented; this
  * function returns 0 for them (the caller is responsible for rejection).
- */
-static uint16 ea_calculate(uint16 inst)
-{
-    uint16 op  = inst >> 8;          /* full 8-bit opcode byte              */
-    uint16 d   = inst & I_DISP_MASK; /* 8-bit unsigned displacement / param */
-    uint16 tmp;
-
-    /* ------------------------------------------------------------------ */
-    /* 00-1F : DL  –  Direct Local                                         */
-    /* Covers Class 0 (00-0F load/arith) and Class 0' (10-1F store)       */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0x1F)
-        return (L + d) & 0x7FFF;
-
-    /* ------------------------------------------------------------------ */
-    /* 20-2F : P  –  Parameter (immediate)                                 */
-    /* Same 16 instructions as 00-0F but operand IS the displacement.     */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0x2F)
-        return d;
-
-    /* ------------------------------------------------------------------ */
-    /* 30-3F : DL  –  Direct Local  (Class 1 shift/index/system group)    */
-    /* 34, 3E, 3F are not implemented but still share DL addressing.      */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0x3F)
-        return (L + d) & 0x7FFF;
-
-    /* ------------------------------------------------------------------ */
-    /* 40-4F : DG  –  Direct General  (Class 0 load/arith, DG mode)       */
-    /* 50-5F : DG  –  Direct General  (Class 0' store, DG mode)           */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0x5F)
-        return (G + d) & 0x7FFF;
-
-    /* ------------------------------------------------------------------ */
-    /* 60-6F : IL  –  Indirect Local  (Class 0 load/arith, IL mode)       */
-    /* 70-7F : IL  –  Indirect Local  (Class 0' store, IL mode)           */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0x7F) {
-        tmp = read_word(L + d);
-        return (GPRIME + tmp) & 0x7FFF;
-    }
-
-    /* ------------------------------------------------------------------ */
-    /* 80-8F : IGX – Indirect General Indexed (Class 0 load/arith)        */
-    /* 90-9F : IGX – Indirect General Indexed (Class 0' store)            */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0x9F) {
-        tmp = read_word(G + d);
-        return (GPRIME + tmp + X) & 0x7FFF;
-    }
-
-    /* ------------------------------------------------------------------ */
-    /* A0-AF : ILX – Indirect Local Indexed  (Class 0 load/arith)         */
-    /* B0-BF : ILX – Indirect Local Indexed  (Class 0' store)             */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0xBF) {
-        tmp = read_word(L + d);
-        return (GPRIME + tmp + X) & 0x7FFF;
-    }
-
-    /* ------------------------------------------------------------------ */
-    /* C0-CF : Class 2 branches – RP (C0-C7) and RM (C8-CF)              */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0xC7)                          /* RP: Relative Plus          */
-        return (P + 2 * d) & 0x7FFF;
-    if (op <= 0xCF)                          /* RM: Relative Minus         */
-        return (P - 2 * d) & 0x7FFF;
-
-    /* ------------------------------------------------------------------ */
-    /* D0-DF : Class 2 branches – IL (D0-D7) and IG (D8-DF)              */
-    /* ------------------------------------------------------------------ */
-    if (op <= 0xD7) {                        /* IL: Indirect Local         */
-        tmp = read_word(L + d);
-        return (GPRIME + tmp) & 0x7FFF;
-    }
-    if (op <= 0xDF) {                        /* IG: Indirect General       */
-        tmp = read_word(G + d);
-        return (GPRIME + tmp) & 0x7FFF;
-    }
-
-    /* ------------------------------------------------------------------ */
-    /* E0-EF : Class 1 system/index group (PX mode), with two exceptions: */
-    /*   EA  → DG  (STR instruction, Direct General)                      */
-    /*   E4, EE, EF → not implemented                                     */
-    /* All remaining Ex opcodes use PX, which like P returns d directly.  */
-    /* ------------------------------------------------------------------ */
-    if (op == 0xEA)                          /* STR – DG mode              */
-        return (G + d) & 0x7FFF;
-    /* E4, EE, EF: not implemented – return 0, caller handles it */
-    if (op == 0xE4 || op == 0xEE || op == 0xEF)
-        return 0;
-    if (op <= 0xEF)                          /* PX: parameter indexed      */
-        return d;
-
-    /* ------------------------------------------------------------------ */
-    /* F0-FF : Class 1 system group (P mode), with two exceptions:        */
-    /*   FA  → IL  (STR instruction, Indirect Local)                      */
-    /*   FE, FF → not implemented                                          */
-    /* All remaining Fx opcodes use P, which returns d directly.          */
-    /* ------------------------------------------------------------------ */
-    if (op == 0xFA) {                        /* STR – IL mode              */
-        tmp = read_word(L + d);
-        return (GPRIME + tmp) & 0x7FFF;
-    }
-    /* FE, FF: not implemented – return 0, caller handles it */
-    if (op == 0xFE || op == 0xFF)
-        return 0;
-    /* F0-FD (except FA): P mode – operand is the displacement itself     */
-    return d;
-}
+ *
+ Data width:
+The Mitra-15 is fundamentally a 16-bit word-addressable machine. Data size is chosen implicitly by the opcode (bits 4–7), not by any extra control bits in the instruction. Examples:
+	Byte: LBL (Load Byte Left into A)
+	Word: LDA, STA, ADD, SUB, AND, IOR, etc.
+	Double word: DLD (Double Load): loads two words → E and A
+*/
 
 /* ========== Condition Code Functions (per manual section II-6) ========== */
 
 /* For LOAD instructions: C=1 if result=0, O=1 if result negative */
 static void set_condition_codes_load(uint16 result)
 {
-    C = (result == 0) ? 1 : 0;
-    OV = (result & 0x8000) ? 1 : 0;
+reg_block[curr_bloc].C = (result == 0) ? 1 : 0;
+reg_block[curr_bloc].OV = (result & 0x8000) ? 1 : 0;
 }
 
 /* For COMPARE instructions: 
@@ -723,17 +434,17 @@ static void set_condition_codes_load(uint16 result)
  */
 static void set_condition_codes_compare(uint16 a, uint16 b, uint16 result)
 {
-    (void)result;  /* result is a - b, but we use direct comparison per manual */
-    if (a == b) {
-        C = 1;
-        OV = 0;
-    } else if (a < b) {
-        C = 0;
-        OV = 1;
-    } else {  /* a > b */
-        C = 0;
-        OV = 0;
-    }
+(void)result;  
+if (a == b) {
+reg_block[curr_bloc].C = 1;
+reg_block[curr_bloc].OV = 0;
+} else if (a < b) {
+reg_block[curr_bloc].C = 0;
+reg_block[curr_bloc].OV = 1;
+} else {  
+reg_block[curr_bloc].C = 0;
+reg_block[curr_bloc].OV = 0;
+}
 }
 
 /* For ARITHMETIC instructions:
@@ -742,78 +453,69 @@ static void set_condition_codes_compare(uint16 a, uint16 b, uint16 result)
  */
 static void set_condition_codes_arithmetic(uint16 result, uint16 carry, uint16 overflow)
 {
-    C = carry;
-    OV = overflow;
+reg_block[curr_bloc].C = carry;
+reg_block[curr_bloc].OV = overflow;
 }
 
 /* For string operations and tests */
 static void set_condition_codes_string(int equal, int less)
 {
-    if (equal) {
-        C = 1;
-        OV = 0;
-    } else if (less) {
-        C = 0;
-        OV = 1;
-    } else {
-        C = 0;
-        OV = 0;
-    }
+if (equal) {
+reg_block[curr_bloc].C = 1;
+reg_block[curr_bloc].OV = 0;
+} else if (less) {
+reg_block[curr_bloc].C = 0;
+reg_block[curr_bloc].OV = 1;
+} else {
+reg_block[curr_bloc].C = 0;
+reg_block[curr_bloc].OV = 0;
+}
 }
 
 /* ========== Arithmetic Functions ========== */
-
 static uint16 add16(uint16 a, uint16 b, uint16 *carry, uint16 *overflow)
 {
-    uint32 sum = (uint32)a + (uint32)b + *carry;
-    uint16 result = sum & 0xFFFF;
-    
-    *carry = (sum >> 16) & 1;
-    
-    /* Overflow detection: operands same sign, result opposite sign */
-    if (((a & 0x8000) == (b & 0x8000)) && 
-        ((a & 0x8000) != (result & 0x8000))) {
-        *overflow = 1;
-    } else {
-        *overflow = 0;
-    }
-    return result;
+uint32 sum = (uint32)a + (uint32)b + *carry;
+uint16 result = sum & 0xFFFF;
+*carry = (sum >> 16) & 1;
+if (((a & 0x8000) == (b & 0x8000)) && 
+    ((a & 0x8000) != (result & 0x8000))) {
+    *overflow = 1;
+} else {
+    *overflow = 0;
+}
+return result;
 }
 
 static uint16 sub16(uint16 a, uint16 b, uint16 *carry, uint16 *overflow)
 {
-    uint32 diff = (uint32)a + (uint32)(~b & 0xFFFF) + *carry;
-    uint16 result = diff & 0xFFFF;
-    
-    *carry = (diff >> 16) & 1;
-    
-    /* Overflow detection for subtraction */
-    if (((a & 0x8000) != (b & 0x8000)) && 
-        ((a & 0x8000) != (result & 0x8000))) {
-        *overflow = 1;
-    } else {
-        *overflow = 0;
-    }
-    return result;
+uint32 diff = (uint32)a + (uint32)(~b & 0xFFFF) + *carry;
+uint16 result = diff & 0xFFFF;
+*carry = (diff >> 16) & 1;
+if (((a & 0x8000) != (b & 0x8000)) && 
+    ((a & 0x8000) != (result & 0x8000))) {
+    *overflow = 1;
+} else {
+    *overflow = 0;
+}
+return result;
 }
 
 static void mul32(uint16 a, uint16 b, uint16 *high, uint16 *low)
 {
-    uint32 product = (uint32)(int16_t)a * (uint32)(int16_t)b;
-    *high = (product >> 16) & 0xFFFF;
-    *low = product & 0xFFFF;
+uint32 product = (uint32)(int16_t)a * (uint32)(int16_t)b;
+*high = (product >> 16) & 0xFFFF;
+*low = product & 0xFFFF;
 }
 
 static int div32(uint16 high, uint16 low, uint16 divisor, uint16 *quot, uint16 *rem)
 {
-    int32_t dividend = ((int32_t)(int16_t)high << 16) | (uint16_t)low;
-    int16_t dvsr = (int16_t)divisor;
-    
-    if (dvsr == 0) return -1;
-    
-    *quot = (uint16_t)(dividend / dvsr);
-    *rem = (uint16_t)(dividend % dvsr);
-    return 0;
+int32_t dividend = ((int32_t)(int16_t)high << 16) | (uint16_t)low;
+int16_t dvsr = (int16_t)divisor;
+if (dvsr == 0) return -1;
+*quot = (uint16_t)(dividend / dvsr);
+*rem = (uint16_t)(dividend % dvsr);
+return 0;
 }
 
 /* ========== Shift Operations (per manual section VII-7) ========== */
@@ -821,226 +523,196 @@ static int div32(uint16 high, uint16 low, uint16 divisor, uint16 *quot, uint16 *
 /* Shift Left Logical Single (SLLS) */
 static uint16 shift_lls(uint16 val, int count)
 {
-    uint16 result = val;
-    int i;
-    for (i = 0; i < count; i++) {
-        C = (result & 0x8000) ? 1 : 0;
-        result <<= 1;
-    }
-    return result;
+uint16 result = val;
+int i;
+for (i = 0; i < count; i++) {
+reg_block[curr_bloc].C = (result & 0x8000) ? 1 : 0;
+result <<= 1;
+}
+return result;
 }
 
 /* Shift Right Logical Single (SRLS) */
 static uint16 shift_rls(uint16 val, int count)
 {
-    uint16 result = val;
-    int i;
-    for (i = 0; i < count; i++) {
-        C = result & 1;
-        result >>= 1;
-    }
-    return result;
+uint16 result = val;
+int i;
+for (i = 0; i < count; i++) {
+reg_block[curr_bloc].C = result & 1;
+result >>= 1;
+}
+return result;
 }
 
 /* Shift Right Arithmetic Single (SAS) - preserve sign bit */
 static uint16 shift_sas(uint16 val, int count)
 {
-    uint16 result = val;
-    int i;
-    for (i = 0; i < count; i++) {
-        C = result & 1;
-        uint16 sign = result & 0x8000;
-        result >>= 1;
-        if (sign) result |= 0x8000;
-    }
-    return result;
+uint16 result = val;
+int i;
+for (i = 0; i < count; i++) {
+reg_block[curr_bloc].C = result & 1;
+uint16 sign = result & 0x8000;
+result >>= 1;
+if (sign) result |= 0x8000;
+}
+return result;
 }
 
 /* Shift Right Circular Single (SRCS) */
 static uint16 shift_srcs(uint16 val, int count)
 {
-    uint16 result = val;
-    int i;
-    for (i = 0; i < count; i++) {
-        C = result & 1;
-        result = (result >> 1) | ((result & 1) << 15);
-    }
-    return result;
+uint16 result = val;
+int i;
+for (i = 0; i < count; i++) {
+reg_block[curr_bloc].C = result & 1;
+result = (result >> 1) | ((result & 1) << 15);
+}
+return result;
 }
 
 /* Shift Left Circular Single (SLCS) */
 static uint16 shift_slcs(uint16 val, int count)
 {
-    uint16 result = val;
-    int i;
-    for (i = 0; i < count; i++) {
-        C = (result & 0x8000) ? 1 : 0;
-        result = (result << 1) | ((result & 0x8000) ? 1 : 0);
-    }
-    return result;
+uint16 result = val;
+int i;
+for (i = 0; i < count; i++) {
+reg_block[curr_bloc].C = (result & 0x8000) ? 1 : 0;
+result = (result << 1) | ((result & 0x8000) ? 1 : 0);
+}
+return result;
 }
 
 /* Shift Left Logical Double (SLLD) - shift (E,A) left */
-static void shift_lld(uint16 *E_reg, uint16 *A_reg, int count)
+static void shift_lld(uint16 *E, uint16 *A, int count)
 {
-    int i;
-    for (i = 0; i < count; i++) {
-        C = (*E_reg & 0x8000) ? 1 : 0;
-        *E_reg = (*E_reg << 1) | ((*A_reg & 0x8000) ? 1 : 0);
-        *A_reg <<= 1;
-    }
+int i;
+for (i = 0; i < count; i++) {
+reg_block[curr_bloc].C = (*E & 0x8000) ? 1 : 0;
+*E = (*E << 1) | ((*A & 0x8000) ? 1 : 0);
+*A <<= 1;
+}
 }
 
 /* Shift Right Logical Double (SRLD) */
-static void shift_rld(uint16 *E_reg, uint16 *A_reg, int count)
+static void shift_rld(uint16 *E, uint16 *A, int count)
 {
-    int i;
-    for (i = 0; i < count; i++) {
-        C = *A_reg & 1;
-        *A_reg = (*A_reg >> 1) | ((*E_reg & 1) << 15);
-        *E_reg >>= 1;
-    }
+int i;
+for (i = 0; i < count; i++) {
+reg_block[curr_bloc].C = *A & 1;
+*A = (*A >> 1) | ((*E & 1) << 15);
+*E >>= 1;
+}
 }
 
 /* Shift Right Arithmetic Double (SAD) */
-static void shift_sad(uint16 *E_reg, uint16 *A_reg, int count)
+static void shift_sad(uint16 *E, uint16 *A, int count)
 {
-    int i;
-    for (i = 0; i < count; i++) {
-        C = *A_reg & 1;
-        uint16 sign = *E_reg & 0x8000;
-        *A_reg = (*A_reg >> 1) | ((*E_reg & 1) << 15);
-        *E_reg = (*E_reg >> 1);
-        if (sign) *E_reg |= 0x8000;
-    }
+int i;
+for (i = 0; i < count; i++) {
+reg_block[curr_bloc].C = *A & 1;
+uint16 sign = *E & 0x8000;
+*A = (*A >> 1) | ((*E & 1) << 15);
+*E = (*E >> 1);
+if (sign) *E |= 0x8000;
+}
 }
 
 /* Shift Left Circular Double (SLCD) */
-static void shift_lcd(uint16 *E_reg, uint16 *A_reg, int count)
+static void shift_lcd(uint16 *E, uint16 *A, int count)
 {
-    int i;
-    for (i = 0; i < count; i++) {
-        uint16 msb = (*E_reg & 0x8000) ? 1 : 0;
-        C = msb;
-        *E_reg = (*E_reg << 1) | ((*A_reg & 0x8000) ? 1 : 0);
-        *A_reg = (*A_reg << 1) | msb;
-    }
+int i;
+for (i = 0; i < count; i++) {
+uint16 msb = (*E & 0x8000) ? 1 : 0;
+reg_block[curr_bloc].C = msb;
+*E = (*E << 1) | ((*A & 0x8000) ? 1 : 0);
+*A = (*A << 1) | msb;
+}
 }
 
 /* Shift Right Circular Double (SRCD) */
-static void shift_rcd(uint16 *E_reg, uint16 *A_reg, int count)
+static void shift_rcd(uint16 *E, uint16 *A, int count)
 {
-    int i;
-    for (i = 0; i < count; i++) {
-        uint16 lsb = *A_reg & 1;
-        C = lsb;
-        *A_reg = (*A_reg >> 1) | ((*E_reg & 1) << 15);
-        *E_reg = (*E_reg >> 1) | (lsb << 15);
-    }
+int i;
+for (i = 0; i < count; i++) {
+uint16 lsb = *A & 1;
+reg_block[curr_bloc].C = lsb;
+*A = (*A >> 1) | ((*E & 1) << 15);
+*E = (*E >> 1) | (lsb << 15);
+}
 }
 
 /* Normalize (NLZ) - shift left until bit 0 != bit 1 or max steps */
-static int normalize(uint16 *E_reg, uint16 *A_reg, uint16 *X_reg, int max_steps)
+static int normalize(uint16 *E, uint16 *A, uint16 *X, int max_steps)
 {
-    int steps = 0;
-    uint32 double_word = ((uint32)*E_reg << 16) | *A_reg;
-    
-    while (steps < max_steps && steps < 31) {
-        /* Check if bits 0 and 1 are different (normalized) */
-        if (((double_word >> 31) & 1) != ((double_word >> 30) & 1))
-            break;
-        double_word <<= 1;
-        steps++;
-    }
-    
-    *E_reg = (double_word >> 16) & 0xFFFF;
-    *A_reg = double_word & 0xFFFF;
-    *X_reg -= steps;
-    
-    /* Set condition codes per manual 
-    	C	Meaning
-    	00	Normalization 01 (stopped normally)
-	01	Stop on zero count
-	10	Normalization 10 (sign change during shift)
-    */
-    if (steps == 0) {
-        C = 0;  /* Stop on zero count */
-        OV = 1;
-    } else if (steps == max_steps) {
-        C = 1;
-        OV = 0;  /* Stop on max */
-    } else {
-        C = 0;
-        OV = 0;  /* Normalization 01 (stopped normally) */
-    }
-    return steps;
+int steps = 0;
+uint32 double_word = ((uint32)*E << 16) | *A;
+while (steps < max_steps && steps < 31) {
+     if (((double_word >> 31) & 1) != ((double_word >> 30) & 1))
+         break;
+     double_word <<= 1;
+     steps++;
+ }
+ *E = (double_word >> 16) & 0xFFFF;
+ *A = double_word & 0xFFFF;
+ *X -= steps;
+ 
+ if (steps == 0) {
+     reg_block[curr_bloc].C = 0;  
+     reg_block[curr_bloc].OV = 1;
+ } else if (steps == max_steps) {
+     reg_block[curr_bloc].C = 1;
+     reg_block[curr_bloc].OV = 0;  
+ } else {
+     reg_block[curr_bloc].C = 0;
+     reg_block[curr_bloc].OV = 0;  
+ }
+ return steps;
 }
 
 /* Compute parity (PTY) - count set bits shifted out */
-static uint16 compute_parity(uint16 *A_reg, int count)
+static uint16 compute_parity(uint16 *A, int count)
 {
-    uint16 result = *A_reg;
-    uint16 parity_count = 0;
-    int i;
-    
-    for (i = 0; i < count; i++) {
-        if (result & 0x8000) parity_count++;
-        result = (result << 1) | ((result & 0x8000) ? 1 : 0);
-    }
-    
-    *A_reg = result;
-    C = (result & 0x8000) ? 1 : 0;
-    OV = 0;
-    return parity_count;
+uint16 result = *A;
+uint16 parity_count = 0;
+int i;
+for (i = 0; i < count; i++) {
+    if (result & 0x8000) parity_count++;
+    result = (result << 1) | ((result & 0x8000) ? 1 : 0);
+}
+*A = result;
+reg_block[curr_bloc].C = (result & 0x8000) ? 1 : 0;
+reg_block[curr_bloc].OV = 0;
+return parity_count;
 }
 
 /* ========== Floating Point (per manual section VII-9) ========== */
-/* Mitra-15 uses base-16 exponent with characteristic +64 */
-
+/* Mitra-15 uses a base-16 exponent with a characteristic +64 */
 static double mitra_to_double(uint16 A, uint16 E)
 {
-    uint32 raw = ((uint32)A << 16) | E;
-    int sign = (raw >> 31) & 1;
-    int exp = (raw >> 24) & 0x7F;
-    uint32 mant = raw & 0xFFFFFF;
-    double m = mant / (double)(1 << 24);
+uint32 raw = ((uint32)A << 16) | E;
+int sign = (raw >> 31) & 1;
+int exp = (raw >> 24) & 0x7F;
+uint32 mant = raw & 0xFFFFFF;
+double m = mant / (double)(1 << 24);
     /* Exponent is base-16, characteristic is exp-64 */
-    double val = m * pow(16.0, exp - 64);
-    return sign ? -val : val;
+
+double val = m * pow(16.0, exp - 64);
+return sign ? -val : val;
 }
 
 static void double_to_mitra(double v, uint16 *A, uint16 *E)
 {
-    int sign = (v < 0);
-    if (sign) v = -v;
-    
-    int exp;
-    double m = frexp(v, &exp);
+int sign = (v < 0);
+if (sign) v = -v;
+int exp;
+double m = frexp(v, &exp);
     /* Convert from base-2 exponent to base-16 */
-    int exp16 = (exp - 1) / 4;
-    double m16 = m * pow(2.0, 4 - (exp - 1 - exp16 * 4));
-    
-    uint32 mant = (uint32)(m16 * (1 << 24));
-    uint32 raw = (sign << 31) | ((exp16 + 64) << 24) | (mant & 0xFFFFFF);
-    *A = (raw >> 16) & 0xFFFF;
-    *E = raw & 0xFFFF;
-}
-
-/* ========== Interrupt Handling ========== */
-
-uint32 api_findreq(void)
-{
-    uint32 i, t;
-    /* FIXME
-    * it's not clear if int_lvl or api_lvlhi should be used to index the API mask.
-    * The api_mask table masks out all levels below the current highest active level.
-    * But api_lvlhi is never updated in sim_instr after an interrupt is accepted or when DIT fires.
-    */
-    t = (int_req & ~1) & api_mask[int_lvl];
-    for (i = 31; t && (i > 0); i--) {
-        if ((t >> i) & 1) return i;
-    }
-    return 0;
+int exp16 = (exp - 1) / 4;
+double m16 = m * pow(2.0, 4 - (exp - 1 - exp16 * 4));
+uint32 mant = (uint32)(m16 * (1 << 24));
+uint32 raw = (sign << 31) | ((exp16 + 64) << 24) | (mant & 0xFFFFFF);
+*A = (raw >> 16) & 0xFFFF;
+*E = raw & 0xFFFF;
 }
 
 /* ========== Trap mechanism (manual section II-8.3) ========== *
@@ -1080,22 +752,21 @@ uint32 api_findreq(void)
 
 t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc)
 {
-    uint16 trap_word, prts_ptr, sect0_Lbase, sect0_Pbase;
-    uint16 ind_word;
+uint16 trap_word, prts_ptr, sect0_Lbase, sect0_Pbase;
+uint16 ind_word;
 
     /* Step 1: Set trap cause bit in absolute memory word 1 (byte address 2) */
-    trap_word = read_word(1);   /* word address 1 = byte address 2 */
-    trap_word |= (0x8000u >> trap);  /* bit 0 (MSB) = VM, bit 1 = PM, ... */
-    write_word(1, trap_word);
-
+ trap_word = read_word(1);   
+ trap_word |= (0x8000u >> trap);  
+ write_word(1, trap_word);
+ 
     /* Step 2: Protect bytes 4-9 with faulting context
      * "bytes 4-9" = word addresses 2, 3, 4 (2 bytes per word) */
-    write_word(2, (pc - GPRIME) & 0x7FFF);      /* P of faulting instruction */
-    write_word(3, (L - GPRIME) & 0x7FFF);       /* L register 
-    */
-    ind_word = ((PR  & 1) << 15) | ((MA  & 1) << 14) |
-               ((MS  & 1) << 13) | ((OV  & 1) << 12) | ((C & 1) << 11);
-    write_word(4, ind_word);                      /* indicators */
+ write_word(2, (pc - GPRIME) & 0x7FFF);      
+ write_word(3, (reg_block[curr_bloc].L - GPRIME) & 0x7FFF);       
+ ind_word = ((PR  & 1) << 15) | ((MA  & 1) << 14) |
+            ((MS  & 1) << 13) | ((reg_block[curr_bloc].OV  & 1) << 12) | ((reg_block[curr_bloc].C & 1) << 11);
+ write_word(4, ind_word);                      
 
     /* Step 3: Call supervisor section 0
      * Absolute address 12 (decimal) holds the PRTS pointer.
@@ -1104,82 +775,63 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc)
      *   word 1 (at PRTS_base - 4*N+2) = L-base of section
      * Section 0 entry is at PRTS_base itself (N=0). 
      */
-    prts_ptr = read_word(6);     /* word address 6 = byte address 12 = absolute addr 12 */
-    sect0_Pbase = read_word(prts_ptr);
-    sect0_Lbase = read_word(prts_ptr + 1);
-    MS = 1;    /* Master mode */
-    PR = 1;    /* Protection override */
-    MA = 1;    /* Mask interrupts during trap handling */
-    L = (sect0_Lbase + G) & 0x7FFF;
-    P = (sect0_Pbase + G) & 0x7FFF;
-
-    *trappc = pc;
-    return SCPE_OK;
-}
-
-/* ========== Interrupt Dispatch ========== */
-
-void io_interrupt_dispatch(void)
-{
-    /* This is called when an interrupt occurs.
-     * The actual interrupt handling is done in sim_instr().
-     * This function just ensures the interrupt is processed. */
-    /* Force interrupt processing in the main loop */
-    /* The actual work is done in sim_instr() which checks int_req */
+ prts_ptr = read_word(6);     
+ sect0_Pbase = read_word(prts_ptr);
+ sect0_Lbase = read_word(prts_ptr + 1);
+ MS = 1;    
+ PR = 1;    
+ MA = 1;    
+ reg_block[curr_bloc].L = (sect0_Lbase + reg_block[curr_bloc].G) & 0x7FFF;
+ reg_block[curr_bloc].P = (sect0_Pbase + reg_block[curr_bloc].G) & 0x7FFF;
+ *trappc = pc;
+ return SCPE_OK;
 }
 
 /* ========== SIMH Terminal Functions (wrappers) ========== */
-
 int sim_tt_getc(void)
 {
     /* Get character from SIMH console */
-    return sim_poll_kbd();
-}
-
-void sim_tt_putc(int ch)
-{
-    /* Put character to SIMH console */
-    sim_tt_putc(ch);
+return sim_poll_kbd();
 }
 
 /* Note: sim_tt_inchar, sim_tt_open, sim_tt_close are provided by SIMH */
 
 void set_dyn_map(void)
 {
-    em2_dyn = ((EM2 & 07) << 12) - 020000;
-    em3_dyn = ((EM3 & 07) << 12) - 030000;
-    usr_map[0] = (RL1 >> 7) & (MAP_PROT | MAP_PAGE);
-    usr_map[1] = (RL1 >> 1) & (MAP_PROT | MAP_PAGE);
-    usr_map[2] = (RL1 << 5) & (MAP_PROT | MAP_PAGE);
-    usr_map[3] = (RL1 << 11) & (MAP_PROT | MAP_PAGE);
-    usr_map[4] = (RL2 >> 7) & (MAP_PROT | MAP_PAGE);
-    usr_map[5] = (RL2 >> 1) & (MAP_PROT | MAP_PAGE);
-    usr_map[6] = (RL2 << 5) & (MAP_PROT | MAP_PAGE);
-    usr_map[7] = (RL2 << 11) & (MAP_PROT | MAP_PAGE);
-    mon_map[0] = (0 << VA_V_PN);
-    mon_map[1] = (1 << VA_V_PN);
-    mon_map[2] = (2 << VA_V_PN);
-    mon_map[3] = (3 << VA_V_PN);
-    mon_map[4] = ((EM2 & 07) << 12);
-    mon_map[5] = ((EM2 & 07) << 12) + (1 << VA_V_PN);
-    mon_map[6] = (RL4 << 5) & MAP_PAGE;
-    mon_map[7] = (RL4 << 11) & MAP_PAGE;
-    if (mon_map[6] == 0) mon_map[6] = MAP_PROT;
-    if (mon_map[7] == 0) mon_map[7] = MAP_PROT;
+em2_dyn = ((EM2  & 07)  << 12) - 020000;
+em3_dyn = ((EM3  & 07)  << 12) - 030000;
+usr_map[0] = (RL1  >> 7)  & (MAP_PROT | MAP_PAGE);
+usr_map[1] = (RL1  >> 1)  & (MAP_PROT | MAP_PAGE);
+usr_map[2] = (RL1  << 5)  & (MAP_PROT | MAP_PAGE);
+usr_map[3] = (RL1  << 11) & (MAP_PROT | MAP_PAGE);
+usr_map[4] = (RL2  >> 7)  & (MAP_PROT | MAP_PAGE);
+usr_map[5] = (RL2  >> 1)  & (MAP_PROT | MAP_PAGE);
+usr_map[6] = (RL2  << 5)  & (MAP_PROT | MAP_PAGE);
+usr_map[7] = (RL2  << 11) & (MAP_PROT | MAP_PAGE);
+mon_map[0] = (0  << VA_V_PN);
+mon_map[1] = (1  << VA_V_PN);
+mon_map[2] = (2  << VA_V_PN);
+mon_map[3] = (3  << VA_V_PN);
+mon_map[4] = ((EM2  & 07)  << 12);
+mon_map[5] = ((EM2  & 07)  << 12) + (1  << VA_V_PN);
+mon_map[6] = (RL4  << 5)  & MAP_PAGE;
+mon_map[7] = (RL4  << 11) & MAP_PAGE;
+if (mon_map[6] == 0) mon_map[6] = MAP_PROT;
+if (mon_map[7] == 0) mon_map[7] = MAP_PROT;
 }
 
 /* ========== Main Instruction Execution ========== */
 
 /* Shift table for SHR instruction (manual page 7-38) */
 typedef enum {
-    SHIFT_SLLS = 0,   /* Shift Left Logical Single */
-    SHIFT_SRCS = 1,   /* Shift Right Circular Single */
-    SHIFT_SAD  = 2,   /* Shift Arithmetic Right Double */
-    SHIFT_SLCD = 3,   /* Shift Left Circular Double */
-    SHIFT_SLCS = 4,   /* Shift Left Circular Single */
-    SHIFT_SAS  = 5,   /* Shift Arithmetic Right Single */
-    SHIFT_SRLS = 6,   /* Shift Right Logical Single */
-    SHIFT_SRCD = 7    /* Shift Right Circular Double */
+SHIFT_SLLS = 0,   
+SHIFT_SRCS = 1,   
+SHIFT_SAD  = 2,   
+SHIFT_SLCD = 3,   
+SHIFT_SLCS = 4,   
+SHIFT_SAS  = 5,   
+SHIFT_SRLS = 6,   
+SHIFT_SRCD = 7    
 } shift_type_t;
 
 /* SRG operation codes (manual page 7-55) */
@@ -1218,29 +870,128 @@ Bits 0-2 do not completely specify the address mode:
 5	101:	ILX,
 6	110:	RP, RM, IL, IG
 7	111:	DG, IL, PX, P,
+*/
+t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
+{
+uint16 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
+uint16 disp = inst & I_DISP_MASK;
+uint16 ea, data, data2, result;
+uint16 carry, overflow;
+int i, count;
+uint8 s_byte, d_byte;
+*trappc = pc;
+ carry = 0;
+ overflow = 0;
+ uint16 hexcode = inst & 0xF000;
+ 
+    // We don't care of address mode here, it's: A first layer of dispatcher
+ switch(hexcode) {
+ case 0x0000:
+ 	group_1_DL(inst);
+ 	break;
+ case 0x1000:
+ 	group_2_DL(inst, mode);
+ 	break;
+ case 0x2000:
+ 	group_1_P(inst);
+ 	break;
+ case 0x3000:
+ 	group_3_DL(inst, mode);
+ 	break;
+ case 0x4000:
+ 	group_1_DG(inst);
+ 	break;
+ case 0x5000:
+ 	group_2_DG(inst, mode);
+ 	break;
+ case 0x6000:
+ 	group_1_IL(inst);
+ 	break;
+ case 0x7000:
+ 	group_2_IL(inst, mode);
+ 	break;
+ case 0x8000:
+ 	group_1_IGX(inst);
+ 	break;
+ case 0x9000:
+ 	group_2_IGX(inst, mode);
+ 	break;
+ case 0xA000:
+ 	group_1_ILX(inst);
+ 	break;
+ case 0xB000:
+ 	group_2_ILX(inst, mode);
+ 	break;
+ case 0xC000:
+ 	{
+ 	uint16 Crpcode = inst & 0x0800;
+ 	switch(Crpcode) {
+ 		case 0x00:
+ 			group_4_RP(inst);
+ 			break;
+ 		case 0x08:
+ 			group_4_RM(inst);
+ 			break;
+ 	}
+ 	break;
+ 	}
+ case 0xD000:
+ 	{
+ 	uint16 Drpcode = inst & 0x0800;
+ 	switch(Drpcode) {
+ 		case 0x00:
+ 			group_5_IL(inst);
+ 			break;
+ 		case 0x08:
+ 			group_5_IG(inst);
+ 			break;
+ 	}
+ 	break;
+ 	}
+ case 0xE000:
+ 	group_3_PX(inst, mode);
+ 	break;
+ case 0xF000:
+ 	group_3_P(inst, mode);
+ 	break;
+ } 
+ return SCPE_OK;
+}
 
-Data width:
-The Mitra-15 is fundamentally a 16-bit word-addressable machine. Data size is chosen implicitly by the opcode (bits 4–7), not by any extra control bits in the instruction. Examples:
-	Byte: LBL (Load Byte Left into A)
-	Word: LDA, STA, ADD, SUB, AND, IOR, etc.
-	Double word: DLD (Double Load): loads two words → E and A
-*
+uint16 group_1_DL(uint16 inst) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      | 0 0  0 | 0| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-*	()
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*	
+*    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+*    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
 *
-*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
-*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-*      | 0 0  0 | 1| x x  x  x |     displacement      |
-*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-*	()
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
-*
+*    Byte, word or double-word, located in the first 256 bytes of the local segment.
+*    Y = (L) + D
+*/
+    uint16 op  = inst >> 8;          /* full 8-bit opcode byte              */
+    uint16 disp   = inst & I_DISP_MASK; /* 8-bit unsigned displacement / param */
+uint16 tmp;
+uint16 target_address;
+target_address = (reg_block[curr_bloc].L + disp) & 0x7FFF;
+group_1(target_address, inst);
+return 0;
+}
+
+uint16 group_2_DL(uint16 inst, uint32 mode) {
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+target_address = (reg_block[curr_bloc].L + disp) & 0x7FFF;
+group_2(inst, target_address, mode);
+return 0;
+}
+
+uint16 group_1_P(uint16 inst) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      | 0 0  1 | 0| x x  x  x |     displacement      |
@@ -1249,2021 +1000,1354 @@ The Mitra-15 is fundamentally a 16-bit word-addressable machine. Data size is ch
     "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
     "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
 *
+* A byte operand is specified in the displacement field of the instruction. 
+* This byte may be extended on the left by 8 leading zeroes, if required.
+*
+*   Y = (P) parameter or immediate
+*
+*/uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+target_address = (reg_block[curr_bloc].P - 2) & 0x0FF; 
+group_1(target_address, inst);
+return 0;
+}
+
+uint16 group_3_DL(uint16 inst, uint32 mode) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      | 0 0  1 | 1| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    
-    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
-    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    "",
+*    
+*    "SHR", "SRG", "ICX", "DCX", "", "ICL", "DCL", "CSV",
+*    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",  "",
 *
+* Byte, word or double-word located in the first 256 bytes of the local segment.
+*  Y = (L) + D
+*/
+uint16 opcode = (inst >> I_OPCODE_SHIFT);
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 data;
+uint16 target_address;
+uint16 count;
+target_address = (reg_block[curr_bloc].L + disp) & 0x7FFF;
+ 
+switch (opcode) {
+case 0x30:  
+{
+/* SHR - Shift Register (DL mode: shift word read from memory) */
+            /* Shift word from memory (16-bit); use low byte for parameters.
+             * Bit layout of shift parameter byte: bits[7:5]=type, bits[4:0]=count.
+             * Verified: &23h=SRCS3, &E8h=SRCD8, &41h=SAD1. */
+uint8 shr_word = (uint8)(read_word(target_address)  & 0xFF);
+shift_type_t type = (shr_word  >> 5)  & 0x07;
+count = shr_word  & 0x1F;
+switch (type) {
+case SHIFT_SLLS: reg_block[curr_bloc].A = shift_lls(reg_block[curr_bloc].A, count); break;
+case SHIFT_SRCS: reg_block[curr_bloc].A = shift_srcs(reg_block[curr_bloc].A, count); break;
+case SHIFT_SAD:  shift_sad( &reg_block[curr_bloc].E,  &reg_block[curr_bloc].A, count); break;
+case SHIFT_SLCD: shift_lcd( &reg_block[curr_bloc].E,  &reg_block[curr_bloc].A, count); break;
+case SHIFT_SLCS: reg_block[curr_bloc].A = shift_slcs(reg_block[curr_bloc].A, count); break;
+case SHIFT_SAS:  reg_block[curr_bloc].A = shift_sas(reg_block[curr_bloc].A, count); break;
+case SHIFT_SRLS: reg_block[curr_bloc].A = shift_rls(reg_block[curr_bloc].A, count); break;
+case SHIFT_SRCD: shift_rcd( &reg_block[curr_bloc].E,  &reg_block[curr_bloc].A, count); break;
+}
+set_condition_codes_load(reg_block[curr_bloc].A);
+}
+break;
+ case 0x31:  
+      {
+          srg_op_t srg_op = disp & 0x1E;  
+          switch (srg_op) {
+              case SRG_RTS:  
+              	{
+                  uint16 saved_P = read_word(reg_block[curr_bloc].L) + GPRIME;
+  	uint16 saved_L = read_word(reg_block[curr_bloc].L + 2) + GPRIME;
+  	reg_block[curr_bloc].P = saved_P;
+  	reg_block[curr_bloc].L = saved_L;
+                  break;
+                  }
+              case SRG_XAE:  
+                  data = reg_block[curr_bloc].A; reg_block[curr_bloc].A = reg_block[curr_bloc].E; reg_block[curr_bloc].E = data;
+                  break;
+              case SRG_XAX:  
+                  data = reg_block[curr_bloc].A; reg_block[curr_bloc].A = reg_block[curr_bloc].X; reg_block[curr_bloc].X = data;
+                  break;
+              case SRG_XEX:  
+                  data = reg_block[curr_bloc].E; reg_block[curr_bloc].E = reg_block[curr_bloc].X; reg_block[curr_bloc].X = data;
+                  break;
+              case SRG_XAA:  
+                  reg_block[curr_bloc].A = ((reg_block[curr_bloc].A & 0xFF) << 8) | ((reg_block[curr_bloc].A >> 8) & 0xFF);
+                  break;
+              case SRG_CCE:  
+                  reg_block[curr_bloc].E = ~reg_block[curr_bloc].E & 0xFFFF;
+                  break;
+              case SRG_RSV:  
+                  if (mode != 1) return MM_PRVINS;
+                  {
+                      uint16 saved_flags = read_word(reg_block[curr_bloc].G + 4);
+                      reg_block[curr_bloc].C  = (saved_flags >> 14) & 1;   
+                      reg_block[curr_bloc].OV = (saved_flags >> 13) & 1;   
+                      MS = 0;
+                      MA = (saved_flags >> 12) & 1;
+                      PR = (saved_flags >> 11) & 1;
+                  }
+                  reg_block[curr_bloc].L = (reg_block[curr_bloc].G + read_word(reg_block[curr_bloc].G + 2)) & 0x7FFF;
+                  reg_block[curr_bloc].P = (reg_block[curr_bloc].G + 2 + read_word(reg_block[curr_bloc].G)) & 0x7FFF;
+                  break;
+              case SRG_ACE:  
+                  reg_block[curr_bloc].E = (reg_block[curr_bloc].E + reg_block[curr_bloc].C) & 0xFFFF;
+                  break;
+              case SRG_CCA:  
+                  reg_block[curr_bloc].A = ~reg_block[curr_bloc].A & 0xFFFF;
+                  set_condition_codes_load(reg_block[curr_bloc].A);
+                  break;
+              case SRG_AEE:  
+                  reg_block[curr_bloc].A ^= reg_block[curr_bloc].E;
+                  set_condition_codes_load(reg_block[curr_bloc].A);
+                  break;
+              case SRG_CNX:  
+                  reg_block[curr_bloc].X = (~reg_block[curr_bloc].X + 1) & 0xFFFF;
+                  break;
+              case SRG_AIE:  
+                  reg_block[curr_bloc].A |= reg_block[curr_bloc].E;
+                  set_condition_codes_load(reg_block[curr_bloc].A);
+                  break;
+              case SRG_AAE:  
+                  reg_block[curr_bloc].A &= reg_block[curr_bloc].E;
+                  set_condition_codes_load(reg_block[curr_bloc].A);
+                  break;
+              case SRG_LNE:  
+                  reg_block[curr_bloc].E = 0xFFFF;
+                  break;
+              case SRG_CNA:  
+                  reg_block[curr_bloc].A = (~reg_block[curr_bloc].A + 1) & 0xFFFF;
+                  set_condition_codes_load(reg_block[curr_bloc].A);
+                  break;
+              case SRG_CHX:  
+                  reg_block[curr_bloc].X = (reg_block[curr_bloc].X >> 1) | (reg_block[curr_bloc].X & 0x8000);
+                  break;
+              default:
+                  break;
+          }
+      }
+      break;
+  case 0x32:  
+      reg_block[curr_bloc].X = (reg_block[curr_bloc].X + read_word(target_address)) & 0x7FFF;
+      set_condition_codes_load(reg_block[curr_bloc].X);
+      break;
+  case 0x33:  
+      reg_block[curr_bloc].X = (reg_block[curr_bloc].X - read_word(target_address)) & 0x7FFF;
+      set_condition_codes_load(reg_block[curr_bloc].X);
+      break;
+  case 0x34:  
+      break;
+  case 0x35:  
+      reg_block[curr_bloc].L = (reg_block[curr_bloc].L + read_word(target_address)) & 0x7FFF;
+      break;
+  case 0x36:  
+      reg_block[curr_bloc].L = (reg_block[curr_bloc].L - read_word(target_address)) & 0x7FFF;
+      break;
+  case 0x37:  
+{
+uint16 section = target_address;
+write_word(reg_block[curr_bloc].G, reg_block[curr_bloc].P - GPRIME);
+write_word(reg_block[curr_bloc].G + 2, reg_block[curr_bloc].L - GPRIME);
+write_word(reg_block[curr_bloc].G + 4, (reg_block[curr_bloc].C ? 1 : 0) | (reg_block[curr_bloc].OV ? 2 : 0) | (MS ? 4 : 0));
+uint16 PRTS_addr = read_word(12);
+reg_block[curr_bloc].L = ((PRTS_addr - (4*section)) + reg_block[curr_bloc].G) & 0x7FFF;
+reg_block[curr_bloc].P = ((PRTS_addr - (4*section) + 2) + reg_block[curr_bloc].G) & 0x7FFF;
+MS = 1;  
+PR = 1;  
+}
+break;
+case 0x38:  
+{
+uint16 section = target_address;
+uint16 called_Lbase = read_word((reg_block[curr_bloc].G - 4 * section + 2)  & 0x7FFF);
+uint16 called_Pbase = read_word((reg_block[curr_bloc].G - 4 * section)  & 0x7FFF);
+uint16 LDS = (called_Lbase + reg_block[curr_bloc].G)  & 0x7FFF;
+write_word(LDS,       (reg_block[curr_bloc].P - GPRIME)  & 0x7FFF);
+write_word(LDS + 2,   (reg_block[curr_bloc].L - GPRIME)  & 0x7FFF);
+reg_block[curr_bloc].L = LDS;   
+reg_block[curr_bloc].P = (called_Pbase + reg_block[curr_bloc].G)  & 0x7FFF;
+}
+break;
+case 0x39:  
+{
+uint16 reg_num = target_address & 0x3F;   
+switch (reg_num & 0x07) {     
+case 0: reg_block[curr_bloc].A = reg_block[curr_bloc].A; break;     
+case 1: reg_block[curr_bloc].A = reg_block[curr_bloc].E; break;
+case 2: reg_block[curr_bloc].A = reg_block[curr_bloc].P; break;
+case 3: reg_block[curr_bloc].A = reg_block[curr_bloc].X; break;
+case 4: reg_block[curr_bloc].A = reg_block[curr_bloc].L; break;
+case 5: reg_block[curr_bloc].A = reg_block[curr_bloc].G; break;
+default: break;
+}
+set_condition_codes_load(reg_block[curr_bloc].A);
+}
+break;
+case 0x3A:  
+if (mode != 1) return MM_PRVINS;
+{
+uint16 reg_num = target_address & 0x3F;
+switch (reg_num & 0x07) {
+case 0: reg_block[curr_bloc].A = reg_block[curr_bloc].A; break;   
+case 1: reg_block[curr_bloc].A = reg_block[curr_bloc].A; break;
+case 2: reg_block[curr_bloc].P = reg_block[curr_bloc].A & 0x7FFF; break;
+case 3: reg_block[curr_bloc].X = reg_block[curr_bloc].A; break;
+case 4: reg_block[curr_bloc].L = reg_block[curr_bloc].A & 0x7FFF; break;
+case 5: reg_block[curr_bloc].G = reg_block[curr_bloc].A; break;
+default: break;
+}
+}
+break;
+case 0x3B:  
+if (mode != 1)
+return MM_PRVINS;
+PR = read_word(target_address) & 1;
+break;
+case 0x3C: 
+{
+uint8 shc_word = (uint8)(read_word(target_address)  & 0xFF);
+uint8 shc_type = (shc_word  >> 5)  & 0x07;
+count = shc_word  & 0x1F;
+switch (shc_type) {
+case 0:  
+shift_lld( &reg_block[curr_bloc].E,  &reg_block[curr_bloc].A, count);
+break;
+case 1:  
+if (mode != 1) return MM_PRVINS;
+if (!(cpu_unit.flags  & UNIT_HSINT))
+return MM_INVINS;
+int_req.intrp_level  &= ~(1u  << int_lvl);
+break;
+case 2:  
+reg_block[curr_bloc].E = compute_parity( &reg_block[curr_bloc].A, count);
+break;
+case 3:  
+if (mode != 1) return MM_PRVINS;
+int_req.intrp_level  &= ~(1u  << int_lvl);
+int_lvl = 0;
+break;
+case 4:  
+shift_rld( &reg_block[curr_bloc].E,  &reg_block[curr_bloc].A, count);
+break;
+case 5:  
+break;
+case 6:  
+normalize( &reg_block[curr_bloc].E,  &reg_block[curr_bloc].A,  &reg_block[curr_bloc].X, count);
+break;
+case 7:  
+break;
+}
+set_condition_codes_load(reg_block[curr_bloc].A);
+}
+break;
+case 0x3D:  
+if (mode != 1) return MM_PRVINS;
+reg_block[curr_bloc].A = read_word(target_address);
+write_word(target_address, 0);
+set_condition_codes_load(reg_block[curr_bloc].A);
+break;
+case 0x3E:  
+case 0x3F:  
+break;
+}
+return 0;
+}
+
+uint16 group_1_DG(uint16 inst) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      | 0 1  0 | 0| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    (DG addressing mode) 
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*    (DG addressing mode) 
+*    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+*    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
 *
+* Byte, word or double-word located in the first 256 bytes of the common segment.
+*  Y=(G) + D
+*/
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+target_address =  (reg_block[curr_bloc].G + disp) & 0x7FFF;
+group_1(target_address, inst);
+return 0;
+}
+
+uint16 group_2_DG(uint16 inst, uint32 mode) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      | 0 1  0 | 1| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*    
+*    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+*    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
 *
+* Byte, word or double-word located in the first 256 bytes of the common segment.
+*  Y=(G) + D
+*/
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+target_address =  (reg_block[curr_bloc].G + disp) & 0x7FFF;
+group_2(inst, target_address, mode);
+return 0;
+}
+
+uint16 group_1_IL(uint16 inst) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      | 0 1  1 | 0| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    (IL addressing mode) 
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*    (IL addressing mode) 
+*    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+*    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
 *
+*  Y = (G' + mem[L + D]) & 0x7FFF
+*  Byte, word or double-word located anywhere and pointed at through the local segment.
+*/
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+tmp = read_word(reg_block[curr_bloc].L + disp);
+target_address = (GPRIME + tmp) & 0x7FFF;
+group_1(target_address, inst);
+return 0;
+}
+
+uint16 group_2_IL(uint16 inst, uint32 mode) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      | 0 1  1 | 1| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*    
+*    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+*    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
 *
+*  Y = (G' + mem[L + D]) & 0x7FFF
+*  Byte, word or double-word located anywhere and pointed at through the local segment.
+*/
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+tmp = read_word(reg_block[curr_bloc].L + disp);
+uint16 target_address;
+target_address = (GPRIME + tmp) & 0x7FFF;
+group_2(inst, target_address, mode);
+return 0;
+}
+
+uint16 group_1_IGX(uint16 inst) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      |1  0  0 | 0| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    (IGX addressing mode)
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*    (IGX addressing mode)
+*    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+*    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
 *
+* Element of an array pointed at through the common segment.
+*  Y = (G) + ((G)+D) + (reg_block[curr_bloc].X)
+*/
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+tmp = read_word(reg_block[curr_bloc].G + disp);
+target_address = (reg_block[curr_bloc].G + tmp + reg_block[curr_bloc].X) & 0x7FFF; 
+group_1(target_address, inst);
+return 0;
+}
+
+uint16 group_2_IGX(uint16 inst, uint32 mode) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      |1  0  0 | 1| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*    
+*    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+*    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
 *
+* Element of an array pointed at through the common segment.
+*  Y = (G) + ((G)+D) + (reg_block[curr_bloc].X)
+*/
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+tmp = read_word(reg_block[curr_bloc].G + disp);
+target_address = (reg_block[curr_bloc].G + tmp + reg_block[curr_bloc].X) & 0x7FFF; 
+group_2(inst, target_address, mode);
+return 0;
+}
+
+uint16 group_1_ILX(uint16 inst) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      |1  0  1 | 0| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    (ILX addressing mode)
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+*    
+*    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+*    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
 *
+* Element of reg_block[curr_bloc].A byte, word or double-word array located anywhere and pointed at through the local segment.
+*  Y = G' + ((L)+D)+(reg_block[curr_bloc].X)
+*/
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+tmp = read_word(reg_block[curr_bloc].L + disp);
+target_address = (GPRIME + tmp + reg_block[curr_bloc].X) & 0x7FFF;
+group_1(target_address, inst);
+return 0;
+}
+
+uint16 group_2_ILX(uint16 inst, uint32 mode) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      |1  0  1 | 1| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+*    
+*    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+*    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
 *
+* Element of a byte, word or double-word array located anywhere and pointed at through the local segment.
+*  Y = G' + ((L)+D)+(X)
+*/
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+tmp = read_word(reg_block[curr_bloc].L + disp);
+target_address = (GPRIME + tmp + reg_block[curr_bloc].X) & 0x7FFF;
+group_2(inst, target_address, mode);
+return 0;
+}
+
+uint16 group_4_RP(uint16 inst) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      |1  1  0 | 0| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    (Class 2 - RP addressing mode)
-    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
-    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
+*    (Class 2 - RP addressing mode)
+*    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
 *
+* Y={P)+2D
+*/
+uint16 opcode = (inst >> I_OPCODE_SHIFT);
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+target_address = reg_block[curr_bloc].P + (disp << 1) ;
+switch(opcode) {
+        case 0xC0:  /* BCT - Branch on Carry True (RP mode) */
+            if (reg_block[curr_bloc].C) reg_block[curr_bloc].P = target_address;
+            else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2) & 0x7FFF;
+            break;
+        case 0xC1:  /* BRX - Branch Indexed (RP mode) */
+            reg_block[curr_bloc].P = (target_address + reg_block[curr_bloc].X) & 0x7FFF;
+            break;
+        case 0xC2:  /* BOT - Branch on Overflow True (RP mode) */
+            if (reg_block[curr_bloc].OV) reg_block[curr_bloc].P = target_address;
+            else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2) & 0x7FFF;
+            break;
+        case 0xC3:  /* BCF - Branch on Carry False (RP mode) */
+            if (!reg_block[curr_bloc].C) reg_block[curr_bloc].P = target_address;
+            else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2) & 0x7FFF;
+            break;
+        case 0xC4:  /* BAN - Branch on reg_block[curr_bloc].A Negative (RP mode) */
+            if (reg_block[curr_bloc].A & 0x8000) 
+            	reg_block[curr_bloc].P = target_address;
+            else 
+            	reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2) & 0x7FFF;
+            break;
+        case 0xC5:  /* BAZ - Branch on reg_block[curr_bloc].A Zero (RP mode) */
+            if (reg_block[curr_bloc].A == 0) 
+            	reg_block[curr_bloc].P = target_address;
+            else 
+            	reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2) & 0x7FFF;
+            break;
+        case 0xC6:  /* BOF - Branch on Overflow False (RP mode) */
+            if (!reg_block[curr_bloc].OV) 
+            	reg_block[curr_bloc].P = target_address;
+            else 
+            	reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2) & 0x7FFF;
+            break;
+        case 0xC7:  /* BRU - Branch Unconditional (RP mode) */
+            reg_block[curr_bloc].P = target_address;
+            break;
+      }      
+}
+
+uint16 group_4_RM(uint16 inst) {
+/*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  1  0 | 0| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*    (Class 2 - RM addressing mode)
+*    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
+*/
+uint16 opcode = (inst  >> I_OPCODE_SHIFT);
+uint16 op  = inst  >> 8;          
+uint16 disp   = inst  & I_DISP_MASK; 
+uint16 tmp; 
+uint16 target_address;
+target_address = reg_block[curr_bloc].P - (disp << 1) ;
+switch(opcode) {
+case 0xC8:  
+if (reg_block[curr_bloc].C) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xC9:  
+reg_block[curr_bloc].P = (target_address + reg_block[curr_bloc].X)  & 0x7FFF;
+break;
+case 0xCA:  
+if (reg_block[curr_bloc].OV) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xCB:  
+if (!reg_block[curr_bloc].C) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xCC:  
+if (reg_block[curr_bloc].A  & 0x8000)
+reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xCD:  
+if (reg_block[curr_bloc].A == 0)
+reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xCE:  
+if (!reg_block[curr_bloc].OV) reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xCF:  
+reg_block[curr_bloc].P = target_address;
+break;
+}
+return 0;
+}
+
+uint16 group_5_IL(uint16 inst) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      |1  1  0 | 1| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    (Class 2 - RM/IL/IG addressing modes)
-    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
-    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
+*    (Class 2 - RM/IL/IG addressing modes)
+*    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
 *
+* Y = G' + ((L) + D)
+*/
+uint16 opcode = (inst >> I_OPCODE_SHIFT);
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+tmp = (reg_block[curr_bloc].L + disp) & 0x7FFF;
+target_address = GPRIME + tmp;
+switch(opcode) {
+case 0xD0:  
+if (reg_block[curr_bloc].C)
+reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xD1: 
+reg_block[curr_bloc].P = (target_address + reg_block[curr_bloc].X)  & 0x7FFF;
+break;
+case 0xD2:  
+if (reg_block[curr_bloc].OV)
+reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xD3:  
+if (!reg_block[curr_bloc].C)
+reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xD4: 
+if (reg_block[curr_bloc].A  & 0x8000)
+reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xD5:  
+if (reg_block[curr_bloc].A == 0)
+reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xD6:  
+if (!reg_block[curr_bloc].OV)
+reg_block[curr_bloc].P = target_address;
+else
+reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xD7:  
+reg_block[curr_bloc].P = target_address;
+break;
+}
+return 0;
+}
+
+uint16 group_5_IG(uint16 inst) {
+/*
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      |1  1  0 | 1| x x  x  x |     displacement      |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*    (Class 2 - RM/IL/IG addressing modes)
+*    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
+*
+* Y = G'+((G)+D)
+*/
+uint16 opcode = (inst >> I_OPCODE_SHIFT);
+uint16 op  = inst >> 8;          
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+tmp = read_word(reg_block[curr_bloc].G + disp);
+target_address = (GPRIME + tmp) & 0x7FFF;
+switch(opcode) {
+case 0xD8:  
+if (reg_block[curr_bloc].C) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xD9:  
+reg_block[curr_bloc].P = (target_address + reg_block[curr_bloc].X)  & 0x7FFF;
+break;
+case 0xDA:  
+if (reg_block[curr_bloc].OV) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xDB:  
+if (!reg_block[curr_bloc].C) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xDC:  
+if (reg_block[curr_bloc].A  & 0x8000) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xDD:  
+if (reg_block[curr_bloc].A == 0) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xDE:  
+if (!reg_block[curr_bloc].OV) reg_block[curr_bloc].P = target_address;
+else reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2)  & 0x7FFF;
+break;
+case 0xDF:  
+reg_block[curr_bloc].P = target_address;
+break;
+}
+return 0;
+}
+
+uint16 group_3_PX(uint16 inst, uint32 mode) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 *      |1  1  1 | 0| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    (Class 1 - PX addressing mode)
-    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
-    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    "",
+*    (Class 1 - PX addressing mode)
+*    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
 *
+* (Y) = D+(reg_block[curr_bloc].X)
+*  Y = (P)
+*/
+uint16 opcode = (inst >> I_OPCODE_SHIFT);
+uint16 op  = inst >> 8;          
+uint16 count;
+uint16 data;
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 target_address;
+target_address = (disp) & 0x0FF; 
+switch(opcode) {
+case 0xE0:  
+{
+shift_type_t type = (disp >> 5) & 0x07;
+count = disp & 0x1F;
+switch (type) {
+case SHIFT_SLLS: reg_block[curr_bloc].A = shift_lls(reg_block[curr_bloc].A, count); break;
+case SHIFT_SRCS: reg_block[curr_bloc].A = shift_srcs(reg_block[curr_bloc].A, count); break;
+case SHIFT_SAD:  shift_sad(&reg_block[curr_bloc].E, &reg_block[curr_bloc].A, count); break;
+case SHIFT_SLCD: shift_lcd(&reg_block[curr_bloc].E, &reg_block[curr_bloc].A, count); break;
+case SHIFT_SLCS: reg_block[curr_bloc].A = shift_slcs(reg_block[curr_bloc].A, count); break;
+case SHIFT_SAS:  reg_block[curr_bloc].A = shift_sas(reg_block[curr_bloc].A, count); break;
+case SHIFT_SRLS: reg_block[curr_bloc].A = shift_rls(reg_block[curr_bloc].A, count); break;
+case SHIFT_SRCD: shift_rcd(&reg_block[curr_bloc].E, &reg_block[curr_bloc].A, count); break;
+}
+set_condition_codes_load(reg_block[curr_bloc].A);
+}
+break;
+    case 0xE1:  
+         {
+             srg_op_t srg_op = disp & 0x1E;  
+             switch (srg_op) {
+                 case SRG_RTS: 
+ 		uint16 saved_P = read_word(reg_block[curr_bloc].L) + GPRIME;
+ 		uint16 saved_L = read_word(reg_block[curr_bloc].L + 2) + GPRIME;
+ 		reg_block[curr_bloc].P = saved_P;
+ 		reg_block[curr_bloc].L = saved_L;
+                 break;
+                 case SRG_XAE: data = reg_block[curr_bloc].A; reg_block[curr_bloc].A = reg_block[curr_bloc].E; reg_block[curr_bloc].E = data; break;
+                 case SRG_XAX: data = reg_block[curr_bloc].A; reg_block[curr_bloc].A = reg_block[curr_bloc].X; reg_block[curr_bloc].X = data; break;
+                 case SRG_XEX: data = reg_block[curr_bloc].E; reg_block[curr_bloc].E = reg_block[curr_bloc].X; reg_block[curr_bloc].X = data; break;
+                 case SRG_XAA: reg_block[curr_bloc].A = ((reg_block[curr_bloc].A & 0xFF) << 8) | ((reg_block[curr_bloc].A >> 8) & 0xFF); break;
+                 case SRG_CCE: reg_block[curr_bloc].A = ~reg_block[curr_bloc].E & 0xFFFF; break;
+                 case SRG_RSV:
+                     if (mode != 1) return MM_PRVINS;
+                     {
+                         uint16 saved_flags = read_word(reg_block[curr_bloc].G + 4);
+                         reg_block[curr_bloc].C  = (saved_flags >> 14) & 1;
+                         reg_block[curr_bloc].OV = (saved_flags >> 13) & 1;
+                         MA = (saved_flags >> 12) & 1;
+                         PR = (saved_flags >> 11) & 1;
+                         MS = 0;
+                     }
+                     reg_block[curr_bloc].L = (reg_block[curr_bloc].G + read_word(reg_block[curr_bloc].G + 2)) & 0x7FFF;
+                     reg_block[curr_bloc].P = (reg_block[curr_bloc].G + 2 + read_word(reg_block[curr_bloc].G)) & 0x7FFF;
+                     break;
+                 case SRG_ACE: reg_block[curr_bloc].A = (reg_block[curr_bloc].E + reg_block[curr_bloc].C) & 0xFFFF; break;
+                 case SRG_CCA: reg_block[curr_bloc].A = ~reg_block[curr_bloc].A & 0xFFFF; set_condition_codes_load(reg_block[curr_bloc].A); break;
+                 case SRG_AEE: reg_block[curr_bloc].A ^= reg_block[curr_bloc].E; set_condition_codes_load(reg_block[curr_bloc].A); break;
+                 case SRG_CNX: reg_block[curr_bloc].X = (~reg_block[curr_bloc].X + 1) & 0xFFFF; break;
+                 case SRG_AIE: reg_block[curr_bloc].A |= reg_block[curr_bloc].E; set_condition_codes_load(reg_block[curr_bloc].A); break;
+                 case SRG_AAE: reg_block[curr_bloc].A &= reg_block[curr_bloc].E; set_condition_codes_load(reg_block[curr_bloc].A); break;
+                 case SRG_LNE: reg_block[curr_bloc].A = 0xFFFF; break;
+                 case SRG_CNA: reg_block[curr_bloc].A = (~reg_block[curr_bloc].A + 1) & 0xFFFF; set_condition_codes_load(reg_block[curr_bloc].A); break;
+                 case SRG_CHX: reg_block[curr_bloc].X = (reg_block[curr_bloc].X >> 1) | (reg_block[curr_bloc].X & 0x8000); break;
+                 default: break;
+             }
+         }
+         break;
+     case 0xE2:  
+         reg_block[curr_bloc].X = (reg_block[curr_bloc].X + target_address) & 0x7FFF;
+         set_condition_codes_load(reg_block[curr_bloc].X);
+         break;
+     case 0xE3:  
+         reg_block[curr_bloc].X = (reg_block[curr_bloc].X - target_address) & 0x7FFF;
+         set_condition_codes_load(reg_block[curr_bloc].X);
+         break;
+     case 0xE4:  
+         break;
+     case 0xE5:  
+         reg_block[curr_bloc].L = (reg_block[curr_bloc].L + target_address) & 0x7FFF;
+         break;
+     case 0xE6:  
+         reg_block[curr_bloc].L = (reg_block[curr_bloc].L - target_address) & 0x7FFF;
+         break;
+     case 0xE7:  
+         {
+             uint16 section = target_address;
+             write_word(reg_block[curr_bloc].G, reg_block[curr_bloc].P - GPRIME);
+             write_word(reg_block[curr_bloc].G + 2, reg_block[curr_bloc].L - GPRIME);
+             write_word(reg_block[curr_bloc].G + 4, (reg_block[curr_bloc].C ? 1 : 0) | (reg_block[curr_bloc].OV ? 2 : 0) | (MS ? 4 : 0));
+             uint16 PRTS_addr = read_word(12);
+             reg_block[curr_bloc].L = ((PRTS_addr - (4*section)) + reg_block[curr_bloc].G) & 0x7FFF;
+             reg_block[curr_bloc].P = ((PRTS_addr - (4*section) + 2) + reg_block[curr_bloc].G) & 0x7FFF;
+             MS = 1;
+             PR = 1;
+         }
+         break;
+ }
+ return 0;
+}
+
+uint16 group_3_P(uint16 inst, uint32 mode) {
+/*
 *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-*      |1  1  1 | 1| x x  x  x |     displacement      |
+*      |1  1  1 | 0| x x  x  x |     displacement      |
 *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-    (Class 1 and system - P mode)
-    "SHR", "SRG", "ICX", "DCX", "SYS", "ICL", "DCL", "CSV",
-    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    ""
-};
+*    (Class 1 - P addressing mode)
+*    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    "",
 */
-t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 *trappc)
+uint16 opcode = (inst  >> I_OPCODE_SHIFT);
+uint16 op  = inst  >> 8;          
+uint16 count;
+uint16 disp   = inst  & I_DISP_MASK; 
+uint16 tmp; 
+uint16 target_address;
+target_address = disp;
+switch(opcode) {
+case 0xE8:  
 {
-    uint16 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
-    uint16 disp = inst & I_DISP_MASK;
-    uint16 ea, data, data2, result;
-    uint16 carry, overflow;
-    int i, count;
-    uint8 s_byte, d_byte;
+uint16 section = target_address;
+uint16 called_Lbase = read_word((reg_block[curr_bloc].G - 4 * section + 2) & 0x7FFF);
+uint16 called_Pbase = read_word((reg_block[curr_bloc].G - 4 * section) & 0x7FFF);
+uint16 LDS = (called_Lbase + reg_block[curr_bloc].G) & 0x7FFF;
+write_word(LDS,     (reg_block[curr_bloc].P - GPRIME) & 0x7FFF);
+write_word(LDS + 2, (reg_block[curr_bloc].L - GPRIME) & 0x7FFF);
+reg_block[curr_bloc].L = LDS;
+reg_block[curr_bloc].P = (called_Pbase + reg_block[curr_bloc].G) & 0x7FFF;
+}
+break;
+    case 0xE9:  
+         {
+             uint16 reg_num = target_address & 0x3F;
+             switch (reg_num & 0x07) {
+                 case 0: reg_block[curr_bloc].A = reg_block[curr_bloc].A; break;
+                 case 1: reg_block[curr_bloc].A = reg_block[curr_bloc].E; break;
+                 case 2: reg_block[curr_bloc].A = reg_block[curr_bloc].P; break;
+                 case 3: reg_block[curr_bloc].A = reg_block[curr_bloc].X; break;
+                 case 4: reg_block[curr_bloc].A = reg_block[curr_bloc].L; break;
+                 case 5: reg_block[curr_bloc].A = reg_block[curr_bloc].G; break;
+                 default: break;
+             }
+             set_condition_codes_load(reg_block[curr_bloc].A);
+         }
+         break;
+     case 0xEA:  
+         if (mode != 1) return MM_PRVINS;
+         {
+             uint16 reg_num = target_address & 0x3F;
+             switch (reg_num & 0x07) {
+                 case 0: reg_block[curr_bloc].A = reg_block[curr_bloc].A; break;
+                 case 1: reg_block[curr_bloc].A = reg_block[curr_bloc].A; break;
+                 case 2: reg_block[curr_bloc].P = reg_block[curr_bloc].A & 0x7FFF; break;
+                 case 3: reg_block[curr_bloc].X = reg_block[curr_bloc].A; break;
+                 case 4: reg_block[curr_bloc].L = reg_block[curr_bloc].A & 0x7FFF; break;
+                 case 5: reg_block[curr_bloc].G = reg_block[curr_bloc].A; break;
+                 default: break;
+             }
+         }
+         break;
+     case 0xEB:  
+         if (mode != 1) return MM_PRVINS;
+         PR = read_word(target_address) & 1;
+         break;
+     case 0xEC:  
+         count = disp & 0x1F;
+         {
+             uint8 shc_type = (disp >> 5) & 0x07;
+             switch (shc_type) {
+                 case 0: shift_lld(&reg_block[curr_bloc].E, &reg_block[curr_bloc].A, count); break;
+                 case 1:
+                     if (mode != 1) return MM_PRVINS;
+                     int_req.intrp_level &= ~(1u << int_lvl);
+                     int_lvl = 0;
+                     break;
+                 case 2: reg_block[curr_bloc].A = compute_parity(&reg_block[curr_bloc].A, count); break;
+                 case 3:
+                     if (mode != 1) return MM_PRVINS;
+                     int_req.intrp_level &= ~(1u << int_lvl);
+                     int_lvl = 0;
+                     break;
+                 case 4: shift_rld(&reg_block[curr_bloc].E, &reg_block[curr_bloc].A, count); break;
+                 case 5: break;
+                 case 6: normalize(&reg_block[curr_bloc].E, &reg_block[curr_bloc].A, &reg_block[curr_bloc].X, count); break;
+                 case 7: break;
+             }
+             set_condition_codes_load(reg_block[curr_bloc].A);
+         }
+         break;
+     case 0xED:  
+         if (mode != 1) return MM_PRVINS;
+         reg_block[curr_bloc].A = read_word(target_address);
+         write_word(target_address, 0);
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+     case 0xEE: case 0xEF:  
+         break;
+ }
+ return 0;
+}
 
-    *trappc = pc;
-    carry = 0;
-    overflow = 0;
+uint16 group_1(uint16 target_address, uint16 inst) {
+    /*
+    *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+    *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    *      |                                   |  opcode   |
+    *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    */
+uint16 opcode = (inst >> I_GROUP_SHIFT) & 0x1F;
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 tmp;
+uint16 carry, overflow;
+switch (opcode) {
+     case 0x00:  
+         reg_block[curr_bloc].A = read_word(target_address);
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+     case 0x01:  
+         reg_block[curr_bloc].E = read_word(target_address);
+         set_condition_codes_load(reg_block[curr_bloc].E);
+         break;
+     case 0x02:  
+         reg_block[curr_bloc].X = read_word(target_address);
+         set_condition_codes_load(reg_block[curr_bloc].X);
+         break;
+     case 0x03:  
+         reg_block[curr_bloc].A ^= read_word(target_address);
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+     case 0x04:  
+         reg_block[curr_bloc].A = (target_address - GPRIME) & 0x7FFF;
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+     case 0x05:  
+         carry = 0;
+         reg_block[curr_bloc].A = add16(reg_block[curr_bloc].A, read_word(target_address), &carry, &overflow);
+         set_condition_codes_arithmetic(reg_block[curr_bloc].A, carry, overflow);
+         break;
+     case 0x06:  
+         carry = 0;
+         reg_block[curr_bloc].A = sub16(reg_block[curr_bloc].A, read_word(target_address), &carry, &overflow);
+         set_condition_codes_arithmetic(reg_block[curr_bloc].A, carry, overflow);
+         break;
+     case 0x07:  
+         reg_block[curr_bloc].A = reg_block[curr_bloc].A | read_word(target_address);
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+ }
+ return 0;
+}
 
-    /* Calculate effective address for most instructions */
-    if (opcode != 0x37 && opcode != 0x38 && opcode != 0x39 && 
-        opcode != 0x3A && opcode != 0x3B && opcode != 0x3D) {
-        ea = ea_calculate(inst);
-    } else {
-        ea = disp;
-    }
-
-    switch (opcode) {
-        /* ========== Class 0 Instructions (00-0F) ========== */
-        case 0x00:  /* LDA - Load A */
-            A = read_word(ea);
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x01:  /* LDE - Load E */
-            E = read_word(ea);
-            set_condition_codes_load(E);
-            break;
-            
-        case 0x02:  /* LDX - Load X */
-            X = read_word(ea);
-            set_condition_codes_load(X);
-            break;
-            
-        case 0x03:  /* EOR - Exclusive OR */
-            A ^= read_word(ea);
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x04:  /* LEA - Load Effective Address */
-            A = (ea - GPRIME) & 0x7FFF;
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x05:  /* ADD - Add */
-            carry = 0;
-            result = add16(A, read_word(ea), &carry, &overflow);
-            A = result;
-            set_condition_codes_arithmetic(result, carry, overflow);
-            break;
-            
-        case 0x06:  /* SUB - Subtract */
-            carry = 0;
-            result = sub16(A, read_word(ea), &carry, &overflow);
-            A = result;
-            set_condition_codes_arithmetic(result, carry, overflow);
-            break;
-            
-        case 0x07:  /* IOR - Inclusive OR */
-            A |= read_word(ea);
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x08:  /* DIV - Divide (optional) */
-            if (mode != 1) return MM_PRVINS;
-            if (!(cpu_unit.flags & UNIT_MULDIV)) return MM_INVINS;
-            data = read_word(ea);
-            if (div32(E, A, data, &A, &E) != 0) {
-                OV = 1;
-            }
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x09:  /* AND - Logical AND */
-            A &= read_word(ea);
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x0A:  /* CPS - Compare String (optional) */
-            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
-            for (i = 0; i < E; i++) {
-                s_byte = read_byte(A + i);
-                d_byte = read_byte(X + i);
-                if (s_byte != d_byte) {
-                    set_condition_codes_string(0, s_byte < d_byte);
-                    break;
-                }
-            }
-            if (i == E) set_condition_codes_string(1, 0);
-            break;
-            
-        case 0x0B:  /* CMP - Compare */
-            data = read_word(ea);
-            sub16(A, data, &carry, &overflow);
-            set_condition_codes_compare(A, data, 0);
-            break;
-            
-        case 0x0C:  /* MUL - Multiply */
-            if (!(cpu_unit.flags & UNIT_MULDIV)) return MM_INVINS;
-            data = read_word(ea);
-            mul32(A, data, &E, &A);
-            set_condition_codes_load(E);
-            break;
-            
-        case 0x0D:  /* LBL - Load Byte Left */
-            data = read_word(ea);
-            A = (A & 0x00FF) | (data & 0xFF00);
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x0E:  /* LBR - Load Byte Right */
-            /* Manual: Y loaded in A[8-15], A[0-7] cleared. Byte order: bit 0=MSB. */
-            /* On Mitra-15 bit 0 is leftmost (MSB). Byte "right" = bits 8-15 = low byte. */
-            data = read_word(ea);
-            A = data & 0x00FF;   /* low byte into A, high byte cleared */
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x0F:  /* LBX - Load Byte Right into X */
-            /* Manual: rightmost byte of Y loaded into X[8-15], X[0-7] cleared. */
-            data = read_word(ea);
-            X = data & 0x00FF;
-            set_condition_codes_load(X);
-            break;
-            
-        /* ========== Store Instructions (10-1F) - Class 0' ========== */
-        case 0x10:  /* DLD - Double Load */
-            E = read_word(ea);
-            A = read_word((ea + 2) & 0x7FFF);
-            set_condition_codes_load(E);
-            break;
-            
-        case 0x11:  /* STA - Store A */
-            write_word(ea, A);
-            break;
-            
-        case 0x12:  /* STE - Store E */
-            write_word(ea, E);
-            break;
-            
-        case 0x13:  /* STX - Store X */
-            write_word(ea, X);
-            break;
-            
-        case 0x14:  /* SBL - Store Byte Left */
-            data = read_word(ea);
-            write_word(ea, (data & 0x00FF) | (A & 0xFF00));
-            break;
-            
-        case 0x15:  /* SBR - Store Byte Right */
-            data = read_word(ea);
-            write_word(ea, (data & 0xFF00) | (A & 0x00FF));
-            break;
-            
-        case 0x16:  /* DST - Double Store */
-            write_word(ea, E);
-            write_word((ea + 2) & 0x7FFF, A);
-            break;
-            
-        case 0x17:  /* ADM - Add to Memory */
-            data = read_word(ea);
-            carry = 0;
-            result = add16(data, A, &carry, &overflow);
-            write_word(ea, result);
-            A = result;
-            set_condition_codes_arithmetic(result, carry, overflow);
-            break;
-            
-        case 0x18:  /* SPA - Store Program Address */
-            /* Manual: (P)+G' --> Y2. P has already been incremented by 2 (after fetch).
-             * "current address incremented by four" = original_pc+4 = (P+2)+G'.
-             * So: store (P + 2 + GPRIME). Equivalent to pc+4+GPRIME when P=pc+2. 
-	     */
-            A = ((P + 2) + GPRIME) & 0x7FFF;
-            write_word(ea, A);
-            break;
-            
-        case 0x19:  /* STS - Store Selective */
-            data = read_word(ea);
-            result = (data & ~E) | (A & E);
-            write_word(ea, result);
-            set_condition_codes_load(result);
-            break;
-            
-        case 0x1A:  /* FAD - Float Add (optional) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a + b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0x1B:  /* FSU - Float Subtract (optional) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a - b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0x1C:  /* FMU - Float Multiply (optional) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a * b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0x1D:  /* FDV - Float Divide (optional) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                if (b == 0.0) return mitra_trap(TRAP_INVINS, pc, trappc);
-                double r = a / b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0x1E:  /* TRS - Translate String (optional) */
-            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
-            {
-                uint16 table = ea;
-                for (i = 0; i < E; i++) {
-                    uint8 b = read_byte(A + i);
-                    uint8 t = read_byte(table + (b & 0xFF));
-                    write_byte(X + i, t);
-                }
-                E = 0xFFFF;
-            }
-            break;
-            
-        case 0x1F:  /* MVS - Move String (optional) */
-            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
-            {
-                for (i = 0; i < E; i++) {
-                    uint8 b = read_byte(A + i);
-                    write_byte(X + i, b);
-                }
-                E = 0xFFFF;
-            }
-            break;
-            
-        /* ========== P Mode Instructions (20-2F) ========== */
-        case 0x20: case 0x21: case 0x22: case 0x23: case 0x24:
-        case 0x25: case 0x26: case 0x27: case 0x28: case 0x29:
-        case 0x2A: case 0x2B: case 0x2C: case 0x2D: case 0x2E: case 0x2F:
-            /* Same as 00-0F but with P mode addressing (already handled by ea) */
-            switch (opcode & 0x0F) {
-                case 0x00: A = read_word(ea); set_condition_codes_load(A); break;
-                case 0x01: E = read_word(ea); set_condition_codes_load(E); break;
-                case 0x02: X = read_word(ea); set_condition_codes_load(X); break;
-                case 0x03: A ^= read_word(ea); set_condition_codes_load(A); break;
-                case 0x04: A = (ea - GPRIME) & 0x7FFF; set_condition_codes_load(A); break;
-                case 0x05:
-                    carry = 0;
-                    result = add16(A, read_word(ea), &carry, &overflow);
-                    A = result;
-                    set_condition_codes_arithmetic(result, carry, overflow);
-                    break;
-                case 0x06:
-                    carry = 0;
-                    result = sub16(A, read_word(ea), &carry, &overflow);
-                    A = result;
-                    set_condition_codes_arithmetic(result, carry, overflow);
-                    break;
-                case 0x07: A |= read_word(ea); set_condition_codes_load(A); break;
-                case 0x08:
-                    if (mode != 1) return MM_PRVINS;
-                    data = read_word(ea);
-                    if (div32(E, A, data, &A, &E) != 0) OV = 1;
-                    set_condition_codes_load(A);
-                    break;
-                case 0x09: A &= read_word(ea); set_condition_codes_load(A); break;
-                case 0x0A:
-                    for (i = 0; i < E; i++) {
-                        s_byte = read_byte(A + i);
-                        d_byte = read_byte(X + i);
-                        if (s_byte != d_byte) {
-                            set_condition_codes_string(0, s_byte < d_byte);
-                            break;
-                        }
-                    }
-                    if (i == E) set_condition_codes_string(1, 0);
-                    break;
-                case 0x0B:
-                    data = read_word(ea);
-                    set_condition_codes_compare(A, data, 0);
-                    break;
-                case 0x0C:
-                    data = read_word(ea);
-                    mul32(A, data, &E, &A);
-                    set_condition_codes_load(E);
-                    break;
-                case 0x0D:
-                    data = read_word(ea);
-                    A = (A & 0x00FF) | (data & 0xFF00);
-                    set_condition_codes_load(A);
-                    break;
-                case 0x0E:  /* LBR P mode: load right byte into A, left byte cleared */
-                    data = read_word(ea);
-                    A = data & 0x00FF;
-                    set_condition_codes_load(A);
-                    break;
-                case 0x0F:  /* LBX P mode: load right byte into X, left byte cleared */
-                    data = read_word(ea);
-                    X = data & 0x00FF;
-                    set_condition_codes_load(X);
-                    break;
-            }
-            break;
-            
-        /* ========== Shift and Index Instructions (30-3F) ========== */
-        case 0x30:  /* SHR - Shift Register (DL mode: shift word read from memory) */
-            /* Shift word from memory (16-bit); use low byte for parameters.
-             * Bit layout of shift parameter byte: bits[7:5]=type, bits[4:0]=count.
-             * Verified: &23h=SRCS3, &E8h=SRCD8, &41h=SAD1. */
-            {
-                uint8 shr_word = (uint8)(read_word(ea) & 0xFF);
-                shift_type_t type = (shr_word >> 5) & 0x07;
-                count = shr_word & 0x1F;
-                switch (type) {
-                    case SHIFT_SLLS: A = shift_lls(A, count); break;
-                    case SHIFT_SRCS: A = shift_srcs(A, count); break;
-                    case SHIFT_SAD:  shift_sad(&E, &A, count); break;
-                    case SHIFT_SLCD: shift_lcd(&E, &A, count); break;
-                    case SHIFT_SLCS: A = shift_slcs(A, count); break;
-                    case SHIFT_SAS:  A = shift_sas(A, count); break;
-                    case SHIFT_SRLS: A = shift_rls(A, count); break;
-                    case SHIFT_SRCD: shift_rcd(&E, &A, count); break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0x31:  /* SRG - Set Register (inter-register operations) */
-            {
-                /* SRG operand is the displacement directly (even values 0x00..0x1E map to ops 0-F) */
-                srg_op_t srg_op = disp & 0x1E;  /* mask bit 0, use raw disp as case value */
-                switch (srg_op) {
-                    case SRG_RTS:  /* RTS - Return Section */
-                        uint16 saved_P = read_word(L) + GPRIME;
-			uint16 saved_L = read_word(L + 2) + GPRIME;
-			P = saved_P;
-			L = saved_L;
-                        break;
-                    case SRG_XAE:  /* XAE - Exchange A and E */
-                        data = A; A = E; E = data;
-                        break;
-                    case SRG_XAX:  /* XAX - Exchange A and X */
-                        data = A; A = X; X = data;
-                        break;
-                    case SRG_XEX:  /* XEX - Exchange E and X */
-                        data = E; E = X; X = data;
-                        break;
-                    case SRG_XAA:  /* XAA - Exchange bytes of A */
-                        A = ((A & 0xFF) << 8) | ((A >> 8) & 0xFF);
-                        break;
-                    case SRG_CCE:  /* CCE - Complement E */
-                        E = ~E & 0xFFFF;
-                        break;
-                    case SRG_RSV:  /* RSV - Return Supervisor (privileged) */
-                        /* Manual: ((G)+4)->indicators; (G)+((G)+2)->L; (G)+2+((G))->P; MS cleared */
-                        if (mode != 1) return MM_PRVINS;
-                        {
-                            uint16 saved_flags = read_word(G + 4);
-                            C  = (saved_flags >> 14) & 1;   /* bit 1 in Mitra bit-order = C */
-                            OV = (saved_flags >> 13) & 1;   /* bit 2 = O */
-                            /* MS bit (bit 3): manual says RSV clears MS (returns to slave) */
-                            MS = 0;
-                            /* MA restored from saved_flags bit 12 */
-                            MA = (saved_flags >> 12) & 1;
-                            PR = (saved_flags >> 11) & 1;
-                        }
-                        L = (G + read_word(G + 2)) & 0x7FFF;
-                        P = (G + 2 + read_word(G)) & 0x7FFF;
-                        break;
-                    case SRG_ACE:  /* ACE - Add Carry to E */
-                        E = (E + C) & 0xFFFF;
-                        break;
-                    case SRG_CCA:  /* CCA - Complement A */
-                        A = ~A & 0xFFFF;
-                        set_condition_codes_load(A);
-                        break;
-                    case SRG_AEE:  /* AEE - A XOR E */
-                        A ^= E;
-                        set_condition_codes_load(A);
-                        break;
-                    case SRG_CNX:  /* CNX - Copy Negative X */
-                        X = (~X + 1) & 0xFFFF;
-                        break;
-                    case SRG_AIE:  /* AIE - A OR E */
-                        A |= E;
-                        set_condition_codes_load(A);
-                        break;
-                    case SRG_AAE:  /* AAE - A AND E */
-                        A &= E;
-                        set_condition_codes_load(A);
-                        break;
-                    case SRG_LNE:  /* LNE - Load -1 into E */
-                        E = 0xFFFF;
-                        break;
-                    case SRG_CNA:  /* CNA - Copy Negative A */
-                        A = (~A + 1) & 0xFFFF;
-                        set_condition_codes_load(A);
-                        break;
-                    case SRG_CHX:  /* CHX - Compute Half X */
-                        X = (X >> 1) | (X & 0x8000);
-                        break;
-                    default:
-                        /* Reserved - no operation */
-                        break;
-                }
-            }
-            break;
-            
-        case 0x32:  /* ICX - Increment X (DL mode: operand = read_word(L+D)) */
-            /* Manual: (X) + Y2 -> X. In DL mode, Y2 = contents of memory at L+D. */
-            X = (X + read_word(ea)) & 0x7FFF;
-            set_condition_codes_load(X);
-            break;
-            
-        case 0x33:  /* DCX - Decrement X (DL mode: operand = read_word(L+D)) */
-            X = (X - read_word(ea)) & 0x7FFF;
-            set_condition_codes_load(X);
-            break;
-            
-        case 0x34:  /* Reserved */
-            break;
-            
-        case 0x35:  /* ICL - Increment L (DL mode: operand = read_word(L+D)) */
-            L = (L + read_word(ea)) & 0x7FFF;
-            break;
-            
-        case 0x36:  /* DCL - Decrement L (DL mode: operand = read_word(L+D)) */
-            L = (L - read_word(ea)) & 0x7FFF;
-            break;
-            
-        case 0x37:  /* CSV - Call Supervisor */
-/*
- * In Slave mode (modern user mode) the I/O programs use CSV instruction which is a call to the Master mode (modern kernel mode)
-*/
-            {
-                uint16 section = ea;
-                /* Save context in TWB (first 3 words of CDS) */
-                write_word(G, P - GPRIME);
-                write_word(G + 2, L - GPRIME);
-                write_word(G + 4, (C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0));
-                /* Load new context from PRTS */
-                uint16 PRTS_addr = read_word(12);
-                L = (PRTS_addr - (4*section)) + G;
-                P = (PRTS_addr - (4*section) + 2) + G;
-                MS = 1;  /* Enter master mode */
-                PR = 1;  /* Override protection */
-            }
-            break;
-            
-        case 0x38:  /* CLS - Call Section */
-            /* Manual: CLS is NON-PRIVILEGED, available in both master and slave mode. */
-            /* Remove the mode check - manual says non-privileged. */
-            {
-                uint16 section = ea;
-                /* PRT entry for section N is at (G - 4*N): word 0 = P-base, word 2 = L-base */
-                uint16 called_Lbase = read_word((G - 4 * section + 2) & 0x7FFF);
-                uint16 called_Pbase = read_word((G - 4 * section) & 0x7FFF);
-                uint16 LDS = (called_Lbase + G) & 0x7FFF;
-                /* Save return info (calling section's P-G', L-G') in called section's LDS[0],[2] */
-                write_word(LDS,       (P - GPRIME) & 0x7FFF);
-                write_word(LDS + 2,   (L - GPRIME) & 0x7FFF);
-                /* Load called section's bases */
-                L = LDS;   /* called section's LDS base IS its L */
-                P = (called_Pbase + G) & 0x7FFF;
-            }
-            break;
-            
-        case 0x39:  /* LDR - Load A from register Rn where n=(Y) */
-            /* Manual: (Rn) -> A. Block 0 assignment: R0=A,R1=E,R2=P,R3=X,R4=L,R5=G,R6=V,R7=W */
-            {
-                uint16 reg_num = ea & 0x3F;   /* register number IS the computed operand */
-                switch (reg_num & 0x07) {     /* only low 3 bits select within block 0 */
-                    case 0: A = A; break;     /* LDR R0 = read A into A (no-op) */
-                    case 1: A = E; break;
-                    case 2: A = P; break;
-                    case 3: A = X; break;
-                    case 4: A = L; break;
-                    case 5: A = G; break;
-                    /* R6=V, R7=W are micro-program use; not program-accessible */
-                    default: break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0x3A:  /* STR - Store A into register Rn where n=(Y) (privileged) */
-            /* Manual: (A) -> Rn. Block 0: R0=A,R1=E,R2=P,R3=X,R4=L,R5=G */
-            if (mode != 1) return MM_PRVINS;
-            {
-                uint16 reg_num = ea & 0x3F;
-                switch (reg_num & 0x07) {
-                    case 0: A = A; break;   /* STR R0 = write A to A (no-op) */
-                    case 1: E = A; break;
-                    case 2: P = A & 0x7FFF; break;
-                    case 3: X = A; break;
-                    case 4: L = A & 0x7FFF; break;
-                    case 5: G = A; break;
-                    default: break;
-                }
-            }
-            break;
-            
-        case 0x3B:  /* LDP - Load Protection (privileged) */
-            if (mode != 1) return MM_PRVINS;
-            PR = read_word(ea) & 1;
-            break;
-            
-        case 0x3C:  /* SHC - Shift Special (DL mode: shift word from memory) */
-            /* Same bit layout: bits[7:5]=type, bits[4:0]=count (in 8-bit param byte).
-             * SHC types: 0=SLLD, 1=DITR, 2=PTY, 3=DITR, 4=SRLD, 5=DITR, 6=NLZ, 7=DITR. */
-            {
-                uint8 shc_word = (uint8)(read_word(ea) & 0xFF);
-                uint8 shc_type = (shc_word >> 5) & 0x07;
-                count = shc_word & 0x1F;
-                switch (shc_type) {
-                    case 0:  /* SLLD - Shift Left Logical Double */
-                        shift_lld(&E, &A, count);
-                        break;
-                    case 1:  /* DITR - Deactivate High-Speed Interrupt (privileged) */
-                        /* Manual DITR: saves indicators to R6 of reserved block; clears R12;
-                         * de-activates the high-speed level; restores previous indicators from
-                         * R6 of block 0. This is a register-block operation, not a memory
-                         * context swap. Simplified emulation: just deactivate the level. */
-                        if (mode != 1) return MM_PRVINS;
-                        if (!(cpu_unit.flags & UNIT_HSINT)) return MM_INVINS;
-                        /* Deactivate the high-speed interrupt level */
-                        int_req &= ~(1u << int_lvl);
-                        int_lvl = get_highest_interrupt();
-                        break;
-                    case 2:  /* PTY - Compute parity */
-                        E = compute_parity(&A, count);
-                        break;
-                    case 3:  /* Reserved / DITR variant */
-                        if (mode != 1) return MM_PRVINS;
-                        int_req &= ~(1u << int_lvl);
-                        int_lvl = 0;
-                        break;
-                    case 4:  /* SRLD - Shift Right Logical Double */
-                        shift_rld(&E, &A, count);
-                        break;
-                    case 5:  /* Reserved */
-                        break;
-                    case 6:  /* NLZ - Normalize */
-                        normalize(&E, &A, &X, count);
-                        break;
-                    case 7:  /* Reserved */
-                        break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0x3D:  /* TES - Test and Set (privileged) */
-            if (mode != 1) return MM_PRVINS;
-            A = read_word(ea);
-            write_word(ea, 0);
-            set_condition_codes_load(A);
-            break;
-            
-        case 0x3E: case 0x3F:  /* Reserved */
-            break;
-            
-        /* ========== DG Mode Instructions (40-4F) ========== */
-        case 0x40: case 0x41: case 0x42: case 0x43: case 0x44:
-        case 0x45: case 0x46: case 0x47: case 0x48: case 0x49:
-        case 0x4A: case 0x4B: case 0x4C: case 0x4D: case 0x4E: case 0x4F:
-            /* Same as 00-0F with DG addressing (already handled) */
-            switch (opcode & 0x0F) {
-                case 0x00: A = read_word(ea); set_condition_codes_load(A); break;
-                case 0x01: E = read_word(ea); set_condition_codes_load(E); break;
-                case 0x02: X = read_word(ea); set_condition_codes_load(X); break;
-                case 0x03: A ^= read_word(ea); set_condition_codes_load(A); break;
-                case 0x04: A = (ea - GPRIME) & 0x7FFF; set_condition_codes_load(A); break;
-                case 0x05:
-                    carry = 0;
-                    result = add16(A, read_word(ea), &carry, &overflow);
-                    A = result;
-                    set_condition_codes_arithmetic(result, carry, overflow);
-                    break;
-                case 0x06:
-                    carry = 0;
-                    result = sub16(A, read_word(ea), &carry, &overflow);
-                    A = result;
-                    set_condition_codes_arithmetic(result, carry, overflow);
-                    break;
-                case 0x07: A |= read_word(ea); set_condition_codes_load(A); break;
-                case 0x08:
-                    if (mode != 1) return MM_PRVINS;
-                    data = read_word(ea);
-                    if (div32(E, A, data, &A, &E) != 0) OV = 1;
-                    set_condition_codes_load(A);
-                    break;
-                case 0x09: A &= read_word(ea); set_condition_codes_load(A); break;
-                case 0x0A:
-                    for (i = 0; i < E; i++) {
-                        s_byte = read_byte(A + i);
-                        d_byte = read_byte(X + i);
-                        if (s_byte != d_byte) {
-                            set_condition_codes_string(0, s_byte < d_byte);
-                            break;
-                        }
-                    }
-                    if (i == E) set_condition_codes_string(1, 0);
-                    break;
-                case 0x0B:
-                    data = read_word(ea);
-                    set_condition_codes_compare(A, data, 0);
-                    break;
-                case 0x0C:
-                    data = read_word(ea);
-                    mul32(A, data, &E, &A);
-                    set_condition_codes_load(E);
-                    break;
-                case 0x0D:
-                    data = read_word(ea);
-                    A = (A & 0x00FF) | (data & 0xFF00);
-                    set_condition_codes_load(A);
-                    break;
-                case 0x0E:  /* LBR P mode: load right byte into A, left byte cleared */
-                    data = read_word(ea);
-                    A = data & 0x00FF;
-                    set_condition_codes_load(A);
-                    break;
-                case 0x0F:  /* LBX P mode: load right byte into X, left byte cleared */
-                    data = read_word(ea);
-                    X = data & 0x00FF;
-                    set_condition_codes_load(X);
-                    break;
-            }
-            break;
-            
-        /* ========== DG Mode Store Instructions (50-5F) ========== */
-        case 0x50:  /* DLD (DG mode) */
-            E = read_word(ea);
-            A = read_word((ea + 2) & 0x7FFF);
-            set_condition_codes_load(E);
-            break;
-        case 0x51:  /* STA (DG mode) */
-            write_word(ea, A);
-            break;
-        case 0x52:  /* STE (DG mode) */
-            write_word(ea, E);
-            break;
-        case 0x53:  /* STX (DG mode) */
-            write_word(ea, X);
-            break;
-        case 0x54:  /* SBL (DG mode) */
-            data = read_word(ea);
-            write_word(ea, (data & 0x00FF) | (A & 0xFF00));
-            break;
-        case 0x55:  /* SBR (DG mode) */
-            data = read_word(ea);
-            write_word(ea, (data & 0xFF00) | (A & 0x00FF));
-            break;
-        case 0x56:  /* DST (DG mode) */
-            write_word(ea, E);
-            write_word((ea + 2) & 0x7FFF, A);
-            break;
-        case 0x57:  /* ADM (DG mode) */
-            data = read_word(ea);
-            carry = 0;
-            result = add16(data, A, &carry, &overflow);
-            write_word(ea, result);
-            A = result;
-            set_condition_codes_arithmetic(result, carry, overflow);
-            break;
-        case 0x58:  /* SPA (DG mode) */
-            A = ((P + 2) + GPRIME) & 0x7FFF;
-            write_word(ea, A);
-            break;
-        case 0x59:  /* STS (DG mode) */
-            data = read_word(ea);
-            result = (data & ~E) | (A & E);
-            write_word(ea, result);
-            set_condition_codes_load(result);
-            break;
-        case 0x5A:  /* FAD (DG mode) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a + b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-        case 0x5B:  /* FSU (DG mode) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a - b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-        case 0x5C:  /* FMU (DG mode) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a * b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-        case 0x5D:  /* FDV (DG mode) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                if (b == 0.0) return mitra_trap(TRAP_INVINS, pc, trappc);
-                double r = a / b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-        case 0x5E:  /* TRS (DG mode) */
-            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
-            {
-                uint16 table = ea;
-                for (i = 0; i < E; i++) {
-                    uint8 b = read_byte(A + i);
-                    uint8 t = read_byte(table + (b & 0xFF));
-                    write_byte(X + i, t);
-                }
-                E = 0xFFFF;
-            }
-            break;
-        case 0x5F:  /* MVS (DG mode) */
-            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
-            {
-                for (i = 0; i < E; i++) {
-                    uint8 b = read_byte(A + i);
-                    write_byte(X + i, b);
-                }
-                E = 0xFFFF;
-            }
-            break;
-            
-        /* ========== IL Mode Instructions (60-6F) ========== */
-        case 0x60: case 0x61: case 0x62: case 0x63: case 0x64:
-        case 0x65: case 0x66: case 0x67: case 0x68: case 0x69:
-        case 0x6A: case 0x6B: case 0x6C: case 0x6D: case 0x6E: case 0x6F:
-            /* Same as 00-0F with IL addressing */
-            switch (opcode & 0x0F) {
-                case 0x00: A = read_word(ea); set_condition_codes_load(A); break;
-                case 0x01: E = read_word(ea); set_condition_codes_load(E); break;
-                case 0x02: X = read_word(ea); set_condition_codes_load(X); break;
-                case 0x03: A ^= read_word(ea); set_condition_codes_load(A); break;
-                case 0x04: A = (ea - GPRIME) & 0x7FFF; set_condition_codes_load(A); break;
-                case 0x05:
-                    carry = 0;
-                    result = add16(A, read_word(ea), &carry, &overflow);
-                    A = result;
-                    set_condition_codes_arithmetic(result, carry, overflow);
-                    break;
-                case 0x06:
-                    carry = 0;
-                    result = sub16(A, read_word(ea), &carry, &overflow);
-                    A = result;
-                    set_condition_codes_arithmetic(result, carry, overflow);
-                    break;
-                case 0x07: A |= read_word(ea); set_condition_codes_load(A); break;
-                case 0x08:
-                    if (mode != 1) return MM_PRVINS;
-                    data = read_word(ea);
-                    if (div32(E, A, data, &A, &E) != 0) OV = 1;
-                    set_condition_codes_load(A);
-                    break;
-                case 0x09: A &= read_word(ea); set_condition_codes_load(A); break;
-                case 0x0A:
-                    for (i = 0; i < E; i++) {
-                        s_byte = read_byte(A + i);
-                        d_byte = read_byte(X + i);
-                        if (s_byte != d_byte) {
-                            set_condition_codes_string(0, s_byte < d_byte);
-                            break;
-                        }
-                    }
-                    if (i == E) set_condition_codes_string(1, 0);
-                    break;
-                case 0x0B:
-                    data = read_word(ea);
-                    set_condition_codes_compare(A, data, 0);
-                    break;
-                case 0x0C:
-                    data = read_word(ea);
-                    mul32(A, data, &E, &A);
-                    set_condition_codes_load(E);
-                    break;
-                case 0x0D:
-                    data = read_word(ea);
-                    A = (A & 0x00FF) | (data & 0xFF00);
-                    set_condition_codes_load(A);
-                    break;
-                case 0x0E:  /* LBR P mode: load right byte into A, left byte cleared */
-                    data = read_word(ea);
-                    A = data & 0x00FF;
-                    set_condition_codes_load(A);
-                    break;
-                case 0x0F:  /* LBX P mode: load right byte into X, left byte cleared */
-                    data = read_word(ea);
-                    X = data & 0x00FF;
-                    set_condition_codes_load(X);
-                    break;
-            }
-            break;
-            
-        /* ========== IL Mode Store Instructions (70-7F) ========== */
-        case 0x70:  /* DLD (IL mode) */
-            E = read_word(ea);
-            A = read_word((ea + 2) & 0x7FFF);
-            set_condition_codes_load(E);
-            break;
-        case 0x71:  /* STA (IL mode) */
-            write_word(ea, A);
-            break;
-        case 0x72:  /* STE (IL mode) */
-            write_word(ea, E);
-            break;
-        case 0x73:  /* STX (IL mode) */
-            write_word(ea, X);
-            break;
-        case 0x74:  /* SBL (IL mode) */
-            data = read_word(ea);
-            write_word(ea, (data & 0x00FF) | (A & 0xFF00));
-            break;
-        case 0x75:  /* SBR (IL mode) */
-            data = read_word(ea);
-            write_word(ea, (data & 0xFF00) | ((A << 8) & 0x00FF));
-            break;
-        case 0x76:  /* DST (IL mode) */
-            write_word(ea, E);
-            write_word((ea + 2) & 0x7FFF, A);
-            break;
-        case 0x77:  /* ADM (IL mode) */
-            data = read_word(ea);
-            carry = 0;
-            result = add16(data, A, &carry, &overflow);
-            write_word(ea, result);
-            A = result;
-            set_condition_codes_arithmetic(result, carry, overflow);
-            break;
-        case 0x78:  /* SPA (IL mode) */
-            A = ((P + 2) + GPRIME) & 0x7FFF;
-            write_word(ea, A);
-            break;
-        case 0x79:  /* STS (IL mode) */
-            data = read_word(ea);
-            result = (data & ~E) | (A & E);
-            write_word(ea, result);
-            set_condition_codes_load(result);
-            break;
-        case 0x7A:  /* FAD (IL mode) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a + b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-        case 0x7B:  /* FSU (IL mode) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a - b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-        case 0x7C:  /* FMU (IL mode) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                double r = a * b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-        case 0x7D:  /* FDV (IL mode) */
-            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
-            data = read_word(ea);
-            data2 = read_word((ea + 2) & 0x7FFF);
-            {
-                double a = mitra_to_double(A, E);
-                double b = mitra_to_double(data, data2);
-                if (b == 0.0) return mitra_trap(TRAP_INVINS, pc, trappc);
-                double r = a / b;
-                double_to_mitra(r, &A, &E);
-                set_condition_codes_load(A);
-            }
-            break;
-        case 0x7E:  /* TRS (IL mode) */
-            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
-            {
-                uint16 table = ea;
-                for (i = 0; i < E; i++) {
-                    uint8 b = read_byte(A + i);
-                    uint8 t = read_byte(table + (b & 0xFF));
-                    write_byte(X + i, t);
-                }
-                E = 0xFFFF;
-            }
-            break;
-        case 0x7F:  /* MVS (IL mode) */
-            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
-            {
-                for (i = 0; i < E; i++) {
-                    uint8 b = read_byte(A + i);
-                    write_byte(X + i, b);
-                }
-                E = 0xFFFF;
-            }
-            break;
-            
-        /* ========== IGX Mode Instructions (80-8F, A0-AF, C0-CF, E0-EF handled above) ========== */
-        /* These follow the same pattern - addressing already handled by ea_class0 with AM_IGX */
-        /* For brevity, we'll use the same handlers as 00-0F */
-        
-        /* ========== Branch Instructions (Class 2) ========== */
-        case 0xC0:  /* BCT - Branch on Carry True (RP mode) */
-            if (C) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xC1:  /* BRX - Branch Indexed (RP mode) */
-            P = (ea + X) & 0x7FFF;
-            break;
-        case 0xC2:  /* BOT - Branch on Overflow True (RP mode) */
-            if (OV) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xC3:  /* BCF - Branch on Carry False (RP mode) */
-            if (!C) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xC4:  /* BAN - Branch on A Negative (RP mode) */
-            if (A & 0x8000) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xC5:  /* BAZ - Branch on A Zero (RP mode) */
-            if (A == 0) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xC6:  /* BOF - Branch on Overflow False (RP mode) */
-            if (!OV) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xC7:  /* BRU - Branch Unconditional (RP mode) */
-            P = ea;
-            break;
-            
-        /* Same for RM mode */
-        case 0xC8:  /* BCT (RM mode) */
-            if (C) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xC9:  /* BRX (RM mode) */
-            P = (ea + X) & 0x7FFF;
-            break;
-        case 0xCA:  /* BOT (RM mode) */
-            if (OV) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xCB:  /* BCF (RM mode) */
-            if (!C) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xCC:  /* BAN (RM mode) */
-            if (A & 0x8000) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xCD:  /* BAZ (RM mode) */
-            if (A == 0) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xCE:  /* BOF (RM mode) */
-            if (!OV) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xCF:  /* BRU (RM mode) */
-            P = ea;
-            break;
-            
-        /* IL mode branches */
-        case 0xD0:  /* BCT (IL mode) */
-            if (C) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xD1:  /* BRX (IL mode) */
-            P = (ea + X) & 0x7FFF;
-            break;
-        case 0xD2:  /* BOT (IL mode) */
-            if (OV) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xD3:  /* BCF (IL mode) */
-            if (!C) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xD4:  /* BAN (IL mode) */
-            if (A & 0x8000) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xD5:  /* BAZ (IL mode) */
-            if (A == 0) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xD6:  /* BOF (IL mode) */
-            if (!OV) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xD7:  /* BRU (IL mode) */
-            P = ea;
-            break;
-            
-        /* IG mode branches */
-        case 0xD8:  /* BCT (IG mode) */
-            if (C) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xD9:  /* BRX (IG mode) */
-            P = (ea + X) & 0x7FFF;
-            break;
-        case 0xDA:  /* BOT (IG mode) */
-            if (OV) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xDB:  /* BCF (IG mode) */
-            if (!C) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xDC:  /* BAN (IG mode) */
-            if (A & 0x8000) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xDD:  /* BAZ (IG mode) */
-            if (A == 0) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xDE:  /* BOF (IG mode) */
-            if (!OV) P = ea;
-            else P = (P + 2) & 0x7FFF;
-            break;
-        case 0xDF:  /* BRU (IG mode) */
-            P = ea;
-            break;
-            
-        /* ========== PX Mode Instructions (E0-EF) ========== */
-        case 0xE0:  /* SHR in PX mode (operand = displacement byte) */
-            {
-                shift_type_t type = (disp >> 5) & 0x07;
-                count = disp & 0x1F;
-                switch (type) {
-                    case SHIFT_SLLS: A = shift_lls(A, count); break;
-                    case SHIFT_SRCS: A = shift_srcs(A, count); break;
-                    case SHIFT_SAD:  shift_sad(&E, &A, count); break;
-                    case SHIFT_SLCD: shift_lcd(&E, &A, count); break;
-                    case SHIFT_SLCS: A = shift_slcs(A, count); break;
-                    case SHIFT_SAS:  A = shift_sas(A, count); break;
-                    case SHIFT_SRLS: A = shift_rls(A, count); break;
-                    case SHIFT_SRCD: shift_rcd(&E, &A, count); break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0xE1:  /* SRG in PX mode */
-            /* Handled same as 0x31 */
-            {
-                /* SRG operand is the displacement directly (even values 0x00..0x1E map to ops 0-F) */
-                srg_op_t srg_op = disp & 0x1E;  /* mask bit 0, use raw disp as case value */
-                switch (srg_op) {
-                    case SRG_RTS: 
-			uint16 saved_P = read_word(L) + GPRIME;
-			uint16 saved_L = read_word(L + 2) + GPRIME;
-			P = saved_P;
-			L = saved_L;
-                    break;
-                    case SRG_XAE: data = A; A = E; E = data; break;
-                    case SRG_XAX: data = A; A = X; X = data; break;
-                    case SRG_XEX: data = E; E = X; X = data; break;
-                    case SRG_XAA: A = ((A & 0xFF) << 8) | ((A >> 8) & 0xFF); break;
-                    case SRG_CCE: E = ~E & 0xFFFF; break;
-                    case SRG_RSV:
-                        if (mode != 1) return MM_PRVINS;
-                        {
-                            uint16 saved_flags = read_word(G + 4);
-                            C  = (saved_flags >> 14) & 1;
-                            OV = (saved_flags >> 13) & 1;
-                            MA = (saved_flags >> 12) & 1;
-                            PR = (saved_flags >> 11) & 1;
-                            MS = 0;
-                        }
-                        L = (G + read_word(G + 2)) & 0x7FFF;
-                        P = (G + 2 + read_word(G)) & 0x7FFF;
-                        break;
-                    case SRG_ACE: E = (E + C) & 0xFFFF; break;
-                    case SRG_CCA: A = ~A & 0xFFFF; set_condition_codes_load(A); break;
-                    case SRG_AEE: A ^= E; set_condition_codes_load(A); break;
-                    case SRG_CNX: X = (~X + 1) & 0xFFFF; break;
-                    case SRG_AIE: A |= E; set_condition_codes_load(A); break;
-                    case SRG_AAE: A &= E; set_condition_codes_load(A); break;
-                    case SRG_LNE: E = 0xFFFF; break;
-                    case SRG_CNA: A = (~A + 1) & 0xFFFF; set_condition_codes_load(A); break;
-                    case SRG_CHX: X = (X >> 1) | (X & 0x8000); break;
-                    default: break;
-                }
-            }
-            break;
-            
-        case 0xE2:  /* ICX in PX mode (operand = displacement, not memory) */
-            /* In PX mode, Y2 = D (the displacement byte itself as a value). */
-            X = (X + ea) & 0x7FFF;
-            set_condition_codes_load(X);
-            break;
-            
-        case 0xE3:  /* DCX in PX mode */
-            X = (X - ea) & 0x7FFF;
-            set_condition_codes_load(X);
-            break;
-            
-        case 0xE4:  /* Reserved */
-            break;
-            
-        case 0xE5:  /* ICL in PX mode (operand = displacement) */
-            L = (L + ea) & 0x7FFF;
-            break;
-            
-        case 0xE6:  /* DCL in PX mode */
-            L = (L - ea) & 0x7FFF;
-            break;
-            
-        case 0xE7:  /* CSV in PX mode */
-/*
- * In Slave mode (modern user mode) the program uses CSV instruction which is a call to the Master mode (modern kernel mode)
-*/
-            {
-                uint16 section = ea;
-                write_word(G, P - GPRIME);
-                write_word(G + 2, L - GPRIME);
-                write_word(G + 4, (C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0));
-                /* Load new context from PRTS */
-                uint16 PRTS_addr = read_word(12);
-                L = (PRTS_addr - (4*section)) + G;
-                P = (PRTS_addr - (4*section) + 2) + G;
-                MS = 1;
-                PR = 1;
-            }
-            break;
-            
-        case 0xE8:  /* CLS in PX mode */
-            {
-                uint16 section = ea;
-                uint16 called_Lbase = read_word((G - 4 * section + 2) & 0x7FFF);
-                uint16 called_Pbase = read_word((G - 4 * section) & 0x7FFF);
-                uint16 LDS = (called_Lbase + G) & 0x7FFF;
-                write_word(LDS,     (P - GPRIME) & 0x7FFF);
-                write_word(LDS + 2, (L - GPRIME) & 0x7FFF);
-                L = LDS;
-                P = (called_Pbase + G) & 0x7FFF;
-            }
-            break;
-            
-        case 0xE9:  /* LDR in PX mode */
-            {
-                uint16 reg_num = ea & 0x3F;
-                switch (reg_num & 0x07) {
-                    case 0: A = A; break;
-                    case 1: A = E; break;
-                    case 2: A = P; break;
-                    case 3: A = X; break;
-                    case 4: A = L; break;
-                    case 5: A = G; break;
-                    default: break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0xEA:  /* STR in PX mode (privileged) */
-            if (mode != 1) return MM_PRVINS;
-            {
-                uint16 reg_num = ea & 0x3F;
-                switch (reg_num & 0x07) {
-                    case 0: A = A; break;
-                    case 1: E = A; break;
-                    case 2: P = A & 0x7FFF; break;
-                    case 3: X = A; break;
-                    case 4: L = A & 0x7FFF; break;
-                    case 5: G = A; break;
-                    default: break;
-                }
-            }
-            break;
-            
-        case 0xEB:  /* LDP in PX mode (privileged) */
-            if (mode != 1) return MM_PRVINS;
-            PR = read_word(ea) & 1;
-            break;
-            
-        case 0xEC:  /* SHC in PX mode */
-            count = disp & 0x1F;
-            {
-                uint8 shc_type = (disp >> 5) & 0x07;
-                switch (shc_type) {
-                    case 0: shift_lld(&E, &A, count); break;
-                    case 1:
-                        if (mode != 1) return MM_PRVINS;
-                        int_req &= ~(1u << int_lvl);
-                        int_lvl = 0;
-                        break;
-                    case 2: E = compute_parity(&A, count); break;
-                    case 3:
-                        if (mode != 1) return MM_PRVINS;
-                        int_req &= ~(1u << int_lvl);
-                        int_lvl = 0;
-                        break;
-                    case 4: shift_rld(&E, &A, count); break;
-                    case 5: break;
-                    case 6: normalize(&E, &A, &X, count); break;
-                    case 7: break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0xED:  /* TES in PX mode (privileged) */
-            if (mode != 1) return MM_PRVINS;
-            A = read_word(ea);
-            write_word(ea, 0);
-            set_condition_codes_load(A);
-            break;
-            
-        case 0xEE: case 0xEF:  /* Reserved */
-            break;
-            
-        /* ========== P Mode System Instructions (F0-FF) ========== */
-        case 0xF0:  /* SHR (P mode: operand = displacement byte) */
-            {
-                shift_type_t type = (disp >> 5) & 0x07;
-                count = disp & 0x1F;
-                switch (type) {
-                    case SHIFT_SLLS: A = shift_lls(A, count); break;
-                    case SHIFT_SRCS: A = shift_srcs(A, count); break;
-                    case SHIFT_SAD:  shift_sad(&E, &A, count); break;
-                    case SHIFT_SLCD: shift_lcd(&E, &A, count); break;
-                    case SHIFT_SLCS: A = shift_slcs(A, count); break;
-                    case SHIFT_SAS:  A = shift_sas(A, count); break;
-                    case SHIFT_SRLS: A = shift_rls(A, count); break;
-                    case SHIFT_SRCD: shift_rcd(&E, &A, count); break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0xF1:  /* SRG (P mode) */
-            {
-                /* SRG operand is the displacement directly (even values 0x00..0x1E map to ops 0-F) */
-                srg_op_t srg_op = disp & 0x1E;  /* mask bit 0, use raw disp as case value */
-                switch (srg_op) {
-                    case SRG_RTS: {
-                        /* Manual: ((L))+G' -> P,  ((L)+2)+G' -> L */
-                        uint16 saved_P = read_word(L) + GPRIME;
-                        uint16 saved_L = read_word(L + 2) + GPRIME;
-                        P = saved_P;
-                        L = saved_L;
-                        break;
-                    }
-                    case SRG_XAE: data = A; A = E; E = data; break;
-                    case SRG_XAX: data = A; A = X; X = data; break;
-                    case SRG_XEX: data = E; E = X; X = data; break;
-                    case SRG_XAA: A = ((A & 0xFF) << 8) | ((A >> 8) & 0xFF); break;
-                    case SRG_CCE: E = ~E & 0xFFFF; break;
-                    case SRG_RSV:
-                        if (mode != 1) return MM_PRVINS;
-                        {
-                            uint16 saved_flags = read_word(G + 4);
-                            C  = (saved_flags >> 14) & 1;
-                            OV = (saved_flags >> 13) & 1;
-                            MA = (saved_flags >> 12) & 1;
-                            PR = (saved_flags >> 11) & 1;
-                            MS = 0;
-                        }
-                        L = (G + read_word(G + 2)) & 0x7FFF;
-                        P = (G + 2 + read_word(G)) & 0x7FFF;
-                        break;
-                    case SRG_ACE: E = (E + C) & 0xFFFF; break;
-                    case SRG_CCA: A = ~A & 0xFFFF; set_condition_codes_load(A); break;
-                    case SRG_AEE: A ^= E; set_condition_codes_load(A); break;
-                    case SRG_CNX: X = (~X + 1) & 0xFFFF; break;
-                    case SRG_AIE: A |= E; set_condition_codes_load(A); break;
-                    case SRG_AAE: A &= E; set_condition_codes_load(A); break;
-                    case SRG_LNE: E = 0xFFFF; break;
-                    case SRG_CNA: A = (~A + 1) & 0xFFFF; set_condition_codes_load(A); break;
-                    case SRG_CHX: X = (X >> 1) | (X & 0x8000); break;
-                    default: break;
-                }
-            }
-            break;
-            
-        case 0xF2:  /* ICX (P mode: operand = displacement) */
-            X = (X + ea) & 0x7FFF;
-            set_condition_codes_load(X);
-            break;
-            
-        case 0xF3:  /* DCX (P mode) */
-            X = (X - ea) & 0x7FFF;
-            set_condition_codes_load(X);
-            break;
-            
-        case 0xF4:  /* SYS family (privileged) */
-            if (mode != 1) 
-            	return MM_PRVINS;
-	    // Bits 14, 15 decode 4 intructions: STM, DIT, RD, WD
-            /* F4xx family: bits 3:0 of displacement select function */
-            /* F400=CLM, F401=DIT, F402=RD, F403=WD, F408=STM             */
-            switch (disp & 0x000F) {
-                case 0x00:  /* CLM - Clear Interrupt Mask */
-                    MA = 0;
-                    break;
-                case 0x08:  /* STM - Set Interrupt Mask */
-                    MA = 1;
-                    break;
-                case 0x01:  
-                /* 
-                * DIT - Deactivate Interrupt 
-                * The function of DIT is to terminate this interrupt subroutine and to return control to the interrupted program.
-                * The program context comprises the current contents of X, E, A, G, L, P registers and indicators.
-                */
-                    {
-                        /* Manual DIT: P += 2 (already done by fetch); save context of current
-                         * level; deactivate it; accept highest-priority waiting level; restore
-                         * context. Context save area layout (7 words per manual):
-                         *   word 0: Indicators (PR|MA|MS|OV|C packed), words 1-6: X,E,A,G,L,P
-                         * CPT (Context Pointer Table) is at address M[10].
-                         * CPT[i] = address of save area for interrupt level i.             
-			*/
-                        uint16 cpt_base = M[10];  /* absolute word address of CPT */
-                        uint16 ctx_ptr;
-                        uint16 ind_word;
-                        /* --- Save current level context --- */
-                        ctx_ptr = read_word(cpt_base + int_lvl);
-                        ind_word = ((PR  & 1) << 15) | ((MA  & 1) << 14) |
-                                   ((MS  & 1) << 13) | ((OV  & 1) << 12) | ((C & 1) << 11);
-                        write_word(ctx_ptr,      ind_word);
-                        write_word(ctx_ptr + 1,  X);
-                        write_word(ctx_ptr + 2,  E);
-                        write_word(ctx_ptr + 3,  A);
-                        write_word(ctx_ptr + 4,  G);
-                        write_word(ctx_ptr + 5,  L);
-                        write_word(ctx_ptr + 6,  P);
-                        /* --- Deactivate current level --- */
-                        int_req &= ~(1u << int_lvl);
-                        /* --- Accept highest-priority waiting level --- */
-                        int_lvl = get_highest_interrupt();
-                        /* --- Restore new level context --- */
-                        ctx_ptr = read_word(cpt_base + int_lvl);
-                        ind_word = read_word(ctx_ptr);
-                        PR = (ind_word >> 15) & 1;
-                        MA = (ind_word >> 14) & 1;
-                        MS = (ind_word >> 13) & 1;
-                        OV = (ind_word >> 12) & 1;
-                        C  = (ind_word >> 11) & 1;
-                        X = read_word(ctx_ptr + 1);
-                        E = read_word(ctx_ptr + 2);
-                        A = read_word(ctx_ptr + 3);
-                        G = read_word(ctx_ptr + 4);
-                        L = read_word(ctx_ptr + 5);
-                        P = read_word(ctx_ptr + 6);
-                    }
-                    break;
-                case 0x02:  /* RD - Read Direct */
-/*
- * In Slave mode (modern user mode) the program uses CSV instruction which is a call to the Master mode (modern kernel mode)
- * In Master mode I/O is done with RD or WD instructions.
-
-        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
-      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-      |          F4           |                 | 1  0|
-      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-
-	  The mode is determined by the contents of E-register.
-      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-      |   cylinder 0-407         | T| sector 0-23  | D|
-      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-*/
-                    return io_rd(E, &A);
-                case 0x03:  /* WD - Write Direct */
-/*
- * In Slave mode (modern user mode) the program uses CSV instruction which is a call to the Master mode (modern kernel mode)
- * In Master mode I/O is done with RD or WD instructions.
-        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
-      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-      |          F4           |                 | 1  0|
-      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-
-	  The mode is determined by the contents of E-register.
-      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-      |   cylinder 0-407         | T| sector 0-23  | D|
-      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-*/
-                    return io_wd(E, A);
-                default:
-                    if (stop_invins) return STOP_INVINS;
-                    break;
-            }
-            break;
-            
-        case 0xF5:  /* ICL (P mode: operand = displacement) */
-            L = (L + ea) & 0x7FFF;
-            break;
-            
-        case 0xF6:  /* DCL (P mode) */
-            L = (L - ea) & 0x7FFF;
-            break;
-            
-        case 0xF7:  /* CSV (P mode) */
-/*
- * In Slave mode (modern user mode) the program uses CSV instruction which is a call to the Master mode (modern kernel mode)
-*/
-            {
-                uint16 section = ea;
-                write_word(G, P - GPRIME);
-                write_word(G + 2, L - GPRIME);
-                write_word(G + 4, (C ? 1 : 0) | (OV ? 2 : 0) | (MS ? 4 : 0));
-                /* Load new context from PRTS */
-                uint16 PRTS_addr = read_word(12);
-                L = (PRTS_addr - (4*section)) + G;
-                P = (PRTS_addr - (4*section) + 2) + G;
-                MS = 1;
-                PR = 1;
-            }
-            break;
-            
-        case 0xF8:  /* CLS (P mode) */
-            if (mode == 0) return MM_PRVINS;
-            {
-                uint16 section = ea;
-                uint LDS = read_word(G - 4 * section + 2) + G;
-                write_word(LDS, P - GPRIME);
-                write_word(LDS + 2, L - GPRIME);
-                L = read_word(G - 4 * section + 2) + G;
-                P = read_word(G - 4 * section) + G;
-            }
-            break;
-            
-        case 0xF9:  /* LDR (P mode) */
-            {
-                uint16 reg_num = ea & 0x3F;
-                switch (reg_num & 0x07) {
-                    case 0: A = A; break;
-                    case 1: A = E; break;
-                    case 2: A = P; break;
-                    case 3: A = X; break;
-                    case 4: A = L; break;
-                    case 5: A = G; break;
-                    default: break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0xFA:  /* STR (P mode, privileged) */
-            if (mode != 1) return MM_PRVINS;
-            {
-                uint16 reg_num = ea & 0x3F;
-                switch (reg_num & 0x07) {
-                    case 0: A = A; break;
-                    case 1: E = A; break;
-                    case 2: P = A & 0x7FFF; break;
-                    case 3: X = A; break;
-                    case 4: L = A & 0x7FFF; break;
-                    case 5: G = A; break;
-                    default: break;
-                }
-            }
-            break;
-            
-        case 0xFB:  /* LDP (P mode, privileged) */
-            if (mode != 1) return MM_PRVINS;
-            PR = read_word(ea) & 1;
-            break;
-            
-        case 0xFC:  /* SHC (P mode: operand = displacement byte) */
-            {
-                uint8 shc_type = (disp >> 5) & 0x07;
-                count = disp & 0x1F;
-                switch (shc_type) {
-                    case 0: shift_lld(&E, &A, count); break;
-                    case 1:
-                        if (mode != 1) return MM_PRVINS;
-                        int_req &= ~(1u << int_lvl);
-                        int_lvl = 0;
-                        break;
-                    case 2: E = compute_parity(&A, count); break;
-                    case 3:
-                        if (mode != 1) return MM_PRVINS;
-                        int_req &= ~(1u << int_lvl);
-                        int_lvl = 0;
-                        break;
-                    case 4: shift_rld(&E, &A, count); break;
-                    case 5: break;
-                    case 6: normalize(&E, &A, &X, count); break;
-                    case 7: break;
-                }
-                set_condition_codes_load(A);
-            }
-            break;
-            
-        case 0xFD:  /* TES (P mode, privileged) */
-            if (mode != 1) return MM_PRVINS;
-            A = read_word(ea);
-            write_word(ea, 0);
-            set_condition_codes_load(A);
-            break;
-            
-        case 0xFE: case 0xFF:  /* Reserved */
-            break;
-            
-        default:
-            if (stop_invins)
-                return STOP_INVINS;
-            break;
-    }
-    
-    return SCPE_OK;
+uint16 group_2(uint16 inst, uint16 target_address, uint32 mode) {
+    /*
+    *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+    *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    *      |                                   |  opcode   |
+    *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+    */
+uint16 opcode = (inst >> I_GROUP_SHIFT) & 0x1F;
+uint16 disp   = inst & I_DISP_MASK; 
+uint16 data;
+uint16 tmp;
+uint16 carry, overflow;
+uint8 s_byte, d_byte;
+int i;
+switch (opcode) {
+     case 0x08:  
+         if (mode != 1) 
+         	return MM_PRVINS;
+         if (!(cpu_unit.flags & UNIT_MULDIV)) 
+         	return MM_INVINS;
+         data = read_word(target_address);
+         if (div32(reg_block[curr_bloc].E, reg_block[curr_bloc].A, data, &reg_block[curr_bloc].A, &reg_block[curr_bloc].E) != 0) {
+             reg_block[curr_bloc].OV = 1;
+         }
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+     case 0x09:  
+         reg_block[curr_bloc].A = reg_block[curr_bloc].A & read_word(target_address);
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+     case 0x0A:  
+         if (!(cpu_unit.flags & UNIT_EXTINS)) 
+         	return MM_INVINS;
+         s_byte = read_byte(disp); 
+         for (i = 0; i < reg_block[curr_bloc].E; i++) { 
+             d_byte = read_byte(reg_block[curr_bloc].G + reg_block[curr_bloc].A + i); 
+             if (s_byte == d_byte) {
+ 	    	reg_block[curr_bloc].A = reg_block[curr_bloc].G + reg_block[curr_bloc].A + i;
+ 	    	reg_block[curr_bloc].E = 0;
+                 	set_condition_codes_string(0, s_byte < d_byte);
+                 	break;
+             }
+         }
+         if (i == reg_block[curr_bloc].E) {
+         	reg_block[curr_bloc].A = reg_block[curr_bloc].G + reg_block[curr_bloc].A;
+         	reg_block[curr_bloc].E = 0;
+         	set_condition_codes_string(1, 0);
+         	}
+         break;
+     case 0x0B:  
+         data = read_word(target_address);
+         sub16(reg_block[curr_bloc].A, data, &carry, &overflow); 
+         set_condition_codes_compare(reg_block[curr_bloc].A, data, 0);
+         break;
+     case 0x0C:  
+         if (!(cpu_unit.flags & UNIT_MULDIV)) 
+         	return MM_INVINS;
+         data = read_word(target_address);
+         mul32(reg_block[curr_bloc].A, data, &reg_block[curr_bloc].E, &reg_block[curr_bloc].A);
+         set_condition_codes_load(reg_block[curr_bloc].E);
+         break;
+     case 0x0D:  
+         data = read_word(target_address);
+         reg_block[curr_bloc].A = (reg_block[curr_bloc].A & 0x00FF) | (data & 0xFF00);   
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+     case 0x0E:  
+         data = read_word(target_address);
+         reg_block[curr_bloc].A = data & 0x00FF;   
+         set_condition_codes_load(reg_block[curr_bloc].A);
+         break;
+     case 0x0F:  
+         data = read_word(target_address);
+         reg_block[curr_bloc].X = data & 0x00FF;
+         set_condition_codes_load(reg_block[curr_bloc].X);
+         break;
+ }
+ return 0;
 }
 
 /* Helper to get highest pending interrupt */
 static int get_highest_interrupt(void)
 {
-    int i;
-    for (i = 31; i >= 0; i--) {
-        if (int_req & (1u << i)) return i;
-    }
-    return 0;
+int i;
+for (i = 31; i >= 0; i--) {
+if (int_req.intrp_level & (1u << i))
+return i;
+}
+return 0;
 }
 
 /* ========== SIMH Interface Functions ========== */
-
 t_stat sim_instr(void)
 {
-    uint16 inst, save_P, trap_P;
-    t_stat reason = 0;
-
-    xfr_req = xfr_req & ~1;
-    int_req = int_req & ~1;
-    api_lvl = api_lvl & ~1;
-    set_dyn_map();
-    
-    io_poll_devices(); // also for checking front panel
-    
-    int_reqhi = api_findreq();
-
-    while (reason == 0) {
-        if (cpu_astop) {
-            cpu_astop = 0;
-            return SCPE_STOP;
-        }
-
-        if (sim_interval <= 0) {
-            if ((reason = sim_process_event()))
-                break;
-            int_reqhi = api_findreq();
-        }
-
-        sim_interval--;
-        
+uint16 inst, save_P, trap_P;
+t_stat reason = 0;
+int_req.intrp_level = int_req.intrp_level & ~1;
+ set_dyn_map();
+ io_poll_devices();  // also for checking front panel
+ while (reason == 0) {
+     if (cpu_astop) {
+         cpu_astop = 0;
+         return SCPE_STOP;
+     }
+     if (sim_interval <= 0) {
+         if ((reason = sim_process_event()))
+             break;
+     }
+     sim_interval--;
+ 
         /* Check for traps
         * Traps are not implemented in the current simulator FIXME
         * The manual (section II-8.2) describes a hardware suspension system distinct from interrupts, operating at the micro-program level with a 4-deep stack.
-        * Suspensions are used to couple peripherals requiring "urgent or frequent transfers" with a 300 μs maximum response time. 
-        * Currently the emulator has no suspension machinery whatsoever ( xfr_req is declared but never processed). 
+        * Suspensions are used to couple peripherals requiring "urgent or frequent transfers" with 300 μs maximum response time. 
+        * Currently the emulator has no suspension machinery whatsoever. 
 	* For DMA-style peripherals relying on suspensions, this means those transfer paths are non-functional.
 	*/
 
         /* Check for interrupts */
-        if ((MA == 0) && int_reqhi && int_reqhi > int_lvl) {
-            uint16 pa = int_vec[int_reqhi];
-            if (pa == 0) {
-                reason = STOP_ILLVEC;
-                break;
-            }
-            
+     if ((MA == 0) && int_reqhi && int_reqhi > int_lvl) {
+         uint16 pa = int_vec[int_reqhi];
+         if (pa == 0) {
+             reason = STOP_ILLVEC;
+             break;
+         }
             /* Save context of currently-running level (per DIT manual section)
              * CPT is a 32-word table at absolute address M[10].
              * CPT[i] = word address of the context save area for level i.
              * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P */
-            {
-                uint16 cpt_base = M[10];
-                uint16 ctx_ptr, ind_word;
-                /* --- Save old level --- */
-                ctx_ptr = read_word(cpt_base + int_lvl);
-                ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
-                           ((MS & 1) << 13) | ((OV & 1) << 12) | ((C & 1) << 11);
-                write_word(ctx_ptr,     ind_word);
-                write_word(ctx_ptr + 1, X);
-                write_word(ctx_ptr + 2, E);
-                write_word(ctx_ptr + 3, A);
-                write_word(ctx_ptr + 4, G);
-                write_word(ctx_ptr + 5, L);
-                write_word(ctx_ptr + 6, P);
-                /* --- Switch to new level --- */
-                int_lvl = int_reqhi;
-                /* --- Load new level's context (P comes from the save area = entry point) --- */
-                ctx_ptr = read_word(cpt_base + int_lvl);
-                ind_word = read_word(ctx_ptr);
-                PR = (ind_word >> 15) & 1;
-                MA = (ind_word >> 14) & 1;
-                MS = (ind_word >> 13) & 1;
-                OV = (ind_word >> 12) & 1;
-                C  = (ind_word >> 11) & 1;
-                X = read_word(ctx_ptr + 1);
-                E = read_word(ctx_ptr + 2);
-                A = read_word(ctx_ptr + 3);
-                G = read_word(ctx_ptr + 4);
-                L = read_word(ctx_ptr + 5);
-                P = read_word(ctx_ptr + 6);  /* Entry point of interrupt handler */
-            }
-            
-            /* Acknowledge interrupt */
-            if (pa != VEC_RTCP && rtc_pie) {
-                int_req |= INT_RTCP;
-            }
-            int_reqhi = api_findreq();
-            
-        } else {
+          if(int_req.high_speed == false)
+ 	    {
+ 	        uint16 cpt_base = M[10];
+ 	        uint16 ctx_ptr, ind_word;
+		        /* --- Save old level --- */
+ 	        ctx_ptr = read_word(cpt_base + int_lvl);
+ 	        ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
+ 	                   ((MS & 1) << 13) | ((reg_block[curr_bloc].OV & 1) << 12) | ((reg_block[curr_bloc].C & 1) << 11);
+ 	        write_word(ctx_ptr, ind_word);
+ 	        write_word(ctx_ptr + 1, reg_block[curr_bloc].X);
+ 	        write_word(ctx_ptr + 2, reg_block[curr_bloc].E);
+ 	        write_word(ctx_ptr + 3, reg_block[curr_bloc].A);
+ 	        write_word(ctx_ptr + 4, reg_block[curr_bloc].G);
+ 	        write_word(ctx_ptr + 5, reg_block[curr_bloc].L);
+ 	        write_word(ctx_ptr + 6, reg_block[curr_bloc].P);
+		        /* --- Switch to new level --- */
+		        int_lvl = int_reqhi;
+		        /* --- Load new level's context (P comes from the save area = entry point) --- */
+	        ctx_ptr = read_word(cpt_base + int_lvl);
+ 	        ind_word = read_word(ctx_ptr);
+ 	        PR = (ind_word >> 15) & 1;
+ 	        MA = (ind_word >> 14) & 1;
+ 	        MS = (ind_word >> 13) & 1;
+ 	        reg_block[curr_bloc].OV = (ind_word >> 12) & 1;
+ 	        reg_block[curr_bloc].C  = (ind_word >> 11) & 1;
+ 	        reg_block[curr_bloc].X = read_word(ctx_ptr + 1);
+ 	        reg_block[curr_bloc].E = read_word(ctx_ptr + 2);
+ 	        reg_block[curr_bloc].A = read_word(ctx_ptr + 3);
+ 	        reg_block[curr_bloc].G = read_word(ctx_ptr + 4);
+ 	        reg_block[curr_bloc].L = read_word(ctx_ptr + 5);
+ 	        reg_block[curr_bloc].P = read_word(ctx_ptr + 6);  
+ 	    }
+     else {
+	    /* High speed interrupt processing
+	    * Acceptance of the high-speed interrupt includes the following operations:
+	    *	- Normal interrupts are placed in waiting status until acknowledgment of the high-speed interrupt.
+	    *	- Current indicators are saved in register 6 of block O.
+	    *	- R12 is loaded with the number of the block which is reserved for high-speed interrupt processing.
+	    *	- Indicators are loaded with the contents of register 6 in the reserved block.
+	    */
+     	curr_bloc = int_req.intrp_level;
+     	}
+         if (pa != VEC_RTCP && rtc_pie) {
+             int_req.intrp_level |= INT_RTCP;
+         }
+     } else {
             /* Normal instruction fetch */
-            if (sim_brk_summ) {
-                static uint32 bmask[] = {SWMASK('E') | SWMASK('N'),
-                                         SWMASK('E') | SWMASK('M'),
-                                         SWMASK('E') | SWMASK('U')};
-                uint32 btyp = sim_brk_test(P, bmask[cpu_mode]);
-                if (btyp) {
-                    if (btyp & SWMASK('E'))
-                        reason = STOP_IBKPT;
-                    else if (btyp & BRK_TYP_DYN_STEPOVER)
-                        reason = STOP_DBKPT;
-                    else switch (btyp) {
-                        case SWMASK('M'): reason = STOP_MBKPT; break;
-                        case SWMASK('N'): reason = STOP_NBKPT; break;
-                        case SWMASK('U'): reason = STOP_UBKPT; break;
-                    }
-                    sim_interval++;
-                    break;
-                }
-            }
-            
-            trap_P = save_P = P;
-            inst = read_word(P);
-            P = (P + 2) & 0x7FFF;  /* Instructions are word-aligned */
-            
-            if (inst != 0) {
-                reason = one_inst(inst, save_P, cpu_mode, &trap_P);
-                if (reason > 0 && reason != STOP_HALT) {
-                    P = save_P;
-                }
-                if (reason == STOP_IONRDY)
-                    reason = 0;
-            }
-        }
-    }
-    
-    if (pcq_r)
-        pcq_r->qptr = pcq_p;
-    return reason;
+         if (sim_brk_summ) {
+             static uint32 bmask[] = {SWMASK('E') | SWMASK('N'),
+                                      SWMASK('E') | SWMASK('M'),
+                                      SWMASK('E') | SWMASK('U')};
+             uint32 btyp = sim_brk_test(reg_block[curr_bloc].P, bmask[cpu_mode]);
+             if (btyp) {
+                 if (btyp & SWMASK('E'))
+                     reason = STOP_IBKPT;
+                 else if (btyp & BRK_TYP_DYN_STEPOVER)
+                     reason = STOP_DBKPT;
+                 else switch (btyp) {
+                     case SWMASK('M'): reason = STOP_MBKPT; break;
+                     case SWMASK('N'): reason = STOP_NBKPT; break;
+                     case SWMASK('U'): reason = STOP_UBKPT; break;
+                 }
+                 sim_interval++;
+                 break;
+             }
+         }
+         trap_P = save_P = reg_block[curr_bloc].P;
+         inst = read_word(reg_block[curr_bloc].P);
+         reg_block[curr_bloc].P = (reg_block[curr_bloc].P + 2) & 0x7FFF;  
+         if (inst != 0) {
+             reason = one_inst(inst, save_P, cpu_mode, &trap_P);
+             if (reason > 0 && reason != STOP_HALT) {
+                 reg_block[curr_bloc].P = save_P;
+             }
+             if (reason == STOP_IONRDY)
+                 reason = 0;
+         }
+     }
+ }
+ if (pcq_r)
+     pcq_r->qptr = pcq_p;
+ return reason;
 }
 
 /* ========== RTC Functions ========== */
-
 t_stat rtc_svc(UNIT *uptr)
 {
-    if (rtc_pie)
-        int_req |= INT_RTCP;
-    rtc_unit.wait = sim_rtcn_calb(rtc_tps, TMR_RTC);
-    sim_activate(&rtc_unit, rtc_unit.wait);
-    return SCPE_OK;
+if (rtc_pie)
+int_req.intrp_level |= INT_RTCP;
+rtc_unit.wait = sim_rtcn_calb(rtc_tps, TMR_RTC);
+sim_activate(&rtc_unit, rtc_unit.wait);
+return SCPE_OK;
 }
 
 t_stat rtc_reset(DEVICE *dptr)
 {
-    rtc_pie = 0;
-    rtc_unit.wait = sim_rtcn_init(rtc_unit.wait, TMR_RTC);
-    sim_activate(&rtc_unit, rtc_unit.wait);
-    return SCPE_OK;
+rtc_pie = 0;
+rtc_unit.wait = sim_rtcn_init(rtc_unit.wait, TMR_RTC);
+sim_activate(&rtc_unit, rtc_unit.wait);
+return SCPE_OK;
 }
 
 t_stat rtc_set_freq(UNIT *uptr, int32 val, CONST char *cptr, void *desc)
 {
-    if (cptr)
-        return SCPE_ARG;
-    if (val != 50 && val != 60)
-        return SCPE_IERR;
-    rtc_tps = val;
-    return SCPE_OK;
+if (cptr)
+return SCPE_ARG;
+if (val != 50 && val != 60)
+return SCPE_IERR;
+rtc_tps = val;
+return SCPE_OK;
 }
 
 t_stat rtc_show_freq(FILE *st, UNIT *uptr, int32 val, CONST void *desc)
 {
-    fprintf(st, (rtc_tps == 50) ? "50Hz" : "60Hz");
-    return SCPE_OK;
+fprintf(st, (rtc_tps == 50) ? "50Hz" : "60Hz");
+return SCPE_OK;
 }
 
 /* ========== CPU Reset and Management ========== */
-
 t_stat cpu_reset(DEVICE *dptr)
 {
-    A = E = X = L = G = P = S = 0;
-    MREG = V = W = U = 0;
-    C = OV = MS = 0;
-    MA = PR = 0;
-    cpu_mode = 0;
-    int_req = 0;
-    int_lvl = 0;
-    
-	/* Front panel reset */
-    cpu_running = 0;
-    interrupts_enabled = 0;
-    routing_enabled = 0;
-    panel_addr_lights = 0;
-    panel_data_lights = 0;
+reg_block[curr_bloc].A = reg_block[curr_bloc].E = reg_block[curr_bloc].X = reg_block[curr_bloc].L = reg_block[curr_bloc].G = reg_block[curr_bloc].P = S = 0;
+curr_bloc = 0;
+MREG = reg_block[curr_bloc].V = reg_block[curr_bloc].W = U = 0;
+reg_block[curr_bloc].C = reg_block[curr_bloc].OV = MS = 0;
+MA = PR = 0;
+cpu_mode = 0;
+int_req.intrp_level = 0;
+int_lvl = 0;
 
-    panel_reset();   /* call the panel reset too */
-    
-    return SCPE_OK;
+ cpu_running = 0;
+ interrupts_enabled = 0;
+ routing_enabled = 0;
+ panel_addr_lights = 0;
+ panel_data_lights = 0;
+ panel_reset();   
+    /* At cpu_reset(), the simulator does not need to initialize its own CPT in memory. 
+    Every interrupt has an associated pointer indicating a memory area in which the context may be saved on occurence of an interrupt at this level. 
+    The memory area for saving the context at a given level is actually reserved only if a program is connected to this level. 
+    Generally, this area is located immediately after the program storage area.
+    This area contains the register and indicator values at the last interrupt time (either if a higher level interrupt has been accepted, or if the level has been de-activated). 
+    If the program is never interrupted, the saving area contains the initial program contents (at the time its execution is started).
+    For example, it could allocate 32 context areas (7 words each) and fill the CPT at M[10] with their addresses. 
+    This would allow the interrupt system to be tested independently of a full OS.
+    */
+ 
+ return SCPE_OK;
 }
+
+void io_interrupt_dispatch(uint16 intr_lvl, t_bool hgh_spd)
+{
+    /* FIXME
+    * This is called when an interrupt occurs in a device.
+    * Its the way SIMH advertize an interrupt occured.
+     * The actual interrupt handling is done in sim_instr().
+     * This function just ensures the interrupt is processed. */
+    /* Force interrupt processing in the main loop */
+    /* The actual work is done in sim_instr() which checks int_req */
+
+int_req.intrp_level = intr_lvl;
+int_req.high_speed = hgh_spd;
+}
+
+
 
 t_stat cpu_set_size(UNIT *uptr, int32 val, CONST char *cptr, void *desc)
 {
-    int32 mc = 0;
-    uint32 i;
-    
-    if (val <= 0 || val > MAX_MEM_WORDS || (val & 037777) != 0)
-        return SCPE_ARG;
-    
-    for (i = val; i < MEMsize; i++)
-        mc = mc | M[i];
-    
-    if (mc != 0 && !get_yn("Really truncate memory [N]?", FALSE))
-        return SCPE_OK;
-    
-    MEMsize = val;
-    for (i = MEMsize; i < MAX_MEM_WORDS; i++)
-        M[i] = 0;
-    
+int32 mc = 0;
+uint32 i;
+if (val <= 0 || val > MAX_MEM_WORDS || (val & 037777) != 0)
+    return SCPE_ARG;
+for (i = val; i < MEMsize; i++)
+    mc = mc | M[i];
+if (mc != 0 && !get_yn("Really truncate memory [N]?", FALSE))
     return SCPE_OK;
+MEMsize = val;
+for (i = MEMsize; i < MAX_MEM_WORDS; i++)
+    M[i] = 0;
+return SCPE_OK;
 }
 
 t_stat cpu_ex(t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 {
-    uint32 pa = addr & 0x7FFF;
-    if (pa >= MEMsize)
-        return SCPE_NXM;
-    if (vptr != NULL)
-        *vptr = M[pa] & DMASK;
-    return SCPE_OK;
+uint32 pa = addr & 0x7FFF;
+if (pa >= MEMsize)
+return SCPE_NXM;
+if (vptr != NULL)
+*vptr = M[pa] & DMASK;
+return SCPE_OK;
 }
 
 t_stat cpu_dep(t_value val, t_addr addr, UNIT *uptr, int32 sw)
 {
-    uint32 pa = addr & 0x7FFF;
-    if (pa >= MEMsize)
-        return SCPE_NXM;
-    M[pa] = val & DMASK;
-    return SCPE_OK;
+uint32 pa = addr & 0x7FFF;
+if (pa >= MEMsize)
+return SCPE_NXM;
+M[pa] = val & DMASK;
+return SCPE_OK;
 }
 
 /* ========== History Functions ========== */
-
 void inst_hist(uint32 c, uint32 pc, uint32 tp)
 {
-    if (cpu_mode == hst_exclude)
-        return;
-    hst_p = (hst_p + 1);
-    if (hst_p >= hst_lnt)
-        hst_p = 0;
-    hst[hst_p].typ = tp | (OV << 4) | (cpu_mode << 5);
-    hst[hst_p].P = pc;
-    hst[hst_p].A = A;
-    hst[hst_p].E = E;
-    hst[hst_p].X = X;
-    hst[hst_p].L = L;
-    hst[hst_p].G = G;
-    hst[hst_p].S = S;
-    hst[hst_p].U = U;
-    hst[hst_p].V = V;
-    hst[hst_p].W = W;
-    hst[hst_p].MREG = MREG;
-    hst[hst_p].ea = HIST_NOEA;
+if (cpu_mode == hst_exclude)
+return;
+hst_p = (hst_p + 1);
+if (hst_p >= hst_lnt)
+hst_p = 0;
+hst[hst_p].typ = tp | (reg_block[curr_bloc].OV << 4) | (cpu_mode << 5);
+hst[hst_p].P = pc;
+hst[hst_p].A = reg_block[curr_bloc].A;
+hst[hst_p].E = reg_block[curr_bloc].E;
+hst[hst_p].X = reg_block[curr_bloc].X;
+hst[hst_p].L = reg_block[curr_bloc].L;
+hst[hst_p].G = reg_block[curr_bloc].G;
+hst[hst_p].S = S;
+hst[hst_p].U = U;
+hst[hst_p].V = reg_block[curr_bloc].V;
+hst[hst_p].W = reg_block[curr_bloc].W;
+hst[hst_p].MREG = MREG;
+hst[hst_p].ea = HIST_NOEA;
 }
 
 t_stat cpu_set_hist(UNIT *uptr, int32 val, CONST char *cptr, void *desc)
 {
-    int32 i, lnt;
-    t_stat r;
-    
-    if (cptr == NULL) {
-        for (i = 0; i < hst_lnt; i++)
-            hst[i].typ = 0;
-        hst_p = 0;
-        return SCPE_OK;
-    }
-    
-    lnt = (int32)get_uint(cptr, 10, HIST_MAX, &r);
-    if (r != SCPE_OK || (lnt && lnt < HIST_MIN))
-        return SCPE_ARG;
-    
-    hst_p = 0;
-    if (sim_switches & SWMASK('M'))
-        hst_exclude = 1;
-    else if (sim_switches & SWMASK('N'))
-        hst_exclude = 0;
-    else if (sim_switches & SWMASK('U'))
-        hst_exclude = 2;
-    else
-        hst_exclude = BAD_MODE;
-    
-    if (hst_lnt) {
-        free(hst);
-        hst_lnt = 0;
-        hst = NULL;
-    }
-    
-    if (lnt) {
-        hst = (InstHistory *)calloc(lnt, sizeof(InstHistory));
-        if (hst == NULL)
-            return SCPE_MEM;
-        hst_lnt = lnt;
-    }
-    
-    return SCPE_OK;
+int32 i, lnt;
+t_stat r;
+if (cptr == NULL) {
+     for (i = 0; i < hst_lnt; i++)
+         hst[i].typ = 0;
+     hst_p = 0;
+     return SCPE_OK;
+ }
+ lnt = (int32)get_uint(cptr, 10, HIST_MAX, &r);
+ if (r != SCPE_OK || (lnt && lnt < HIST_MIN))
+     return SCPE_ARG;
+ hst_p = 0;
+ if (sim_switches & SWMASK('M'))
+     hst_exclude = 1;
+ else if (sim_switches & SWMASK('N'))
+     hst_exclude = 0;
+ else if (sim_switches & SWMASK('U'))
+     hst_exclude = 2;
+ else
+     hst_exclude = BAD_MODE;
+ if (hst_lnt) {
+     free(hst);
+     hst_lnt = 0;
+     hst = NULL;
+ }
+ if (lnt) {
+     hst = (InstHistory *)calloc(lnt, sizeof(InstHistory));
+     if (hst == NULL)
+         return SCPE_MEM;
+     hst_lnt = lnt;
+ }
+ return SCPE_OK;
 }
 
 t_stat cpu_show_hist(FILE *st, UNIT *uptr, int32 val, CONST void *desc)
 {
-    int32 k, lnt;
-    CONST char *cptr = (CONST char *)desc;
-    t_stat r;
-    InstHistory *h;
-    static const char *cyc[] = {"   ", "   ", "INT", "TRP"};
-    static const char *modes = "NMU?";
-    
-    if (hst_lnt == 0)
-        return SCPE_NOFNC;
-    
-    if (cptr) {
-        lnt = (int32)get_uint(cptr, 10, hst_lnt, &r);
-        if (r != SCPE_OK || lnt == 0)
-            return SCPE_ARG;
-    } else {
-        lnt = hst_lnt;
-    }
-    
-    fprintf(st, "CYC PC    MD OV A        E        X        EA\n\n");
-    for (k = 0; k < lnt; k++) {
-        h = &hst[(++hst_p) % hst_lnt];
-        if (h->typ) {
-            fprintf(st, "%s %05o %c  %o  %06o %06o %06o\n",
-                cyc[h->typ & 3], h->P, modes[(h->typ >> 5) & 3],
-                (h->typ >> 4) & 1, h->A, h->E, h->X);
-        }
-    }
-    return SCPE_OK;
+int32 k, lnt;
+CONST char *cptr = (CONST char *)desc;
+t_stat r;
+InstHistory *h;
+static const char *cyc[] = {"   ", "   ", "INT", "TRP"};
+static const char *modes = "NMU?";
+if (hst_lnt == 0)
+     return SCPE_NOFNC;
+ if (cptr) {
+     lnt = (int32)get_uint(cptr, 10, hst_lnt, &r);
+     if (r != SCPE_OK || lnt == 0)
+         return SCPE_ARG;
+ } else {
+     lnt = hst_lnt;
+ }
+ fprintf(st, "CYC PC    MD OV A        E        X        EA\n\n");
+ uint16 hst_p_loc = hst_p;
+ for (k = 0; k < lnt; k++) {
+     h = &hst[(++hst_p_loc) % hst_lnt];
+     if (h->typ) {
+         fprintf(st, "%s %05o %c  %o  %06o %06o %06o\n",
+             cyc[h->typ & 3], h->P, modes[(h->typ >> 5) & 3],
+             (h->typ >> 4) & 1, h->A, h->E, h->X);
+     }
+ }
+ return SCPE_OK;
 }

@@ -138,6 +138,7 @@ All devices will follow the same integration pattern, they provide:
 #include "mitra_io.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #define SAGEM_SECTOR_SIZE      256
 #define SAGEM_SECTORS_PER_TRACK 12
@@ -175,7 +176,7 @@ static uint32 ts_to_sector(uint32 track, uint32 sector)
 static void sagem_interrupt(void)
 {
     int_req |= (1 << 9);   /* typical interrupt level for SAGEM disk */
-    io_interrupt_dispatch();
+        io_interrupt_dispatch(int_req, false);
 }
 
 /* Start a transfer */

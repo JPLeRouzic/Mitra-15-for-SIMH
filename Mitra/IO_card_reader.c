@@ -97,6 +97,7 @@ All devices will follow the same integration pattern, they provide:
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #define CDR_COLUMNS      80
 #define CDR_BYTES_PER_CARD 120
@@ -287,7 +288,7 @@ int cdr_poll(void)
 static void cdr_interrupt(void)
 {
     int_req |= (1 << 4);
-    io_interrupt_dispatch();
+    io_interrupt_dispatch(9, false);
 }
 
 /* WD handler (E=7) */

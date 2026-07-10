@@ -70,6 +70,7 @@ All devices will follow the same integration pattern, they provide:
 
 #include "mitra_io.h"
 #include <stdio.h>
+#include <stdbool.h>
 
 /* External CPU control flags (defined in mitra_cpu.c) */
 extern int cpu_running;      /* 1 = running, 0 = stopped */

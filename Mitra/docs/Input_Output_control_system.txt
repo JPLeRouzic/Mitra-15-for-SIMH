@@ -1,0 +1,735 @@
+Mitra 15 
+ 8. Input/Output control system
+
+
+
+
+
+
+V 111-1 . INPUT/OUTPUT SYSTEM ORGANIZATION
+
+The following sections only describe Input/Output operations under Monitor control.
+Though the procedure has a standard aspect and is mainly 0riented towards standard peripheral transfers, it will be seen later that it also provides for processing non-standard peripheral transfers and offers the convenient feature of a direct user check on the validity of such transfers.
+An Input/Output operation may be divided into five steps:
+ a) Reservation of a buffer, if required.
+ b) Transfer request (resident system ca 11).
+ c) Transfer initialization.
+ d) Transfer completion.
+ e) Transfer end and validity check.
+Step a) is and independent supervisor call: reservation of a dynamic data block. Steps a) and b) are performed by the requesting task (CSV M:1O or M:ZIO).
+Step c) is performed by the Monitor in response to the M:1O call. Control is returned to the calling program upon transfer initialization.
+Steps d) and e) are controlled by the system in full independence from the calling task, and in apparent simultaneity with the currently executed tasks; the calling program may follow the transfer progress, if required (CSV M:WA IT or M:ZWAT).
+Remark :
+If the device is busy at transfer request time, two different processes may be initiated (according to the Monitor).
+ 1) The request is queued and control is returned to the calling task.
+From the user's viewpoint, everything goes on as if transfer initialization step c) were actually completed,
+i.e. he may consider that step d) has begun and may wait for transfer end, if required.
+In such a case, step d) combines the delay for waiting for the logical release of the device and the duration of the actual transfer initialization and performance.
+Queuing is always possible at or above MTR-level.
+ 2) No queuing of the request; control is returned to the ca !ling task only when the transfer has beep actually initialized.
+
+
+V 111-2. INPUT/OUTPUT INTERFACE
+
+V 111-2.l. Definition
+
+Most of supervisor processing is common to all types of transfer during steps b), c) and e) described above
+l) Transfer request is analyzed for a possible preliminary processing,
+
+ 2) Logical occupation of the handler is tested,
+ 3) If required, the transfer request is queued and the Supervisor manages the queue,
+ 4) All parameters required for physical initialization and transfer control are set up,
+ 5) If possible, the device initial status is partially or completely read and analyzed if the whole procedure or part of it is common to all devices,
+ 6) A branch is made to the specific control module of the device (handler),
+ 7) A number of error conditions are acknowledged and processed when the transfer is over (sole processing specific to step e)).
+The Input/Output interface of the Operating System includes the whole of these processing common to all transfers which are performed between the time the user issues a request and the time a handler takes over, and between the transfer end and the release of its results to the user.
+
+ ◦ Input/Output processing levels Three level classes may be considered
+ a) Physical level (level 0) at which the handler performs operations which are specific to a given type of device.
+ b) Logical level (level 1) which includes steps 2 through 7 above. This level is that of the resident core of the basic monitor. It is usually called "1/0 supervisor" (or more restrictively, "1/0 interface").
+ c) Upper levels (2 and above) which perform step 1 of the above processing according to a hierarchy which defines the degree of sophistication of the operating system :
+ • records blocking/unblocking,
+ • file management system,
+ • 1/0 macros of sophisticated languages (FORTRAN, ... ),
+ • specialized packages.
+Level 1 controls all actual user transfers and constitutes a resident program module independent from user programs, with a number of specialized tools or "handlers" corresponding to the various device types.
+In contrast, levels 2 and above are usually subroutine libraries supplied with the system for static or dynamic integration to a task, according to their origin:
+ • either resident as common subroutines,
+ • or selected in a system library and generated with a program by the linkage editor.
+These subroutines are mutually related according to the general hierarchy which has been defined elsewhere for subroutines in general.
+The block diagram page V 111-3 illustrates the general 1/0 organization.
+
+V 111-2 .2. Input/Output control module or "handler"
+
+Hereafter, a device controller should be regarded as including both the physical controller unit and the coupling micro-program.
+The actual initialization of the transfer to or from the device, the initialization control, the possible transfer attendance and the end of transfer acknowledgment depend on the type of device, i.e. of the controller. These operations must be performed by a module which is specific of the controller.
+This specialized control module is called a "handler".
+
+
+
+
+V 111-2
+
+
+It includes two sections:
+ • Handler 1 or "initialization handler",
+ • Handler 2 or. "transfer control handler".
+Depending on the type of device, the associated controller will operate in one of the following two modes:
+ • blocked data transfers,
+ • individual data item transfers.
+If a transfer requested at level applies to blocked data, the handler operating mode will be one of the following :
+ • The handler controls the transfer of one data block in one single operating cycle;
+ • The handler controls the elementary data item transfers to or from the data block. This transfer is either fully controlled by handler 2, or every elementary data transfer is controlled by handler 1 ·cyclically
+re-activated by handler 2 (for example to avoid rewriting in handler 2 all initialization and checking functions of handler 1).
+
+ •  Handler 1 : initialization of a transfer Handler 1 has the following functions :
+ a) If required, it analysis the initial status of the controller and/or device, before initiating the transfer. In case of abnormal I conditions, the transfer is aborted and the error conditions are signaled to the 1/0 supervisor.
+ b) It issues a block transfer or read/write command, according to the operating modes of the controller and handler 2.
+ c) It checks that the controller actually takes over the initialization for abnormal conditions which do not require an interrupt. If an abnormal condition is detected, the procedure is as defined in a) above.
+ d) It returns the control to the calling program.
+Handler 1 always operates at the priority level of the calling program.
+The calling program is usually the 1/0 supervisor (level 1 ), but it may also be handler 2 when the data transfers are automatically re-activated.
+
+ ◦ Handler 2 : transfer control
+Handler 2 is a Master mode immediate program which is triggered by the controller interrupts to perform the following functions :
+it takes over the transfer steps upon interrupt, in turn with the micro-program;
+ • if required, it re-activates handler 1;
+ • it controls the end of transfer operations.
+During each step, handler 2 may detect abnormal conditions which may required the transfer to be interrupted or resumed. In the latter case, the transfer is resumed by a return to handler 1 .
+Handler 2 always operates at the priority level of the controller interrupt.
+At the end of the transfer (normal or abnormal), handler 2 performs a call to the 1/0 supervisor to signal the end and the validity of the transfer, before de-activating the associated interrupt level.
+Remark :
+Several controllers of the same type may be serviced in apparent simultaneity by handler 2. In effect, the corresponding interrupts are then grouped at the same level before reaching the processing unit, so that when handler 2 is occupied by a given interrupt, the other interrupts are waiting.
+
+
+V 111-4
+When queue management is available, each device controller has its own queue. Each queue contains chained elements and is managed through a pair of pointers. The queue elements are taken among free elements which are also chained and managed through a pair of "hole pointers".
+A "busy indicator" Ci is associated with every serviced controller i.
+
+
+
+V 111-3. TRANSFERS
+
+V 111-3.1. Transfer requests
+
+ ◦ 1/0 calls: CSV M:1O or CSV M:ZIO
+A transfer control block CB is associated with the CALL SUPERVISOR of the transfer request. This block contains user-defined parameters. At the end of the transfer, it also contains status information supplied by the system .
+When the CALL is executed, A-register should contain the CB address relative to G-base. When this address is defined during execution, one may conveniently use a LEA instruction which provides resolution relative to G whatever the mode, master or slave.
+The calling sequence is then: LEA CB
+CSV M:1O
+For CSY M:ZIO (available at and above MTR-level), which provides for common area I/O's, the address contained in A must be relative to the common area address (available in location 6 of the program).
+The resident associates to the transfer request a dynamic event defined by the CB address and returns the control to the calling program once the transfer is initialized or queued.
+The user may then perform a call to the M:WAIT module (wait event) for an event which is the beginning or the end of the transfer.
+
+For M:1O call, the 1/0 buffer address and the error branch address must always be relative to G. In Slave mode this is always the case.
+In Master mode, where references are normally translated into absolute addresses at loading time, these references must be preceded by a 11#11 character at assembly time (or a 11 11 character in case of a LP compilation), to preserve relocatabiIity.
+
+
+V 111-6
+
+For M:ZIO these addresses will be relative to ZC.
+
+ • Byte 0 : event byte
+When the transfer is over, the resident sets the bits of the "event byte" according to the following code (bit O is set when the resident takes over and reset at the end of the transfer).
+
+ ◦ Bit 0
+
+ ◦ Bit 1
+
+ ◦ Bit 2
+\ = 0
+� = 1
+= 1
+I/ 0 operation over
+1/0 operation in progress error or abnormal I end
+logical error (e.g. incorrect call format} physical error (e.g. signaled by the controller}
+
+
+ ◦ Bit 3
+U=O
+U = 1
+U = 0
+U = 1
+error detected after transfer end
+status information supplied when the transfer is over
+error during transfer initialization
+status information supplied when the transfer is initialized
+ ◦ Bits 4, 5, 6 and 7: error or abnormal end code.
+Bits 2 through 7 are significant only if bit 1 is set (=1}.
+Bits 4, 5, 6, 7 provide 16 different codes for every combination of bits 2 and 3.
+
+-�1:
+
+U = 1
+E = 1
+S = 1
+T = 1
+I = 1
+the user checks the transfer on resultant status information.
+branch address in case of error or abnormal end (standard error processing}. additional information present (e.g. sector address on disk storage}
+time out requested
+activate interrupt after transfer
+U = 1 and E = 1 conditions are mutually exclusive.
+
+ ◦ Byte 2 : specifies the requested 1/0 function according to the following coding table :
+
+ 0 1 2 3 4 5 6 7
+Read, forward 0 0 0 0 - - - -
+Read, backward 0 0 1 0 - - - -
+Write 1 0 0 0 - - - -
+Write EOD/Tape mark 1 0 1 0 - - - -
+Format/rewind 1 0 - 1 - - - -
+Skip block, forward - 1 0 0 - - - -
+Skip file, forward - 1 0 1 - - - -
+Skip block, backward - 1 1 0 - - - -
+Skip file, backward - 1 1 1 - - - -
+
+
+V 111-7
+
+ ◦ Byte 3: contains the numerical value of the operational label specified at assembly time (index in 1/0
+tables). (See section V 111-4. hereafter).
+
+ ◦ Bytes 4 and 5 : contain the address of the first byte to be transferred to/from the core memory.
+
+ ◦ Bytes 6 and 7: contain the number of bytes to be transferred.
+
+ ▪ Bytes 8 and 9 : (optional)
+If U = 0 and E = 1, they contain a user-defined branch address used in case of error or abnormal end.
+If U = 1 and E = 0, they contain the transfer status bits supplied by the controller and set by the resident.
+
+ ▪ Bytes 10 and 11 : (optional)
+They contain additional information whose basic function is to indicate a sector address on disk storage. For other devices, they may contain an other parameter or even the address of an additional parameter table.
+
+ ▪ Bytes 12 and 13: (optional)
+They contain the requested time-out value.
+
+ ◦ Bytes 14 and 15: (optional)
+They contain the interrupt level number which must be triggered by the resident when the transfer is over.
+
+Remark :
+Optional bytes are evaluated in the order of appearance of U, E, S, T, and I indicators.
+When a given option is specified, the bytes corresponding to the preceding options must be reserved.
+
+V 111-3.2. Transfer validity checking (CSV M:WAIT or CSV M:ZWAT)
+
+The transfer validity may be ascertained either in standard mode, or in user mode:
+
+ • Standard mode (U = 0)
+All controller status bits are sensed by the resident (interface and handler which returns an easily interpretable abnormal condition code to the user. If requested in the initial CB (E = 1), the resident may return the control to a user specified address in case of abnormal condition.
+If the error is impossible to correct, the control is not returned to the user, but to the typewriter after printing the corresponding program identifier and error message.
+ • User mode (U = 1, E = 0) 
+The resident loads the status bits in bytes 8 and 9 without performing any sensing; the control is always returned to the user program.
+In both cases, the transfer is considered to be over, even if a blocking condition occurs during initialization.
+
+ • CSV M:WAIT (corresponding to CSV M:1O)
+ • Calling sequence:
+LEA
+csv
+CB
+M:WAIT
+At the time the CSV is met, the address relative to G of the 1/0 transfer control block must be stored in A-register.
+
+V 111-8
+
+ ◦ Function :
+Wait for completion of an 1/0 transfer.
+If the transfer is already over when the M:WAIT call is received, control is returned to the user (possibly at a restart address for abnormal conditions, if requested in byte 1 of the CB).
+If the transfer is still in progress when the M:WAIT call is received, the latter:
+ ◦ stores the calling task level in the 1/0 CB;
+ ◦ de-activates this level if not zero, or waits for the completion of the transfer if the level is zero. M:WAIT call temporarily de-activates the level of the program which is waiting for an 1/0 transfer end,
+in order that lower priority programs be undertaken without being blocked. The pending program is restarted as soon as the transfer is over, its level being re-activated by the handler of the controller involved in
+the transfer.
+
+ ◦ Outputted elements:
+A < 0 in case of 1/0 error.
+In this case, the user should examine CB byte O for ascertaining the cause of the error. A � 0 no error
+ ◦ CSV M:ZWAT
+Its function is the same as that of M:WAIT but relates to a M:ZIO call. The transmitted CB address must be relative to ZC.
+
+V 111-3.3. Communication between 1/0 interface and handler
+
+The 1/0 interface (level 1) is basically made up of two modules:
+M:1O
+and M:1O2
+
+ ◦ Initializer M:1O
+ ◦ De-activation of the event which is associated with the CB by resetting bit O of CB byte O.
+ ◦ Bits l through 7 reset in CB byte 0.
+ ◦ Controller occupation tested and a waiting loop established, if required
+ ◦ Initialization of logical parameters required for transfer control.
+ ◦ Branch to the transfer control module (Hl) of the device.
+M:1O supplies the following parameters to Hl
+(A) = user buffer absolute address
+(E) = element of OLTB table associated with the transfer operational label (see table description)
+(X) = user CB absolute address (T3)TWB = byte count for transfer
+ ◦ Upon return from Ht, M:1O examines A-register contents.
+A = 0
+A � 0
+return to ca 11 i ng program
+A9_15 loaded in CB (0)1_7; associated event activated: CB(0)0 = 0;
+
+
+
+
+V 111-9
+
+
+
+and:
+If U-indicator [ CB(l )0] = l or
+If U = 0 and A> 0, control is returned to the user
+If U = 0 and A< 0, M:1O edits an error message and the user task is aborted.
+Under MOB Basic Monitor, only one user 1/0 request is allowed at a time for a given device: no queue is provided.
+Every 1/0 request of the user program will be associated with an event and the user may request by program to wait until it is activated.
+Any other 1/0 request for the same controller (e.g. on console interrupt) occurring before the event is activated will cause a waiting loop at calling program level, until the first transfer is over.
+Interrupts should be masked during the test, since the higher priority console interrupt may request an 1/0 transfer and change the logical status of the devices.
+Under other Monitors, the user may issue several 1/0 requests for the same device; they will be queued and satisfied in turn as soon as the device becomes available.
+
+ ◦ handler 1 : Hl
+ ◦ Senses the controller and/or device initial status as regards specific conditions of this device type, if required;
+ ◦ Sends the transfer request according to the controller and handler 2 operation mode;
+ ◦ Checks the proper acceptance of this initialization by the controller for abnormal conditions which do not cause an interrupt;
+ ◦ Returns the control to the ca 11 i ng program.
+
+Note :
+handler 1 always operates at the calling program level, i.e. at the physical interrupt level to which it is connected.
+Upon occurrence of abnormal conditions, the transfer is considered over and the error conditions are sent to, interface l through A-register.
+
+ ◦ Transfer end
+When the transfer initialized by handler 1 is over, the interrupt associated with the controller activates handler 2.
+We saw before that a block transfer may be carried out in two different ways:
+ (1) Transfer of the whole block in one time.
+ (2) Transfer of the block per data items.
+
+ ◦ First case: block fully transferred Handler 2 :
+ • Reads device status
+ • Checks proper device operation during the transfer
+ • Calls M:1O2
+H2 supplies M:102 with
+(Tl) = Element of OLTB table (TO) - User CB absolute address
+(A) = Report on the operation which has just been terminated.
+VI11-10
+Module 102 :
+ • Processes transfer errors, if any.
+ • Re-initializes the logical parameters which were used during the transfer.
+ • Activates the associated event (CB).
+ • Returns the control to the calling program.
+
+ •  Second case : transfer interrupted Handler 2 :
+ • Reads the device status,
+ • Checks for proper transfer: on error, module M:102 is called,
+ • Tests if all data have been transferred: if transfer is over, see first case above,
+ • Restarts the next data transfer by a branch to handler 1,
+ • De-activates the interrupt level.
+
+
+V 111-4. OPERATIONAL LABELS
+
+V 111-4.1. General
+
+The operational labels system has been introduced to enable the programs to process a logical environment.
+An 1/0 transfer may be requested through an operational label which represents the actual 1/0 function. The correspondence between operational labels and physical devices is handled by the Monitor through assignment statements.
+With such a system, the 1/0 programming is practically independent from the physical devices which are actually used and this ensures a total compatibility of the program with any configuration.
+
+VI 11-4.2. Definition
+
+An operational label is a number which is generally a 4-character mnemonic code.
+Operational labels are distributed into two classes: standard operational labels written M:XX with a predetermined function and user operational labels written U:FX whose functions are user-specified.
+
+Decimal number Mnemonic Function Mode
+1 M:BI Binary Input Binary
+2 M:BO Binary Output Binary
+3 M:CI Command Input Alphanumeric
+4 M:OC Operator Console Alphanumeric
+5 M:EI Element Input Binary or
+   Alphanumeric
+6 M:EO Element Output Binary or
+   Alphanumeric
+7 M:LO Listing Output Alphanumeric
+8 M:LL Listing Log Alphanumeric
+
+
+VI 11-11
+
+Decima I number Mnemonic Function Mode
+9 M:DO Diagnostic Output  Alphanumeric
+1 0 M:SI Source Input  Alphanumeric
+1 1 M:SL System's Library  Binary
+1 2 M:UL User's Library  Binary
+1 3 M:SY SY stem  Binary
+1 4 M:EP Executable Programs  Binary
+15 M:GI Go Input  Binary
+1 6 M:GO Go Output  Binary
+17 U:Fl   
+18 U:F2   
+1 9 U:F3   
+20 U:F4   
+21 U:F5   
+22 U:F6   
+23 U:F7   
+24 U:F8   
+25 U:F9   
+26 U:FA   
+27 U:FB   
+28 U:FC   
+29 U:FD   
+30 U:FE   
+31 U:FF  
+I 
+
+
+
+V 111-4.3. Operational labels assignment
+
+Every Monitor has for standard operational labels standard assignments defined at generation time. These assignments may be modified by monitor commands, except the following :
+M:OC
+M:SY M:EP M:UL M:SL M:GI M:GO
+Typewriter
+
+
+
+System disk unit
+User operational labels have no standard assignments and it is the user's responsibility to specify its own assignments.
+
+
+
+
+V 111-12
+
+ ◦ ASSIGN
+This command is available under MOB-E, MTR, MTRD.
+%AS[ SIGN] / [ F] , � � � : 01 0 2 , T: t1 t2 , [ C :[ &] c1 c 2] ,[D : [ &] d ] , [ � !�
+
+F
+M:01 02
+U:01 02
+T:t1 t 2 C:c1 c2 D:d
+BN AN
+Denotes an operational label reserved for Foreground use (MTR or MTRD) Specifies the assigned standard operational label
+Specifies the assigned user operational label (MTR or MTRD)
+Specifies the type of device to which the operational label is assigned Specifies the controller number within the specified type
+Specifies the device number on the controller The corresponding file is binary
+The corresponding file is alphanumeric
+Possible values for device type are:
+T:NO T:TY T:PT T:PR T:PP T:MC T:LP T:CR T:CP T:DC T:9T T:DM
+ • T:VU T:PL
+Cancel label. An input or output request with such a label is not performed. • Typewriter (key-in and type-out)
+Console paper tape reader/punch High-speed paper tape reader High-speed paper tape punch Minicassette
+Line printer Card reader Card punch DIAD disk unit
+9-track magnetic tape unit DIAM disk-pack unit
+CRT display console Plotter
+ • STOL
+This command is available under MTRD.
+
+This command provides for changing operational labels standard assignments. Options have the same meaning as for %ASSIGN.
+A %STOL command without any option restores the normal assignment of standard operational labels.
+
+
+
+
+
+
+
+
+
+
+V 111-5. HANDLER UTILIZATION
+
+
+V 111-5.1. Typewriter handler (#-15 001)
+
+ • General
+ • The typewriter handler controls type-ins and print-outs (T:TY) as well as paper tape read and punch (T:PT).
+
+The various functions are determined by the selected operational label, by its assignment (typewriter or paper tape, input or output, binary or alphanumeric) and by the function byte (two elements of the 1/0 CB).
+ • A typewriter is 72 characters long.
+ • For alphanumeric input or output, the ISO 7-bit code is used (ASCII). ASCII- EBCDIC code conversions are performed by the handler, since the internal code is always EBCDIC.
+ • The paper tape punch drive motor in energized when the "tape on" character is detected (&12 code in ASCII). This code is not punched unless the punch is already energized at that time. The motor is shut down after punching the "tape off" character (&14 code in ASCII).
+ • The typewriter controller is busy either in typewriter mode or in paper tape mode, and for each of these modes, in input or output mode. The typewriter functions cannot be performed simultaneously.
+ • Functions
+ • Available commands
+Hexadecimal code Functions
+00 Read
+80 Write with format
+90 Write without format
+
+ • Alphanumeric input: typewriter or paper tape code : &00
+ • The input is made one character at a time and each character is converted in EBCDIC before being transferred into user's buffer. The transfer is terminated when the specified number of characters has been reached.
+However, the "carriage return" character (&OD code in EBCDIC or ASCII) always terminates the transfer after being actually transmitted to user.
+ • The "Paper feed" characters (&QA code in EBCDIC and &15 code in ASCII) are neither transmitted to the user nor counted in the total number of characters of the transfer .
+.·� The "TAPE OFF" or "NULL" characters included in a record heading are not transmitted to the user-and are not counted in the total number of characters of the transfer.
+ • When the %EOD group is detected in a record heading, the CB event byte (byte 0) is forced to 41 hexa-decimal and represents an "end-of-file" mark.
+
+ • Alphanumeric output: typewriter or paper tape. Codes 80 and 90.
+ • The output is made one character at a time, each character being converted in ASCII at transfer time without any alteration of the user's buffer.
+The transfer is terminated when the specified number of characters has been reached. No filtering is made.
+ • When the %EOD group is written in a record heading, the CB event byte (byte 0) is forwarded and represents an "end-of-file" mark.
+ • No character filtering is made.
+ • In paper tape mode, the transferred data are preceded by a "TAPE ON" character (not punched) and followed by a "TAPE OFF" character (punched).
+
+V 111-14
+
+If the user's buffer contains a "TAPE OFF", the handler restarts the punch (sends a "TAPE ON" which is not punched}.
+ • Write with format. Code 80.
+The user's buffer data transfer is preceded by two "paper feed" and "carriage return" characters for starting the line at the left margin.
+ • Write without format. Code 90.
+No line adjustment character is provided. The format is entirely the user's responsibility.
+
+ • Binary input from paper tape. Code 00.
+ • The data are read one character at a time. The transfer is terminated when the specified number of characters has been reached.
+ • The "TAPE OFF" or "NULL" characters included in a record heading are not transmitted to the user and are not counted in the total number of characters specified for the transfer.
+ • When the %EOD group is detected in a record heading, the CB event byte (byte O) is forced to 41 hexadecimal and represents an "end-of-file" mark.
+
+ • Binary output on paper tape. Code 80
+ • The data are punched one character at a time. The transfer is terminated when the specified number of characters has been reached.
+ • The user's buffer data transfer is preceded by a "TAPE ON" (not punched} and followed by a "TAPE OFF" (punched).
+All bytes having a value of 14 or 94 hexadecimal (corresponding to a "TAPE OFF") are followed by a "TAPE ON" (not punched} for restarting the punch motor.
+ • When the %EOD group is detected in a record heading, the CB event byte (byte O) in forced to 41 hexadecima I.
+
+ • Example :  
+ES CDS 
+ RES 1 6  TWB
+BBINS DATA &0001  
+ DATA &0002  BINARY OUT PUT BUFFER
+ DATA &0003  
+BALPS TEXT "MESSAGE"  Alphanumeric output buffer
+
+BBINE BND
+RES 
+8  
+Binary input buffer
+BALPE RES 7  Alphanumeric input buffer
+ FIN   
+L1 LDS RES 
+2  
+CBI DATA 0  
+ DATA, 1 0  Read command
+
+
+
+CB2
+DA TA, 1 DATA DATA DATA DATA, 1
+DATA, 1 DATA DATA
+1 or DATA, 1 M:BI Binary input
+# BBINE
+1 6
+0
+0 Read command
+4 or DATA, 1 M:OC Alphanumeric input
+# BALPE
+14
+
+
+V 111-15
+
+C B3
+
+
+
+
+CB4
+DATA 0
+DATA, l 80 Write command
+DATA, l  2 or DATA, l M:BO Binary output DATA # BBINS
+DATA 6
+DATA 0
+DATA, l 80 Write command
+DATA, l  7 or DATA, l M:LO Alphanumeric output DATA # BALPS
+DATA 7
+FIN
+Pl DEB
+LPS LEA
+csv csv
+Ll CBl
+M:1O Input of a 16-byte binary record from M:BI M:WAIT
+LEA
+csv csv
+LEA'
+csv csv
+LEA
+csv csv
+FIN
+CB2
+M:1O M:WAIT CB3 M:1O M:WAIT CB4 M:1O M:WAIT DEB
+Input of an alphanumeric record 14-characters max. from
+l typewriter (M:OC)
+( Output of a binary record 0001, 0002, 0003 on M:BO
+
+l Output of "MESSAGE" text on M:LO
+
+END Pl
+
+V 111-5.2; 300 char./sec. paper tape reader handler(# 15 062/60)
+
+ • General
+ • This handler controls the binary or alphanumeric input from the paper tape (T:PR), each of these two functions being determined by the selected operational label, by its assignment and by the function byte (two elements of the 1/0 CB).
+ • For alphanumeric input, the ISO 7-bit code is used (ASCII). The ASCII -EBCDIC code conversion is performed by the handler, since the internal code is always EBCDIC.
+ • Functions
+The available command byte is &00 (read).
+
+ ◦ Alphanumeric input. Code &00
+ • The input is made one character at a time and each character is converted in EBCDIC before being transferred into user's buffer. The transfer is terminated when the specified number of characters has been reached.
+However, the "carriage return" character (&OD code in EBCDIC or ASCII) always terminates the transfer after being actually transmitted to the user.
+ • The "paper feed" characters (&0A code in EBCDIC and &15 code in ASCII) are neither transmitted to the user nor counted in the total number of characters of the transfer.
+The "TAPE OFF" or "FULL" characters included in a record heading are neither transmitted to the user nor counted in the total number of characters of the transfer.
+
+
+
+V 111-i 6
+
+
+
+ • When the %EOD group is detected in a record heading, the CB event byte (byte O) is forced to 41 hexadecima I and represents an II end-of-fiIe" mark.
+
+ • Binary input. Code &00
+ • The data are read one character at a time. The transfer is terminated when the specified number of characters has been reached.
+ • The "TAPE OFF" or "NULL" characters included in a record heading are neither transmitted to the user nor counted in the total number of characters specified for the transfer.
+ • When the %EOD group is detected in a record heading, the event byte (CB byte O) is forced to 41 hexadecima I representing an "end-of-file" mark.
+
+V 111-5.3. 60 char./sec. paper tape punch handler(.# 15 060)
+
+ • General
+ • This handler controls the binary or alphanumeric output on paper tape (T:PP), each of these functions being determined by the selected operational label, by its assignment and by the function byte (two
+elements of the 1/0 CB).
+ • For alphanumeric output, the ISO 7-bit code is used (ASCII). The ASCII-EBCDIC code conversion is performed by the handler, since the internal code is always EBCDIC.
+ • Functions
+The available command byte is &80 {write)
+
+ • Alphanumeric output. Code &80.
+ • The output is made one character at a time, each character being converted in ASCII at transfer time without any modification of the user's buffer. The transfer is terminated when the specified number of characters has been reached. No filtering is made.
+ • When the %EOD group is written in a record heading, the CB event byte (byte 0) is forced to 41 hexadecimal representing an "end-of-file" mark.
+
+ • Binary output. Command &80.
+ • The output is made one character at a time and the transfer is terminated when the specified number of characters has been reached.
+
+V 111-5.4. 300 char./sec. card reader handler(.# 15 120)
+
+ • General
+ • This handler controls the binary or alphanumeric input from the cards (T:CR), each of these functions being determined by the selected operational label, by its assignment and by the function byte· (two
+elements of the 1/0 CB).
+ • For alphanumeric input, the EBCDIC card code is used on a one character per column basis (80 characters).
+ • For binary input, each card contains up to 120 bytes.
+
+ • Functions
+The available command byte is &00 (read).
+
+ • Alphanumeric input. Code 00.
+ • 80 characters are read.
+
+
+V 111-17
+
+ ◦ When the %EOD group is detected in a record heading, the CB event byte (byte 0) is forced to 41 hexadecima I representing an "end-of-file" mark.
+
+ ◦ Binary input. Code 00.
+ ◦ 120 bytes are read.
+ ◦ When the %EOD group is detected in a record heading, the CB event byte (byte 0) is forced to 41 hexadecimal representing an "end-of-file" mark.
+Note that, in this case, %EOD is a 4-character group, punched in the first four columns of the card (i . e. the first six bytes in binary reading mode) .
+Thus, the EOD mark is the same in binary and alphanumerical reading.
+
+V 111-5.5. 200 l.p.m. printer handler(# 15 412)
+ ◦ General
+This handler controls the alphanumerical outputs on the line printer (T:LP). The print line is 132 characters long.
+The alphanumeric output code is the ISO 7-bit standard code (ASCII). The user's buffer may be coded in ASCII or EBCDIC.
+ ◦ EBCDIC-coded buffer. This is the most frequent case
+The user must use an alphanumeric operational label (M:LO, etc.). The EBCDIC - ASCII conversion is performed by the handler in the buffer before the output transfer. The reciprocal ASCII --  EBCDIC conversion will be performed by the handler at the end of the transfer. This double conversion has no effect on the final contents of the buffer.
+
+ ◦ ASCII-coded buffer
+The user must use a binary operational label (M:BI, etc.); no code conversion is performed.
+
+ ◦ Functions
+
+ ◦ Available commands :
+
+Hexadecima I code Function
+80 Write without format
+90 Write with format
+0 Write without format mode
+A pc per feed is executed after the requested printing.
+
+ ◦ Write with format
+The first byte in the user's buffer will specify a paper positioning operation executed before the actual printing.
+This skip code is counted in the number of transferred bytes.
+The printing operation is normally fol lowed by a paper feed, except when the format byte contains E0 or 60 (EBCDIC code).
+
+
+
+
+
+\'111-18
+
+Table of format byte coding (skip codes)
+
+Code
+- � 
+
+Function
+ASCII EBCDIC 
+SC E0 Omit paper feed after printing
+2D 60 Skip 0 line
+7B co Skip 1 line
+41 Cl Skip 2 lines
+42 C2 Skip 3 lines
+C3 C3 Skip 3 lines
+44 C4 Skip 4 lines
+cs cs Skip 5 lines
+C6 C6 Skip 6 lines
+47 C7 Skip 7 lines
+48 ca Skip 8 lines
+C9 C9 Skip 9 lines
+60 CA Skip 10 lines
+El CB Skip 11 lines
+E2 cc Skip 12 Iines
+63 CD Skip 13 lines
+E4 CE Skip 14 lines
+65 CF Skip 15 lines
+30 F0 Skip on channel O (bottom of form)
+Bl Fl Skip on channel 1
+B2 F2 Skip on channel 2
+33 F3 Skip on channel 3 (top of form)
+V111-5. 6. Fast-access disk handler (# 1 5 200/1/2/3/ 4)
+ ◦ General
+This handler controls the transfers between the core memory and the fast-access disk.
+The associated CB must include an additional information : the disk address. This address specifies a number of disk-sectors (the first sector being sector 0).
+
+
+
+
+
+
+
+
+
+
+V 111-19
+
+
+
+
+0 Event byte
+indicators
+2 Command or function
+3 Operational label
+4 Buffer address
+5
+6 Number of bytes to be transferred
+7
+8 Branch address on abnormal end
+9
+ 10 Disk-address (sector number)
+11
+
+The transfer is always initiated at the beginning of a sector. If the requested byte number is not a multiple of 256, the last sector which is only partly occupied, is filled with zeroes. Thus, the modified memory area is always a multiple of 256.
+The transfer being executed one word at a time, the byte count in the CB must be even.
+This handler considers the disk as an ordinary device; the MTRD handler, which is more powerful, performs the disk area management tasks.
+ ◦ Functions
+
+ ◦ Available commands :
+Hexadecimal code Function
+00 Read
+10 Read and update disk-address
+80 Write
+90 Write and update disk-address
+ ◦ Disk-address update :
+For l O and 90 command codes, the disk-address of the CB is incremented by the number of transferred· sectors. This updating function may simplify the following transfers.

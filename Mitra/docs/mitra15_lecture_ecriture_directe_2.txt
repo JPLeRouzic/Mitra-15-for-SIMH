@@ -1,0 +1,1111 @@
+-
+
+LECTURE DIRECTE
+ECRITURE DIRECTE
+
+Note aux programmeurs de l'Ecole Française de Radio électricité et d'Informatique.
+
+Table des matières
+
+1. Imprimante rapide
+
+2. Disque Sagem.
+
+3. ASR 33
+
+4. Lecteur de ruban
+
+5. Perforateur de ruban
+
+6. Lecteur de cartes Control Data G220
+
+7. Acces au pupitre de programmation
+
+8. Disque DRI
+
+Années 1978 - 1979 E.F.R.E.I.  S.E.M.S.
+
+---------------------------------------------------------
+
+DIALOGUE ENTRE LES PERIPHERIQUES ET LE MITRA 15
+
+---------------------------------------------------------
+1. IMPRIMANTE RAPIDE
+
+Registres rapides:
+	&20: registre d'adresse
+	&21: compte d'octets
+	E: 3
+	A(O-7): 40
+	A(8-15) code de saut
+
+Codes de saut:
+	0: pas d'interligne
+	1: Interligne simple
+	2: Interligne double
+	3: Interligne triple
+	20: saut canal 1 Top
+	21: saut canal 2 bottom
+	22: saut canal 3 Bottom
+
+Le saut est effectué après l'impression
+
+Sans format:  Adresse buffer, compte d'octet
+Avec format:  Adresse buffer, octet de format, compte d'octet
+
+Lecture d'état
+	E: 3
+	RD: Résultat dans le registre A
+
+Mot d'état
+
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |                       |        Not used       |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+
+Bit 7: L+3 Time-out Panne 7, L'imprimante n'a pas envoyé une demande de caractère.
+Bit 6: +3 IT2, Imprimante non prête au cours d'un transfert.
+Bit 5: +3 IT1, Imprimante non préte au début d'un transfert.
+Bit 4: Défaut papier, switch se trouvant sous les chenillettes d'entrainement.
+Bit 3: Bit Incident.
+Bit 2:  Fin de papier, palpeur situes en dessous des marteaux - validité par le canal 2.
+Bit 1: Prêt ligne, Impression UK.
+Bit 0: Imprimante prête, Impression UK.
+
+Canaux (répartition théorique)
+	0: haut de page
+	1: bas de page
+	2 à 11: réservé au client
+
+
+---------------------------------------------------------
+2. DISQUE SAGEM :
+256 octets par secteurs
+12 secteurs par pistes
+Registres de voie
+
+AVS2: 
+	3B:	AD
+	3C:	CM
+	3D:	AP
+	3E:	ME
+
+AD: adresse -2 du premier mot à transfèrer.
+
+CM: compte de mots.
+
+AP
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      | 0|     ADp                  |    ADs    |  M0 |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+ADp: adresse piste
+ADs: adresse secteur
+M0:
+	00: repos
+	01: écriture
+	10: lecture
+	11: comparaison
+
+ME
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      | M0  |                   0                     |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+Commandes sur coupleur:
+	E: 5
+	A: AP
+
+WD de repos:
+	E: 5
+	A: 0
+
+Après une demande, on récupere sur 1'IT dans le registre ME
+
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |             Unused             |              |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+Bit 11: Adresse secteur demandé inexistante.
+Bit 12: CN compte de mots initial nul.
+Bit 13: PL erreur sur la parité longitudinale.
+Bit 14: VE erreur pendant le mode de comparaison.
+Bit 15: demande d'E/S réussie.
+
+Si OK = O la cause de l'erreur est précisée en faisant une lecture
+d'état.
+	E: 3
+	RD: Résultat dans le registre A:
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |             Unused                      | ER  |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+ER:
+	00: Pas d'erreur
+	01: Zone indisponible (adr. inexistante) ou protégée
+	02: Erreur de rythme
+	03: Disque non prét (hors tension ou non connecté)
+
+---------------------------------------------------------
+3. ASR 33 :
+Registres
+
+z:
+	0 arrêt sur compte nul
+	1 arrêt sur caractère de comparaison
+
+           0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+  R9     | z|             compte d'octets                |
+         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+  R10    |             adresse des octets — 1            |
+         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+  R11    |  caractère de         |      données u        |
+	     |		comparaison      |                       |
+         +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+WD		E		1
+		A		A0	Repos
+				A2	écriture clavier
+				A1	Lecture clavier (arrêt sur caractère de comparaison)
+				A3	Lecture ruban (arrêt sur caractère de comparaison)
+				A4	Stop
+				A8	Suppression impression et perforation ruban
+
+En lecture on recupère dans R9 le nombre de caractères non lus
+(lorsque l'arrêt s'est fait sur caractère de comparaison).
+Dans R11 (bits 7 à 15) on récupère le dernier caractère transféré.
+
+
+Lecture d'état 
+	E	&I0
+
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |  état  |  |           |                        |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+Bits 0 à 2: 
+	000	Repos
+	001 Repos
+	010 Ecriture
+	011 Lecture
+	111 Erreur
+
+Bits 7 à 15: dernier caractère ASCII transféré.
+
+Complément d'informations:
+	A	A9	Lecture sans impression
+		AA	Perforations sans impression
+
+---------------------------------------------------------
+4. LECTEUR DE RUBAN :
+
+WD Lecture avance avec détection d'amorce:
+	A: 1
+	E: 8
+
+WD Lecture avance sans détection d'amorce
+	A: 3
+	E: 8
+
+Stop
+	A: 2
+	E: 8
+
+RD de lecture d'état
+	E: 8
+	résultat dans A
+
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      | err |                 |     caractère lu      |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+err:
+	00	pas d'erreur
+	10	
+		hors tension
+		manuel
+		absence papier
+		rupture papier
+		(cette liste est exhaustive)
+	11	stop
+
+---------------------------------------------------------
+5. PERFORATEUR DE RUBAN :
+
+WD	dialogue avec le Programme
+
+         0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ A     | S|                    |        données        |
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+S:
+	0	Stop.
+	1	Avance
+
+ E	18
+
+RD de lecture d'état
+	E: 18
+	résultat dans A
+
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      | err |                not used                 |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+RD
+Résultat dans A
+
+err:
+	00	Pas d'erreur.
+	10	Erreur.
+	11	Stop.
+
+Erreur:
+	Hors tension.
+	Pas de papier.
+	l'opérateur fait une avance papier simultanément.
+	(liste exhaustive)
+
+---------------------------------------------------------
+6. LECTEUR DE CARTES CONTROL DATA 9220
+
+Registres de voies	&1C à 28
+
+WD de lecture	E	7
+
+         0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+  A    | err |                not used                 |
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+err:
+	00	Lecture binaire.
+	10	Lecture EBCDIC.
+	11	Mise au repos du lecteur.
+
+
+RD de lecture d'état
+	E: 17
+	résultat dans A
+
+         0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+  A    |                       |         erreur        |
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+erreur:
+	Magasin vide		&40
+	Erreurs cellules	&80
+	Cartes déchirées bourrage sous cellules		&C0
+	Bourrage dans magasin d'entrée		&A0
+	Cartes lues à tort		&10
+	Raté de transfert		&08
+	Stop		&04
+	Non opérationnel		&02
+	Erreur EBCDIC		&O1
+
+---------------------------------------------------------
+7- ACCES AU PUPITRE :
+
+1) Lecture des clés dans A :
+	E	&20
+	RD
+
+2) Ecriture de A sur voyants adresses :
+	E	&20
+	A	code à afficher
+	WD
+
+3) Ecriture de A sur voyants données :
+	E	&10
+	A	code à afficher
+	WD
+
+4) Extinction du voyant marche :
+	Le calculateur marche
+	Le bouton marche est éteint
+	Les IT sont marquées
+	Les déroutements sont ignorés (donc perdus)
+	A	&60
+	E	1
+	WD
+
+5) Arrêt du calculateur :
+	Affichage sur calculateur (voyants donnés) des instructions qui suivent le WD
+	A	&120
+	E	1
+	WD
+
+6) RAZ système programmée :
+	E	0
+	WD	(coupure secteur)
+
+7) Voyant marche allumé :
+	Débloque les IT
+	valide les déroutements
+	calculateur toujours en arrêt
+	A	&220
+	E	1
+	WD
+
+---------------------------------------------------------
+8- DISQUE DRI :
+256 octets par secteurs.
+24 secteurs par pistes.
+2 pistes par cylindres.
+203 cylindres par unités.
+
+Registres de voies
+	&39		ADM
+	&3A		NSNM ou CM
+	&3C		ADS
+	&3E		ADR = 0
+
+	ADR adresse mémoire -2 du premier mot à transférer.
+	NSNX (ou CM) nombres de mots à transférer.
+	ADS adresse piste secteur disque.
+	ADR initialisé à zéro.
+
+ADS
+         0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ A     |  |     cylindre          | T|    secteur   |D |
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+          |      piste               |									 
+          |--+--+--+--+--+--+--+--+--|
+
+Piste:	numéro de la piste qui va être lue ou écrite.
+Secteur: numéro du secteur -I modulo 24.
+T: Tete
+	0: tete inférieure
+	1: tete supérieure
+D: 
+	0: Disque amovible
+	1: Disque fixe
+
+Exemple:
+	piste 1 secteur 4	ADS = &46
+	piste 1 secteur 0	ADS = &68
+
+Après le transfert, on a l'adresse progressée dans ADS;
+
+Exemple:
+écriture piste 1 secteur 23 donné	ADS = &6C
+fin transfert rendu	ADS = &6E
+
+Piste: numéro de la derniere piste lue ou écrite.
+Secteur: numéro du dernier secteur lu ou écrit.
+
+Exemple:
+	écriture secteur suivant (de l'exemple précedent)
+	piste 2 secteur O donne	ADS = &AE
+	fin transfert rendu	ADS = &BU
+
+Il y a donc discontinuité dans la progression de ADS.
+
+Commande :
+
+I1 y a 2 WD de commande qui s'enchainent
+
+I) WD sélection d'adresses	E = 3
+	octet gauche de A			A = &80	unité 0
+	octet gauche de A			A = &40	unité 1
+
+	octet droit de A			A = &80	écriture
+	octet droit de A			A = &00	lecture
+	octet droit de A			A = &F0	comparaison écriture
+
+2) WD de transfert
+	E	&15
+	A	ADS
+
+Mise au repos du coupleur
+	E	&5
+	A	&80
+
+Lecture du mot d'état par RD
+	A quelconque
+	E = &15
+	RD
+
+Mot d'état rendu dans A
+
+         0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+  A    |        |  |     |                    |        |
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+bit 12:	violation protection mémoire disque.
+bit 10, 11:	erreur fonctimnement disque (Hard).
+bit 9:	disque non opérationnel.
+bit 8:	erreur fonctionnement disque (Hard)
+bit 6, 7:	erreur de transfert.
+bit 3:	Le bit 3 récapitule les erreurs.
+	0	pas d'erreur.
+	1	1l y a erreur.
+
+chapitre 2
+
+GENERALITES D'EXPLOITATION
+
+2,1 - Hypothèses d'exploitation
+2.1.1 - Gestion des unités
+
+Le coupleur n'effectue ni transfert ni positionnement simultanés sur plusieurs unités, Il ne peut y avoir non plus simultanément un transfert sur une unité et une opération de positionnement sur une seconde.
+
+2.1.2 - Longueur des blocs
+Les blocs de données peuvent être de longueur variable. Le bloc est découpé automatiquement en secteurs de 256 octets maximum, Si le dernier secteur est < 256 octets, il sera complété par des caractères nuls, La longueur du bloc est indiquée par le programme avant chaque transfert.
+
+2.1.3 - Transfert des données
+Le transfert des données entre le MITRA 15 et la mémoire à disque s'effectue par mots de 16 bits, Le programme indique l'adresse du buffer moins deux.
+
+2,1,4 - Adressage secteur
+Le programme fournit l'adresse du premier secteur correspondant au début du bloc, En cas de chainage, l'adresse du secteur suivant est calculée par le coupleur, Si l'incrémentation du secteur fait passer sur la piste suivante, l'opération est effectuée automatiquement par le microprogramme.
+En cas de débordement d'adresse de piste, où si l'adresse secteur initiale est supérieure à 24, une interruption est générée par le coupleur,
+
+2,1,5 - Contrôle de positionnement
+L'adresse secteur physique est écrite systématiquement en tête des 256 octets de chaque secteur, Le coupleur effectue le contrôle de cette adresse avant chaque transfert de données,
+
+Si le transfert doit commencer sur le secteur "S" de la piste "P", le contrôle d'adresse s'effectue sur le secteur "S,1"" ou lieu du point (modulo 24) de la piste P.
+
+2.1.6 - Prémarquage
+
+Le principe de controle de l'adresse implique que le disque soit prémarqué avant son utilisation, Cette opération est réalisée par le programme de test, l'unité de disque étant normalement connectée sur le calculateur.
+
+2.1,7 - Pistes de réserve
+En cas de piste défectueuse, le programme de test permet d'enregistrer sur chaque secteur de cette piste un indicateur de piste défectueuse ainsi qu'une adresse de déroutement.
+Voir utilisation test 32 (Manuel de Maintenance).
+
+2,1.8 - Protection écriture
+La protection d'écriture est affectée au disque fixe, au disque amovible ou aux deux suivant la position des deux straps soudés à demeure à l'intérieur de l'unité de disque.
+
+La position d'écriture est commandée :
+- à la mise sous tension de l'unité
+- au passage de commutateur "CHARG/MARCHE" de la position "CHARG" à la position "MARCHE"
+- Par programme par trois commandes successives par disque à protéger.
+	1. 
+	WD avec E : 0015
+	A : adresse piste-secteur-disque (seul le bit 15 sera utilisé car il définit le disque choisi).
+
+	2.
+	WD avec E : 0005
+	A : 0200 + sélection de l'unité
+
+	3.
+	WD avec E 0005
+	A : 0080 (remise à zéro du mot d'état).
+
+- Nota : il est envisagé de pouvoir interdire toute commande de protection d'écriture par un commutateur accessible à l'opérateur.
+
+La protection d'écriture est inhibée par action sur le bouton poussoir "PROTECTION ECRITURE".
+
+2.1.9 - Sélection d'un disque inexistant
+Une tentative de transfert sur le disque fixe sur une unité ne possédant pas cette option, génère une erreur de coincidence adresse (A10 du mot d'état).
+
+2,1,10 - Contrôle d'enregistrement
+A tout enregistrement est associé un contrôle de parité longitudinale, L'écriture d'un enregistrement peut être contrôlée par une lecture sans transfert en mémoire,
+
+Ce mode de transfert est appelé ""contrôle écriture", il ne contrôle que la concordance entre les informations lues et le mot de parité lu.
+
+En cas de piste défectueuse l'adresse de déroutement est inscrite deux fois sur deux mots consécutifs, Une comparaison des deux mots est effectuée avant l'enchaMement sur la piste de réserve.
+
+2,2 - Initialisation d'un transfert
+
+Pour initialiser un transfert le handler doit réaliser la séquence suivante :
+
+2.2.1 - Commande RAZ du coupleur
+	WD avec E:	0005
+	A :	0080
+
+2.2.2 - Sélection de l'unité - choix du mode de transfert - initialisation
+de la phase:
+	WD avec E :	0005
+	A: 	mot de commande
+
+Voir tableau mot de commande coupleur
+
+2.2.3 - Lecture du mot d'état
+
+	RD avec E :	0015
+	A9 = 1;	indique que l'unité de disque adressée par l'ordre précédent est opérationnelle :
+		- elle est sous tension
+		- le disque tourne à la bonne vitesse,
+
+	A9 = 0;	indique que l'unité de disque adressée par l'ordre précédent ne tourne pas à la bonne vitesse. Le transfert ne peut pas être commandé,
+
+2.2,4 - Initialisation des registres généraux
+
+La mémoire à disques utilise les registres généraux situés
+entre les adresses 38 et 3F, Le handler doit initialiser les
+
+registres suivants :
+
+Registre | Adresse (hexa)	| explication
+ADM			39					Adresse du buffer de transfert moins deux
+CM			3A					Nombre de mots transférer (en binaire)
+ADS			3c					
+								-Adresse piste
+								-Adresse secteur
+								-Adresse disque
+         0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+       |  |     cylindre          | T|    secteur   |D |
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+          |      piste               |									 
+          |--+--+--+--+--+--+--+--+--|
+
+ADR			3E					Initialisé à zéro
+PL			3D					Parité longitudinale
+RTI			38					Registre de travail 1
+RT2			3F					Registre travail 2
+
+2.2.5 « Commande transfert
+WD avec 
+	E :	0015
+	A : Configuration de ADS (Voir ci-après)
+
+Après l'envoi de cet ordre, le transfert s'effectue sous le contrôle de l'unité de liaison.
+Une IT générée en fin de transfert effectue le retour au handler.
+Nota : Après l'envoi de la commande transfert, les têtes du DRI se positionnent sur le cylindre choisi, il y a comparaison entre les secteurs passant sous les têtes, et le secteur désigné, lorsque le secteur désigné est atteint le coupleur émet une suspension qui lance le micro-programme ; le travail est alors exécuté en fonction des séquences précédentes.
+
+Configuration de ADS (Reg. &3C).
+
+         0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ A     |  |     cylindre          | T|    secteur   |D |
+       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+          |      piste               |									 
+          |--+--+--+--+--+--+--+--+--|
+
+
+CYLINDRE (0 à 407)
+SECTEUR (0 à 23)
+T:
+	0:	tête inférieure
+	1:	tête supérieure
+
+D:
+	0:	disque amovible
+	1:	disque fixe
+
+“SECTEUR“ contient le numéro du secteur à transférer moins un.
+
+2.3 - Exploitation du mot d'état coupleur
+En fin de transfert, lorsque l'IT est générée le compte rendu se trouve dans le mot d'état du coupleur, Le handler effectue les opérations suivantes :
+
+2.3.1 - Lecture du mot d'état (LE15 par micro programme)
+
+RD avec E : 0015
+on obtient: A : Mot d'état
+
+         0     1    2   3    4     5    6    7    8   9    10   11   12 
+       +----+----+----+----+----+----+----+----+----+----+----+----+----+
+  A    | 01   02   03   E    M1   M2   RT  EPL  INC   OPE  ECA      VPE | 
+       +----+----+----+----+----+----+----+----+----+----+----+----+----+
+
+	E = 0
+	Le transfert précédent s'est déroulé correctement. Le handler effectue l'acquittement de l'interruption,
+
+	E = 1
+	Une erreur a eu lieu au cours du transfert. L'analyse du mot d'état indique l'origine de cette erreur.
+
+2.3.2 - Analyse du mot d'état
+
+2.3.2.1
+	si RT/ZI = 1
+	si A (0 à 2) = 0
+	L'adresse piste/secteur demandée est incorrecte
+	- Si piste > 407
+	- secteur > 23
+
+	si A(0 à 2) différent de 0
+	Erreur de rythme en cours de transfert
+
+2.3.2.2
+	EPL =1
+	Indique en général une erreur de lecture sur le disque,
+
+- Si A (0 à 2)= 000 (phase "0")
+Le compte de mot à transférer indiqué dans le registre " CM" est erroné (<= 0).
+
+- Si A(O à 2)= 001 (phase "1"!)
+Erreur de lecture de l'indicateur (mot suivant l'adresse piste secteur)
+
+-IND différend de 0 et IND différend de FF
+
+- Si A(O à 2)= 110 (phase "6")
+Erreur de parité longitudinale en lecture ou contrôle écriture sur le disque
+
+- Si A(O à 2)= 111 (phase "7")
+
+Erreur de lecture de l'adresse de branchement en cas de piste défectueuse sur le disque,
+
+2.3.2.3
+INC = 1
+Indique en général un incident au niveau de l'unité de disque :
+- Si A(O à 2)= 0 (phase 0)
+Incident en cours de recherche piste.
+Une commande "Retour des têtes à zéro" doit être envoyée au disque.
+WD avec:
+
+	E = 0005
+	A = 2000
+
+Un nouveau transfert peut être initialisé et lancé immédiatement.
+
+-Si A(0 à 2)= 0
+- Absence d'horloge (lecture ou écriture)
+- A4-A5 = 01 (mode écriture)
+Tout incident signalé par le voyant "ERREUR" du panneau avant,
+
+Nota : Si le voyant "ERREUR" reste allumé l'intervention de l'opérateur est indispensable
+
+2.3.2.4
+OPE = 0
+Indique que l'unité de disque n'est pas opérationnelle au moment de la WD de transfert ou qu'elle est devenue non opérationnelle en cours de transfert,
+Exemple : Le disque ne tourne pas à la bonne vitesse, le voyant prêt est éteint.
+
+ECA =1
+Erreur de comparaison entre l'adresse piste/secteur lue sur le secteur et l'adresse fournie par le handler dans le registre ADS. Ce qui correspond :
+- Soit à un mauvais positionnement des têtes
+- Soit à une erreur de lecture de l'adresse,
+
+VPE =1
+Indique qu'on a fait une tentative d'écriture sur le disque, alors que celui-ci est protégé.
+L'opérateur doit agir sur le bouton poussoir "Protection Ecriture" pour autoriser une opération d'écriture.
+
+01, 02, 03 : Phase de l'opération de transfert d'un secteur
+
+Phase 0	(000)	Initialisation - repos
+
+Phase 1	(001)	Contrôle de l'adresse secteur
+
+Phase 2	(010)	Initialisation du transfert
+
+Phase 3	(011)	Transfert de l'adresse secteur
+
+Phase 4	(100)	Transfert des données
+
+Phase 5	(101)	Transfert des caractères nuls (entre les données et la parité longitudinale)
+
+Phase 6	(110)	Transfert du mot parité longitudinale
+
+Phase 7	(111)	Lecture de l'adresse de la piste de remplacement en cas de piste défectueuse.
+
+E = Erreur : réunit l'ensemble des conditions d'erreurs et des incidents au cours d'une opération de transfert.
+
+2.3.3 Relance de la séquence
+Lorsqu'un transfert s'est terminé incorrectement , le handler doit effectuer une RAZ du coupleur :
+WD avec 
+		E = 0005
+		A = 0080
+
+Une nouvelle séquence peut être relancée sous IT, après réinitialisation du transfert. Au niveau de l'unité de disque le transfert n'est validé qu'après l'acquittement de l'IT.
+Au bout d'un certain nombre de tentatives, une erreur est considérée comme irrécupérable.
+
+2.4 -Cas d'utilisation
+2.4.1 - Prémarquage
+Le contrôle de positionnement des têtes pour lecture de l'adresse sur le secteur moins un nécessite un prémarquage du disque. Un programme (test 24 du programme de test) permet d'écrire l'adresse physique au début de chaque secteur.
+La séquence du contrôle de l'adresse est inhibée, le programme initialise le microprogramme à la phase 2,
+
+2.4.2 - Marquage des pistes défectueuses
+Le test 32 du programme de test permet de marquer une piste comme défectueuse, L'enregistrement de chaque secteur de la piste se réduit à :
+- l'adresse secteur physique
+- l'indicateur : FFFF
+- l'adresse de la piste de réserve
+
+3.2.1 - Principe de fonctionnement - Adressage - Transfert données
+
+Au niveau de l'unité de disque, l'écriture ou la lecture d'un
+enregistrement se déroule en trois phases :
+1 - Recherche de la piste adressée (8 à 70 ms)
+2 - Recherche du secteur (25 ms max)
+3 - Transfert des données (1,04 ms/secteur sans changement de piste).
+
+- Recherche de la piste
+. Le coupleur envoie une adresse piste vers l'unité de disque
+. L'unité de disque accepte cette adresse ou indique que cette adresse n'est pas valide ("LOGICAL ADDR, INTERLOCK")
+Ce signal "L.A,I,'" est remis à zéro lorsque l'unité de disque accepte l'adresse suivante (voir paragraphe 3,1.14),
+
+. L'unité se met dans l'état "Recherche en cours' jusqu'au positionnement stable de la tête d'enregistrement sur la piste adressée.
+- Recherche du secteur
+Le coupleur repère le secteur adressé par comparaison de l'adresse fournie sur l'interface DRI (SECTOR ADDRESS) et de l'adresse reçue au moment de la commande de transfert.
+Cette adresse reçue a été envoyée par le bus MITRA et mémorisée par le coupleur.
+
+- Transfert des données
+a - En mode écriture
+- Dès la détection du secteur adressé, une commande d'écriture est envoyée vers l'unité de disque . La phase d'écriture d'un secteur comprend:
+
+. L'écriture d'un préambule composé d'une suite de zéros terminée par un bit "1'",
+. L'écriture de l'adresse piste-secteur
+. L'écriture de l'indicateur piste correcte ou défectueuse
+. L'écriture des données, 128 mots de 16 bits, complétées si nécessaire par des mots nuls.
+. L'écriture de la parité longitudinale
+. L'écritu
+. L'un postambule composé d'une suite de zéros venant compte de la distance entre la tête d'écriture et la tête d'effacement et des variations de vitesse du moteur d'entrainement.
+
+b - En mode lecture
+- Après la détection du secteur adressé, la commande de lecture est envoyée à l'unité de disque vers le milieu du préambule.
+Le coupleur détecte le premier "1" lu sur le disque, ce qui indique la fin du préambule.
+
+- Les données sont alors transférées, Le mot de parité longitudinale lu est composé avec celui calculé sur les octets d'information au cours du transfert.
+
+- La commande d'autorisation de lecture est supprimée dès que le mot de parité est transféré.
+- Pendant la phase de recherche de piste ou pendant la phase d'écriture, l'unité peut renvoyer un signal indiquant que la recherche n'a pas pu être réalisée correctement (SEEK INCOMPLETE), ou qu'il y a eu un incident pendant la phase d'écriture (WRITE CHECK). Dans ce cas une interruption est générée par le coupleur
+
+- En cas d'incident en cours de recherche, une commande de retour des têtes en position "0" (RESTORE) doit être transmise par le coupleur à l'unité de disque avant de poursuivre les opérations, Cette commande ""Restore"" se fera par l'intermédiaire du programme, soit dans l'ordre:
+"SEEK incomplète'"' sur station DRI —> Bascule incident sur le coupleur -> le coupleur fait interruption vers le Mitra —> le programme traite cette IT —> le Mitra envoie une commande Restore au coupleur —> le coupleur transmet cette commande Restore au DRI —> le DRI positionne ces têtes sur le cylindre zéro et remet le signal "SEEK incomplète" en position repos.
+L'ensemble est à nouveau prêt à travailler.
+
+3,2,2 - Format d'enregistrement sur le disque
+
+Les enregistrements sont décomposés en secteurs de longueur
+fixe (256 octets), Le secteur se décompose de la facon suivante:
+
+1024 usec entre deux secteurs
+
+Z1 : Zone de garde correspondant à la tolérance sur la position
+du secteur.
+Z2 : Préambule composé d'une suite de '"zéros" suivie d'un "1"
+en dernière position.
+I1 : Indicateur de 16 bits : adresse piste et secteur physique.
+
+Ce mot se décompose de la façon suivante :
+
+- bit 0 à bit 8:	adresse piste
+- bit 9	adresse tête: (inf, / sup.)
+- bit 10 à bit 14:	adresse secteur
+- bit 15: adresse disque
+	- 0 Fixe
+	- 1 Amovible
+
+Nota :
+Pas de clé de parité sur cet indicateur I1,
+I2 : Indicateur de 16 bits
+
+- bit 0 à bit 15:	
+	- 0 piste correcte
+	- 1 piste défectueuse
+
+a - Piste correcte : 12 (0000)
+
+- D: 256 octets de données
+
+- PL: Mot de 16 bits correspondant à la parité longitudinale du bloc de données.
+
+- Z3 : Zone non utilisée, composée d'une suite de zéros tenant compte de la distance entre les entrefers d'écriture et d'effacement.
+
+- Z4 : Zone de garde tenant compte de la variation de vitesse du moteur d'entrafnement et de la position physique de l'index secteur.
+
+b - Piste défectueuse : I2 (FFFF)16
+- D : 2 mots de 16 bits
+
+En cas de piste défectueuse l'adresse du secteur de remplacement est inscrite deux fois derrière l'indicateur I2.
+Le microprogramme effectue la comparaison des deux, avant de commander le transfert sur le secteur de remplacement.
+
+Le reste du secteur est constitué par Z3 et Z4, Z4 est alors d'une durée très supérieure à 75 micro-secondes.
+
+3.2.3 - Composition des registres généraux - Rôle
+Le transfert des caractères entre le coupleur et le calculateur s'effectue à l'aide de suspensions.
+Le microprogramme de traitement des suspensions utilise 8 registres généraux spécifiques au coupleur disque.
+
+
+RTI	RO	&38
+
+ADM	RI	&39
+
+NS/NM	R2	&3A
+
+Q	R3	&3B
+
+ADS	R4	&3C
+
+PL	R5	&3D
+
+ADR	R6	&3E
+
+RTZ	R7	&3F
+
+RTI: Registre de travail
+
+ADM: Adresse mémoire vive du mot à transférer
+
+NS: Nombre de secteurs moins un à transférer
+
+NM: Nombre de mots à transférer dans le dernier secteur (R2 contient le nombre de mots total à transférer),
+
+Q: Utilisé par le microprogramme pour le découpage par secteur de 128 (contient 128 en début de transfert secteur)
+
+ADS : Adresse piste et secteur du disque
+
+PL: Parité longitudinale
+
+ADR : Adresse secteur de retour après déroutement sur une piste de réserve
+
+RT2: Registre de travail,
+
+3.2.4 - Interface calculateur MITRA 15
+
+H1: Horloge de référence de la micromachine
+
+RZG2: Remise à zéro générale
+
+AD: Adresse coupleur - AD05
+
+LE: Commande lecture
+	- LEO : lecture caractère
+	- LE1 : lecture état
+
+EC: Commande écriture
+
+	- ECO : commande état coupleur
+	- EC1 : commande transfert
+	- EC2 : écriture données
+
+AC: Commande acquittement
+	- ACI
+
+LP: Bus transfert de données vers MITRA (16 bits)
+
+EP: Bus transfert de données vers le coupleur (16 bits)
+
+
+SU: Demande de suspension
+
+IT: Demande d'interruption
+
+PIT: Commande de demande d'interruption
+
+DIT: Commande de remise à zéro de la demande d'interruption
+
+ADES: Réponse à une commande d'E/S
+
+3.3 - Détails de fonctionnement du coupleur et du microprogramme
+
+3.3.1 - Interface MITRA 15
+D'une facon générale en ce qui concerne le MITRA 15 et le coupleur, les signaux dont le nom est précédé d'un "N" sont vrais à 1'état haut, et ceux dont le nom n'est pas précédé d'un "N" sont vrais à 1'état bas.
+
+H1: Horloge de référence de la micro-machine
+
+RZG2: Remise à zéro générale:
+
+ADO5: Adresse coupleur
+
+LE0: Commande de lecture (données)
+
+LE1: Commande de lecture (mot d'état)
+
+ECO: Commande d'écriture (mot de commande)
+
+EC1: Commande d'écriture (adresse P/S)
+
+EC2: Commande d'écriture (données)
+
+AC1: Commande d'acquittement de suspension
+
+PIT: Commande interruption
+
+DIT: Commande reset interruption
+
+NEP00 à NEP15: BUS écriture coupleur (16 bits)
+
+SU27: Demande suspension
+
+IT: Demande interruption
+
+LP00 à LP15: BUS lecture coupleur (16 bits)
+
+ADES: Commande E/S reçue
+
+
+3.3.2 - Interface DRI
+
+
+3.3.3 - Rappel "Organisation générale'
+
+Un transfert est initialisé par un programme en mémoire vive (handler)
+- Mot d'état
+- Registre généraux
+- Commande transfert
+Le déroulement du transfert s'effectue sous le controle du microprogramme :
+	- Transfert des données en mémoire
+	- Calcul de la parité
+	- Détection de la fin du secteur
+	- Détection de la fin du transfert
+	- Contrôle du positionnement des têtes
+
+Le compte rendu du transfert est fourni dans le mot d'état accessible au handler,
+La partie logique câblée du coupleur est constituée de deux plaquettes type MITRA 15 qui ont, toutes les deux accès, au minibus MITRA par les connecteurs A, B, C et D.
+
+Ces deux plaquettes DP15 et DP16 sont reliées entre elles par des liaisons fil à fil sur les connecteurs E et F. La première unité de disque est reliée au coupleur par les connecteurs G et H de DP16.
+
+La plaquette DP16 comporte la logique correspondante à l'interface de l'unité de disque,
+
+La plaquette DP15 comporte z mot d'état du coupleur, les buffers réception et émission des données et leur conversion parallèle -série et série parallèle.
+Le microprogramme est implanté sur 7 pages de 32 micro-instructions.
+
+3.3.4 - Rappel "Généralités microprogramme"
+
+Le microprogramme est découpé en 8 phases correspondant aux différents niveaux du transfert d'un secteur.
+Le mot d'état du coupleur indique à tout moment du transfert la phase et le mode par les bits LP00 à LP02 et LP04 - LPO5,
+
+LP00: 01
+
+LP01: 02
+
+LP02: 03
+
+LP04: M1
+
+LP05: M2
+
+La phase est initialisée à zéro par le handler; à chaque suspension, le microprogramme indique la phase de la suivante.
+
+- Description
+A chaquesuspension, le microprogramme commence par une lecture du mot d'état (LD 05) et effectue un éclatement suivant la phase et le mode.
+
+	M1	m2
+	0	1	Ecriture
+	1	0	Lecture
+	1	1	Contrôle écriture
+
+
+
+
+
+LP00| LP01  | LP01
+	|		|
+0	|	0	| 0		Initialisation - repos
+0	|	0	| 1		Contrôle du positionnement des têtes et de l'indicateur piste défectueuse
+0	|	1	| 0		Initialisation du transfert des données
+0	|	1	| 1		Transfert de l'adresse P/S
+1	|	0	| 0		Transfert des données
+1	|	0	| 1		Transfert des caractères nuls
+1	|	1	| 0		Transfert de la parité
+1	|	1	| 1		Lecture de l'adresse de branchement en cas de piste défectueuse
+
+- Les phases "0" et "1" correspondent aux deux suspensions déclenchées pendant le contrôle du positionnement des têtes sur le secteur S.1
+
+En cas de piste défectueuse, la phase "7" correspond à la lecture et au contrôle de l'adresse de la piste de remplacement.
+
+Les phases "2" à "6" correspondent au transfert du secteur S.
+
+3.3.5 - Rôle des différentes phases du microprogramme
+
+- Phase "0"
+
+La phase "0" est identique pour les 3 modes. Le microprogramme contrôle uniquement l'initialisation du registre "CM" qui ne doit être ni négatif, ni nul , Dans le cas d'une mauvaise initialisation avec positionnement du bit "EPL" du mot d'état.
+
+- Phase "1"
+La phase "1" est identique pour les 3 modes.
+La première donnée lue sur le disque représente l'adresse piste secteur, Le microprogramme vérifie que cette adresse correspond au contenu du registre "ADS", sinon, une interruption est générée avec positionnement du bit "ECA" du mot d'état.
+
+La seconde donnée lue sur le disque est l'indicateur de piste défectueuse :
+	- Si "0000" la piste est correcte et le transfert est lancé en 	phase '"2" sur le secteur suivant de la même piste.
+	- Si "FFFF" la piste est défectueuse, la phase est lancé en
+	"7"
+	- Si l'indicateur est différent de ''0000" et "FFFF" le microprogramme considère qu'il y a une erreur de lecture et génère une interruption avec positionnement du bit "EPL" 	du mot d'état (Voir paragraphe 3.2,12).
+
+- Phase "2"
+Au niveau de l'interface du disque la suspension déclenchée en phase "2" sur le secteur "S" correspond à celle déclenchée en phase "0" sur le secteur S.1
+- En écriture, le microprogramme transfert dans le buffer d'entrée des données les deux derniers mots du préambule ("0000") et ("0001").
+- Quel que soit le mode, les registres PL et Q sont initialisés
+
+- Phase '"3"
+- En écriture, le microprogramme transfert l'adresse piste secteur et l'indicateur ("0000") qui sont inscrits en tête du secteur.
+- Dans tous les cas, le registre Q est préparé pour transférer le secteur complet :
+	. Si CM < 128
+		- Q = Nombre de mots à transférer (en négatif)
+		- CM = Nombre de zéros complémentaires (en négatif)
+		Le secteur étant toujours complété à 128 mots.
+
+	.Si CM = 128
+		- Q = Nombre de mots à transférer (-128)
+		- CM = 0
+
+	. Si CM > 128
+		- Q = Nombre de mots à transférer dans le secteur (- 128)
+		- CM = Nombre de mots à transférer dans les secteurs suivants.
+
+Dans la phase suivante de transfert des données, seul le registre Q sert à incriminer et à tester.
+
+- En écriture la première donnée est transférée de la mémoire dans le registre de travail RTI.
+
+En effet, la première donnée doit être disponible dans le buffer d'entrée au moment du transfert dans le registre à décalage effectué par la base de temps mot (Voir schéma de phase). Pour éviter l'attente d'un appel mémoire cette donnée est préparée dans RTI1 à la fin de la suspension précédente.
+
+- Phase "4"
+En phase "4" sont transférés les données signicatives du secteur.
+
+- Ecriture
+	- Transfert du contenu de RT1
+	- Incrémentation de Q (+2)
+		Si Q < 0: transfert de la seconde donnée à partir de la mémoire et préparation de la suivante dans RT1.
+		Si Q = 0: Transfert de la dernière donnée à partir de la mémoire et test de la fin du secteur:
+			- CM < 0 —> Passage en phase "5" pour complèter le secteur par des zéros
+			- CM >= 0 —> Passage en phase "6" pour écriture de la parité
+
+		Si Q > 0:( 1) transfert du premier zéro)
+
+- Lecture
+La première donnée doit être lue dans le buffer de sortie avant le prochain transfert à partir du registre à décalage.
+
+- Lecture de la première donnée et transfert dans RT1
+- Incrémentation de Q (+ 2)
+		Si Q < 0: transfert de RT1 en mémoire lecture de la seconde donnée et transfert en mémoire.
+		Si Q = 0: transfert de RT1 en mémoire lecture de la seconde donnée et transfert en mémoire avec passage en phase "6" pour controler la parité à la suspension suivante. 
+		Si Q > 0:( 1) La seconde donnée transférée n'est pas  significative (zéro de fin) ; passage en phase "6" pour rechercher la fin du secteur avec incrémentation de "CM" qui indique le nombre de zéros qui reste à lire.
+
+
+- Contrôle écriture
+L'enchainement du microprogramme est le même qu'en mode lecture sans transfert des données en mémoire.
+
+La première donnée doit être lue dans le buffer de sortie avant le prochain transfert à partir du registre à décalage.
+
+- Lecture de la première donnée et transfert dans RT1
+- Incrémentation de Q (+ 2)
+		Si Q < 0: transfert de RT1 en mémoire lecture de la seconde donnée.
+		Si Q = 0: transfert de RT1 en mémoire lecture de la seconde donnée et passage en phase "6" pour controler la parité à la suspension suivante. 
+		Si Q > 0:( 1) La seconde donnée transférée n'est pas  significative (zéro de fin) ; passage en phase "6" pour rechercher la fin du secteur avec incrémentation de "CM" qui indique le nombre de zéros qui reste à lire.
+
+- La phase "5" est seulement utilisée en écriture pour complèter par des zéros un enregistrement inférieur à 128 mots.
+- Transfert de 2 zéros
+- Incrémentation de CM (+2)
+	Si CM < 0: le secteur n'est pas complet
+	Si CM = 0: passage en phase "6" pour écriture de la parité.
+
+- Phase "6"
+La phase "6" correspond au transfert de la parité,
+	- Ecriture
+		- Transfert du contenu du registre ""PL'' suivi d'un zéro 
+		- Envoi de la commande "'arrêt suspension' qui déclenche 		la séquence d'arrêt au niveau de l'interface disque.
+		- Test de la fin du transfert :
+		. CM = 0: Transfert terminé, génération d'une IT
+		. CM > 0: Enchainement du transfert sur le secteur 		suivant.
+
+	- Lecture et contrôle écriture
+		- Recherche de la fin du secteur
+		. CM < 0: Lecture des zéros complétant le secteur
+		. CM >= 0: Comparaison de la donnée lue avec le	contenu du registre PL.
+			- S'il n'y a pas identité, génération d'une interruption avec positionnement du bit "EPL'" dans le mot d'état.
+			- S'il y a identité, envoi de la commande "AR.SUS" et test de la fin du transfert.
+
+- Phase "7"
+La phase "7" est identique pour les 3 modes.
+Les deux mots lus sur le disque et transférés pendant cette phase correspondent à l'adresse de la piste de remplacement. Le microprogramme vérifie que ces deux mots sont identiques et commande le transfert en phase "0" à l'adresse indiquée, Sinon, il considère qu'il y à une erreur de lecture et génère une interruption avec le bit "EPL" du mot d'état positionné.
+
+Nota :
+Au niveau de l'interface du disque, quelque soit le mode programmé par le handler, en phase "0", le coupleur commande une lecture du disque.
+
+
+

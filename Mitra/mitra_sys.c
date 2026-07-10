@@ -12,7 +12,18 @@
 
 /* ========== External Declarations from mitra_cpu.c ========== */
 extern uint16 M[MAXMEMSIZE];
-extern uint16 P, A, E, X, L, G;
+extern uint8 curr_bloc;
+extern struct {
+	uint16 A;
+	uint16 E;
+	uint16 X;
+	uint8 C, OV;
+	uint16 P;
+	uint16 L;
+	uint16 G;
+	uint16 V;
+	uint16 W;
+} reg_block[];
 extern uint8  C, OV, MS, MA, PR;
 extern uint16 cpu_mode;
 extern uint32 int_req;               /* Corrected to uint32 to match mitra_io.c */
@@ -533,7 +544,7 @@ t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag)
     }
     
     /* Set PC to start address (usually address 2 contains bootstrap) */
-    if (MAXMEMSIZE > 2) P = M[2];
+    if (MAXMEMSIZE > 2) reg_block[curr_bloc].P = M[2];
     
     return SCPE_OK;
 }

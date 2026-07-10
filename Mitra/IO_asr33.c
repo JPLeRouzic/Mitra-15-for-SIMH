@@ -89,6 +89,7 @@ All devices will follow the same integration pattern, they provide:
 #include "mitra_io.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #define ASR33_R9   0x09
 #define ASR33_R10  0x0A
@@ -145,7 +146,8 @@ void asr33_detach(void)
 static void asr_interrupt(void)
 {
     int_req |= (1 << 3);   /* typical interrupt level for ASR33 */
-    io_interrupt_dispatch();
+    io_interrupt_dispatch(int_req, false);
+
 }
 
 /* Write a character to the console (EBCDIC → ASCII conversion handled in mitra_io.c) */

@@ -121,6 +121,7 @@ All devices will follow the same integration pattern, they provide:
 #include "mitra_io.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 extern uint32 int_req;               /* interrupt request bits */
 extern uint16 read_word(uint16 addr);
@@ -177,7 +178,8 @@ void ptr_detach(void)
 static void ptr_interrupt(void)
 {
     int_req |= (1 << 5);   /* typical interrupt level for reader */
-    io_interrupt_dispatch();
+    io_interrupt_dispatch(int_req, false);
+
 }
 
 int ptr_poll(void)
@@ -263,7 +265,8 @@ void ptp_detach(void)
 static void ptp_interrupt(void)
 {
     int_req |= (1 << 6);   /* typical interrupt level for punch */
-    io_interrupt_dispatch();
+    io_interrupt_dispatch(int_req, false);
+
 }
 
 int ptp_poll(void)

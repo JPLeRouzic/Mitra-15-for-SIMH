@@ -3,6 +3,7 @@
 #define MITRA_IO_H
 
 #include "mitra_defs.h"
+#include <stdbool.h>
 
 /* I/O supervisor section numbers (defined by the monitor) */
 #define M_10_SECTION    10   /* M:1O  – normal I/O request */
@@ -63,7 +64,7 @@ t_stat io_rd(uint16 e_reg, uint16 *data_out);
 t_stat io_wd(uint16 e_reg, uint16 data);
 t_stat io_dit(void);
 t_stat io_ditr(void);
-void   io_interrupt_dispatch(void);
+void io_interrupt_dispatch(uint16 intr_lvl, t_bool hgh_spd);
 int    io_check_ready(void);
 void   io_dev_attach(int oplabel, const char *file, int write);
 t_stat read_byte_io(uint32 addr, uint8 *val, int zio) ;

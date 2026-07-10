@@ -155,6 +155,7 @@ All devices will follow the same integration pattern, they provide:
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #define DRI_SECTOR_SIZE      256
 #define DRI_SECTORS_PER_TRACK 24
@@ -202,7 +203,7 @@ static uint32 ads_to_sector(uint16 ads)
 static void dri_interrupt(int unit)
 {
     int_req |= (1 << (7 + unit));   /* level 7 for unit0, 8 for unit1 */
-    io_interrupt_dispatch();
+    io_interrupt_dispatch(int_req, false);
 }
 
 /* Start a transfer on a given unit */
