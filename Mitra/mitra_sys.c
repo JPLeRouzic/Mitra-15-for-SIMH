@@ -14,19 +14,15 @@
 extern uint16 M[MAXMEMSIZE];
 extern uint8 curr_bloc;
 extern struct {
-	uint16 A;
-	uint16 E;
-	uint16 X;
-	uint8 C, OV;
-	uint16 P;
-	uint16 L;
-	uint16 G;
-	uint16 V;
-	uint16 W;
+    uint16 A, E, X;
+    uint8 C, OV;
+    uint16 P, L, G, V, W;
 } reg_block[];
 extern uint8  C, OV, MS, MA, PR;
 extern uint16 cpu_mode;
-extern uint32 int_req;               /* Corrected to uint32 to match mitra_io.c */
+extern uint32 int_req;
+extern uint32 susp_req_bits;
+extern DEVICE cpu_dev, rtc_dev;
 
 extern DEVICE cpu_dev;
 extern DEVICE rtc_dev;               /* Real-time clock */
@@ -52,11 +48,33 @@ extern t_stat asr33_attach(const char *filename);
 extern void   asr33_detach(void);
 extern void   asr33_reset(void);
 
-extern void   panel_reset(void);
+extern t_stat printer_attach(const char *filename);
+extern void   printer_detach(void);
+extern void   printer_reset(void);
+
+extern t_stat ptr_attach(const char *filename);
+extern void   ptr_detach(void);
 extern void   ptr_reset(void);
+
+extern void   panel_reset(void);
+
+extern t_stat ptp_attach(const char *filename);
+extern void   ptp_detach(void);
 extern void   ptp_reset(void);
 
 /* SIMH wrapper prototypes */
+static t_stat dri_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat dri_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat dri_sim_reset(DEVICE *dptr);
+static t_stat sagem_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat sagem_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat sagem_sim_reset(DEVICE *dptr);
+static t_stat cdr_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat cdr_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat cdr_sim_reset(DEVICE *dptr);
+static t_stat printer_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat printer_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat printer_sim_reset(DEVICE *dptr);
 
 static t_stat dri_sim_attach   (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 static t_stat dri_sim_detach   (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
@@ -86,6 +104,14 @@ extern t_stat printer_attach (const char *filename);
 extern void   printer_detach (void);
 extern void   printer_reset (void);
 
+static t_stat ptr_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat ptr_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat ptr_sim_reset(DEVICE *dptr);
+
+static t_stat ptp_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat ptp_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+static t_stat ptp_sim_reset(DEVICE *dptr);
+
 /* ========== SIMH Core Data Structures ========== */
 char sim_name[] = "Mitra 15";
 REG *sim_PC = NULL;
@@ -107,6 +133,7 @@ const char *sim_stop_messages[] = {
     "Trap instruction invalid",
     "RTC instruction not valid",
     "Interrupt vector zero",
+    "Suspension stack overflow",
     NULL
 };
 
@@ -160,7 +187,7 @@ DEVICE sagem_dev = {
 UNIT cdr_unit[] = {
     {
         .action = NULL,
-        .flags  = UNIT_SEQ | UNIT_BINK,
+        .flags  = UNIT_SEQ | UNIT_BINK | UNIT_RO,
         .capac  = 0
     }
 };
@@ -174,40 +201,45 @@ MTAB cdr_mod[] = {
 DEVICE cdr_dev = {
     "CDR", cdr_unit, NULL, cdr_mod,
     1, 8, 16, 1, 8, 16,
-    NULL, NULL, &cdr_sim_reset, NULL, NULL, NULL, NULL, 0, 0
+    NULL, NULL, &cdr_sim_reset, NULL, NULL, NULL, NULL, DEV_DISABLE, 0
 };
 
 /* ASR33 Teletype (Console) */
 UNIT asr_unit[] = {
-    {
-        .action = NULL
-    }
+    { UDATA(NULL, UNIT_SEQ, 0) }
 };
 
+MTAB asr_mod[] = {
+    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &asr_sim_attach, NULL, NULL, "Attach console log" },
+    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &asr_sim_detach, NULL, NULL, "Detach console log" },
+    { 0 }
+};
 DEVICE asr_dev = {
-    "ASR", asr_unit, NULL, NULL,
+    "ASR", asr_unit, NULL, asr_mod,
     1, 8, 16, 1, 8, 16,
     NULL, NULL, &asr_sim_reset, NULL, NULL, NULL, NULL, 0, 0
 };
 
 /* Line printer */
 UNIT lp_unit[] = {
-    {
-        .action = NULL
-    }
+    { UDATA(NULL, UNIT_SEQ, 0) }
+};
+
+MTAB lp_mod[] = {
+    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &printer_sim_attach, NULL, NULL, "Attach printer output" },
+    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &printer_sim_detach, NULL, NULL, "Detach printer output" },
+    { 0 }
 };
 
 DEVICE printer_dev = {
-    "LP", lp_unit, NULL, NULL,
+    "LP", lp_unit, NULL, lp_mod,
     1, 8, 16, 1, 8, 16,
-    NULL, NULL, &printer_sim_reset, NULL, NULL, NULL, NULL, 0, 0
+    NULL, NULL, &printer_sim_reset, NULL, NULL, NULL, NULL, DEV_DISABLE, 0
 };
 
 /* Front Panel */
 UNIT panel_unit[] = {
-    {
-        .action = NULL
-    }
+    { UDATA(NULL, 0, 0) }
 };
 
 DEVICE panel_dev = {
@@ -218,12 +250,14 @@ DEVICE panel_dev = {
 
 /* Paper Tape Reader / Punch */
 UNIT ptr_unit[] = {
-    {
-        .action = NULL,
-        .flags = UNIT_SEQ | UNIT_BINK
-    }
+    { UDATA(NULL, UNIT_SEQ | UNIT_RO, 0) }
 };
 
+MTAB ptr_mod[] = {
+    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &ptr_sim_attach, NULL, NULL, "Attach paper tape image" },
+    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &ptr_sim_detach, NULL, NULL, "Detach paper tape image" },
+    { 0 }
+};
 DEVICE ptr_dev = {
     "PTR", ptr_unit, NULL, NULL,
     1, 8, 16, 1, 8, 16,
@@ -231,16 +265,20 @@ DEVICE ptr_dev = {
 };
 
 UNIT ptp_unit[] = {
-    {
-        .action = NULL,
-        .flags = UNIT_SEQ | UNIT_BINK
-    }
+    { UDATA(NULL, UNIT_SEQ, 0) }
+
+};
+
+MTAB ptp_mod[] = {
+    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &ptp_sim_attach, NULL, NULL, "Attach paper tape punch output" },
+    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &ptp_sim_detach, NULL, NULL, "Detach paper tape punch output" },
+    { 0 }
 };
 
 DEVICE ptp_dev = {
-    "PTP", ptp_unit, NULL, NULL,
+    "PTP", ptp_unit, NULL, ptp_mod,
     1, 8, 16, 1, 8, 16,
-    NULL, NULL, &ptp_sim_reset, NULL, NULL, NULL, NULL, 0, 0
+    NULL, NULL, &ptp_sim_reset, NULL, NULL, NULL, NULL, DEV_DISABLE, 0
 };
 
 /* Device list */
@@ -645,6 +683,19 @@ static t_stat cdr_sim_reset (DEVICE *dptr)
     return SCPE_OK;
 }
 
+/* ASR33 Teletype */
+static t_stat asr_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
+    return asr33_attach(cptr);
+}
+static t_stat asr_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
+    asr33_detach();
+    return SCPE_OK;
+}
+static t_stat asr_sim_reset(DEVICE *dptr) {
+    asr33_reset();
+    return SCPE_OK;
+}
+
 /* Line printer */
 static t_stat printer_sim_attach
 (
@@ -675,46 +726,27 @@ static t_stat printer_sim_reset (DEVICE *dptr)
     return SCPE_OK;
 }
 
-/* ASR33 Teletype */
-static t_stat asr_sim_attach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    return asr33_attach(cptr);
+/* Paper Tape Reader */
+static t_stat ptr_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
+    return ptr_attach(cptr);
 }
 
-static t_stat asr_sim_detach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    asr33_detach();
+static t_stat ptr_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
+    ptr_detach();
     return SCPE_OK;
 }
-
-static t_stat asr_sim_reset (DEVICE *dptr)
-{
-    asr33_reset ();
-    return SCPE_OK;
-}
-
-/*  Front Panel, Paper Tape */
-static t_stat panel_sim_reset (DEVICE *dptr)
-{
-    panel_reset ();
-    return SCPE_OK;
-}
-
 static t_stat ptr_sim_reset (DEVICE *dptr)
 {
     ptr_reset ();
+    return SCPE_OK;
+}
+
+/* Paper Tape Punch */
+static t_stat ptp_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
+    return ptp_attach(cptr);
+}
+static t_stat ptp_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
+    ptp_detach();
     return SCPE_OK;
 }
 
@@ -728,6 +760,12 @@ static t_stat ptp_sim_reset (DEVICE *dptr)
 t_stat mitra_sys_init(void)
 {
     io_init_system();
+    return SCPE_OK;
+}
+
+/* Front Panel */
+static t_stat panel_sim_reset(DEVICE *dptr) {
+    panel_reset();
     return SCPE_OK;
 }
 

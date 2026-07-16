@@ -9,6 +9,8 @@
  * - 86 instructions (Mitra-15/30)
  * - 32 interrupt levels
  * - Master/Slave modes with memory protection
+ * - Interrupt, fast interrupt, suspension, and trap support
+
  */
 
 #include <stdbool.h>
@@ -75,16 +77,33 @@
 
 #define VA_TO_PA(va) ((va) & 0x7FFF)
 
+/* ========== Trap and Suspension Constants ========== */
+/* Trap causes (Section II-8.3) */
+#define TRAP_VM         0   /* Mode violation */
+#define TRAP_PM         1   /* Memory protection violation */
+#define TRAP_AI         2   /* Non-existing address */
+#define TRAP_PA         3   /* Parity error */
+#define TRAP_II         4   /* Invalid instruction */
+#define TRAP_ES         5   /* I/O error */
+#define TRAP_WD         6   /* Watchdog timer */
+
+/* Suspension levels (Section II-8.2) */
+#define SUSP_STACK_DEPTH    4
+#define SUSP_INTERNAL_TRAP  0
+#define SUSP_INTERNAL_IT    1
+#define SUSP_INTERNAL_PANEL 2
+#define SUSP_INTERNAL_PWR   3
+
 /* Interrupt vectors */
 static const uint32 int_vec[32] = {
-0, 0, 0, 0,
-VEC_FORK, VEC_DRM, VEC_MUXCF, VEC_MUXCO,
-VEC_MUXT, VEC_MUXR, VEC_HEOR, VEC_HZWC,
-VEC_GEOR, VEC_GZWC, VEC_FEOR, VEC_FZWC,
-VEC_EEOR, VEC_EZWC, VEC_DEOR, VEC_DZWC,
-VEC_CEOR, VEC_CZWC, VEC_WEOR, VEC_YEOR,
-VEC_WZWC, VEC_YZWC, VEC_RTCP, VEC_RTCS,
-VEC_IPAR, VEC_CPAR, VEC_PWRF, VEC_PWRO
+    0, 0, 0, 0,
+    VEC_FORK, VEC_DRM, VEC_MUXCF, VEC_MUXCO,
+    VEC_MUXT, VEC_MUXR, VEC_HEOR, VEC_HZWC,
+    VEC_GEOR, VEC_GZWC, VEC_FEOR, VEC_FZWC,
+    VEC_EEOR, VEC_EZWC, VEC_DEOR, VEC_DZWC,
+    VEC_CEOR, VEC_CZWC, VEC_WEOR, VEC_YEOR,
+    VEC_WZWC, VEC_RTCP, VEC_RTCS, VEC_IPAR,
+    VEC_CPAR, VEC_PWRF, VEC_PWRO, 0
 };
 
 /* ========== Type Definitions ========== */
@@ -151,18 +170,7 @@ typedef struct {
 uint16 cpu_mode; /* 0=Normal/Slave, 1=Master */
 uint16 RL1, RL2, RL4;
 
-// Interrupts save context in an area pointed by an index to the CPT table.
-// the CPT itself is pointed to by the contents of absolute address 10: M[10]
-// There is a "high-speed" interrupt mechanism that uses register block switching instead of memory-based context saves.
-struct {
-    uint16 intrp_level;
-    t_bool high_speed;
-}
-int_req;
-
-uint16 int_lvl;			// current interrupt level
-uint32 int_reqhi = 0; 		// Highest interrupt request
-
+/* ========== Suspension System (Section II-8.2) ========== */
 // The suspension system is able to interrupt the current micro-program at the end of every micro-instruction, and to launch a special micro-program. 
 // The suspension request is either issued by a peripheral or internal to the CPU.
 // On occurence of a suspension, the CPU status, i.e. the contents of U, J, T registers and of B, Tz, To, Ao indicators are transferred in a 
@@ -171,6 +179,46 @@ uint32 int_reqhi = 0; 		// Highest interrupt request
 uint16 susp_req;		// suspension requests
 uint16 susp_lvl;		// suspension trap level
 uint32 susp_reqhi = 0; 		// Highest suspension request
+
+/* Suspension stack - 4 levels deep */
+typedef struct {
+    uint16 U_reg;     /* Universal register */
+    uint16 J_reg;     /* J register (block selector) */
+    uint16 T_reg;     /* T register (micro-PC) */
+    uint8  B_ind;     /* B indicator */
+    uint8  Tz_ind;    /* Tz indicator */
+    uint8  To_ind;    /* To indicator */
+    uint8  Ao_ind;    /* Ao indicator */
+    uint16 saved_bloc; /* Saved register block */
+} SuspContext;
+
+SuspContext susp_stack[SUSP_STACK_DEPTH];
+int susp_stack_ptr = 0;
+
+/* Suspension request bits (32 levels, 8 per stack level) */
+uint32 susp_req_bits = 0;
+uint16 susp_active_level = 0;
+t_bool susp_pending = FALSE;
+
+// Interrupts save context in an area pointed by an index to the CPT table.
+// the CPT itself is pointed to by the contents of absolute address 10: M[10]
+// There is a "high-speed" interrupt mechanism that uses register block switching instead of memory-based context saves.
+struct {
+    uint32 intrp_level;  /* 32-bit bitmask of pending interrupts */
+    t_bool high_speed;   /* TRUE if high-speed interrupt */
+} int_req;
+
+uint16 int_lvl = 0;           /* Current interrupt level */
+uint32 int_reqhi = 0;         /* Highest pending interrupt level */
+
+/* De-activation Word Table (DVT) - Section III-5 */
+uint16 dvt_table[32];         /* 32 de-activation words */
+uint16 cpt_base = 0;          /* Context Pointer Table base (M[10]) */
+
+/* ========== Trap System (Section II-8.3) ========== */
+uint16 trp_req_bits = 0;      /* Trap request bits */
+t_bool trap_pending = FALSE;
+uint16 trap_cause = 0;
 
 // Traps
 // The origin of a trap is an abnormal condition detected at the end of a micro-instruction.
@@ -224,6 +272,8 @@ int routing_enabled = 0;
 extern uint16 panel_addr_lights;
 extern uint16 panel_data_lights;
 
+extern void io_suspension_dispatch(uint16 susp_level);
+
 /* ========== Function Prototypes ========== */
 uint16 read_word(uint16 va);
 void write_word(uint16 va, uint16 val);
@@ -238,7 +288,15 @@ static void mul32(uint16 a, uint16 b, uint16 * high, uint16 * low);
 static int div32(uint16 high, uint16 low, uint16 divisor, uint16 * quot, uint16 * rem);
 static void double_to_mitra(double v, uint16 * A, uint16 * E);
 static double mitra_to_double(uint16 A, uint16 E);
-t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc);
+
+/* Enhanced trap and suspension functions */
+t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc);
+t_stat mitra_suspension_request(uint16 susp_level);
+t_stat mitra_suspension_process(void);
+t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed);
+t_stat mitra_interrupt_return(t_bool high_speed);
+void set_dyn_map(void);
+
 void set_dyn_map(void);
 t_stat set_cc(void);
 t_stat cpu_ex(t_value * vptr, t_addr addr, UNIT * uptr, int32 sw);
@@ -287,41 +345,45 @@ UNIT cpu_unit = {
 };
 
 REG cpu_reg[] = {
-{ ORDATA(reg_block, reg_block, 16) },
-{ FLDATA(MS, MS, 0) },
-{ FLDATA(MA, MA, 0) },
-{ FLDATA(PR, PR, 0) },
-{ ORDATA(S, S, 15) },
-{ ORDATA(MREG, MREG, 18) },
-{ ORDATA(U, U, 16) },
-{ ORDATA(INT_REQ, int_req, 32) },
-{ ORDATA(INT_LVL, int_lvl, 5) },
-{ ORDATA(INT_REQ, susp_req, 32) },
-{ ORDATA(INT_LVL, susp_lvl, 5) },
-{ ORDATA(INT_REQ, trp_req, 32) },
-{ ORDATA(INT_LVL, trp_lvl, 5) },
-{ ORDATA(RL1, RL1, 16) },
-{ ORDATA(RL2, RL2, 16) },
-{ ORDATA(RL4, RL4, 16) },
-{ ORDATA(CPU_MODE, cpu_mode, 2) },
-{ DRDATA(INDLIM, ind_lim, 8), REG_NZ + PV_LEFT },
-{ DRDATA(EXULIM, exu_lim, 8), REG_NZ + PV_LEFT },
-{ ORDATA(WRU, sim_int_char, 8) },
-{ ORDATA(PANEL_ADDR, panel_addr_lights, 16) },
-{ ORDATA(PANEL_DATA, panel_data_lights, 16) },
-{ FLDATA(CPU_RUNNING, cpu_running, 0) },
-{ FLDATA(INT_ENABLED, interrupts_enabled, 0) },
-{ FLDATA(ROUTING_ENABLED, routing_enabled, 0) },
-{ NULL }
+    { ORDATA(reg_block, reg_block, 16) },
+    { FLDATA(MS, MS, 0) },
+    { FLDATA(MA, MA, 0) },
+    { FLDATA(PR, PR, 0) },
+    { ORDATA(S, S, 15) },
+    { ORDATA(MREG, MREG, 18) },
+    { ORDATA(U, U, 16) },
+    { ORDATA(INT_REQ, int_req.intrp_level, 32) },
+    { ORDATA(INT_LVL, int_lvl, 5) },
+    { ORDATA(SUSP_REQ, susp_req_bits, 32) },
+    { ORDATA(SUSP_LVL, susp_active_level, 5) },
+    { ORDATA(TRP_REQ, trp_req_bits, 16) },
+    { ORDATA(RL1, RL1, 16) },
+    { ORDATA(RL2, RL2, 16) },
+    { ORDATA(RL4, RL4, 16) },
+    { ORDATA(CPU_MODE, cpu_mode, 2) },
+    { DRDATA(INDLIM, ind_lim, 8), REG_NZ + PV_LEFT },
+    { DRDATA(EXULIM, exu_lim, 8), REG_NZ + PV_LEFT },
+    { ORDATA(WRU, sim_int_char, 8) },
+    { ORDATA(PANEL_ADDR, panel_addr_lights, 16) },
+    { ORDATA(PANEL_DATA, panel_data_lights, 16) },
+    { FLDATA(CPU_RUNNING, cpu_running, 0) },
+    { FLDATA(INT_ENABLED, interrupts_enabled, 0) },
+    { FLDATA(ROUTING_ENABLED, routing_enabled, 0) },
+    { NULL }
 };
 
+/* 
+ * To integrate with the SIMH command parser, link these wrappers to your 
+ * device's MTAB (modifier table) or register them as custom CLI commands.
+ * Example MTAB entry:
+ *   { MTAB_XTD | MTAB_VDV, 0, "ATTACH", "ATTACH", &io_cmd_attach, NULL, NULL, "Attach disk image" }
+ */
 MTAB cpu_mod[] = {
-	{ UNIT_MSIZE, 4096, NULL,  "4K ",  &cpu_set_size },
+	{ UNIT_MSIZE, 4096, NULL,  "4K ",  &cpu_set_size }, // Set size of memory
 	{ UNIT_MSIZE, 8192, NULL,  "8K ",  &cpu_set_size },
 	{ UNIT_MSIZE, 16384, NULL,  "16K ",  &cpu_set_size },
 	{ UNIT_MSIZE, 32768, NULL,  "32K ",  &cpu_set_size },
-	{ MTAB_XTD|MTAB_VDV|MTAB_NMO|MTAB_SHP, 0,  "HISTORY ",  "HISTORY ",
-	 &cpu_set_hist,  &cpu_show_hist },
+	{ MTAB_XTD|MTAB_VDV|MTAB_NMO|MTAB_SHP, 0,  "HISTORY ",  "HISTORY ", &cpu_set_hist,  &cpu_show_hist },
 	{ 0 }
 };
 
@@ -333,7 +395,7 @@ NULL, NULL, NULL, NULL, 0
 };
 
 UNIT rtc_unit = {
-    UDATA( & rtc_svc, 0, 0),
+    UDATA(&rtc_svc, 0, 0),
     16000
 };
 REG rtc_reg[] = {
@@ -357,12 +419,28 @@ NULL, NULL, &rtc_reset, NULL, NULL, NULL
 /* ========== Memory Access Functions ========== */
 uint16 read_word(uint16 va) {
     uint16 pa = VA_TO_PA(va);
-    if (pa >= MEMsize) return 0;
+    if (pa >= MEMsize) {
+        /* Trigger address invalid trap (TRAP_AI) */
+        trp_req_bits |= (1 << TRAP_AI);
+        trap_pending = TRUE;
+        return 0;
+    }
     return M[pa];
 }
 void write_word(uint16 va, uint16 val) {
     uint16 pa = VA_TO_PA(va);
-    if (pa < MEMsize) M[pa] = val;
+    if (pa >= MEMsize) {
+        trp_req_bits |= (1 << TRAP_AI);
+        trap_pending = TRUE;
+        return;
+    }
+    /* Check memory protection */
+    if (!PR && (M[pa] & 0x0001)) {  /* Protection bit set and PR=0 */
+        trp_req_bits |= (1 << TRAP_PM);
+        trap_pending = TRUE;
+        return;
+    }
+    M[pa] = val;
 }
 uint8 read_byte(uint16 va) {
     uint16 word_addr = va >> 1;
@@ -697,7 +775,13 @@ static void double_to_mitra(double v, uint16 * A, uint16 * E) {
  * Trap causes: VM=mode violation(0), PM=protect violation(1), AI=non-existing addr(2),
  *              PA=parity(3), II=invalid instruction(4), ES=I/O error(5), watchdog(6)
  *
+ * ========== Trap Implementation (Section II-8.3) ========== *
+ *
  * Trap processing micro-program:
+ * 1. Protects bytes 4-9 (words 2,3,4) with faulting context
+ * 2. Sets trap cause bit in memory word 1
+ * 3. Calls supervisor section 0 via PRTS at address 12
+ *
  *  1. Sets the corresponding bit in absolute memory WORD 1 (byte address 2).
  *     Bit layout in word 1 (bit 0=MSB in Mitra convention):
  *       bit 0 = VM (mode violation)
@@ -736,10 +820,13 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc) {
     trap_word |= (0x8000u >> trap);
     write_word(1, trap_word);
 
-    /* Step 2: Protect bytes 4-9 with faulting context
+    /* Step 2: 
+     *Protect bytes 4-9 with faulting context
+     * Save faulting context in words 2, 3, 4 
      * "bytes 4-9" = word addresses 2, 3, 4 (2 bytes per word) */
     write_word(2, (pc - GPRIME) & 0x7FFF);
     write_word(3, (reg_block[curr_bloc].L - GPRIME) & 0x7FFF);
+    /* Indicators word: PR, MA, MS, OV, C */
     ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
         ((MS & 1) << 13) | ((reg_block[curr_bloc].OV & 1) << 12) | ((reg_block[curr_bloc].C &
             1) << 11);
@@ -752,17 +839,172 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc) {
      *   word 1 (at PRTS_base - 4*N+2) = L-base of section
      * Section 0 entry is at PRTS_base itself (N=0). 
      */
-    prts_ptr = read_word(6);
+    prts_ptr = read_word(6);  /* PRTS pointer at address 6 */
+    if (prts_ptr >= MEMsize) {
+        return SCPE_STOP;  /* Fatal: no PRTS */
+    }
+    
     sect0_Pbase = read_word(prts_ptr);
     sect0_Lbase = read_word(prts_ptr + 1);
+    
+    /* Force master mode with protection override */
     MS = 1;
     PR = 1;
     MA = 1;
+    
     reg_block[curr_bloc].L = (sect0_Lbase + reg_block[curr_bloc].G) & 0x7FFF;
     reg_block[curr_bloc].P = (sect0_Pbase + reg_block[curr_bloc].G) & 0x7FFF;
-    * trappc = pc;
+    
+    *trappc = pc;
+    trap_pending = FALSE;
+    trp_req_bits = 0;
+    
     return SCPE_OK;
 }
+
+/* ========== Suspension System (Section II-8.2) ========== */
+/*
+ * Suspension system interrupts micro-program to handle urgent I/O.
+ * Stack depth: 4 levels
+ * Saves: U, J, T registers and B, Tz, To, Ao indicators
+ */
+t_stat mitra_suspension_request(uint16 susp_level) {
+    if (susp_level >= 32) return SCPE_ARG;
+    
+    susp_req_bits |= (1u << susp_level);
+    susp_pending = TRUE;
+    
+    return SCPE_OK;
+}
+
+t_stat mitra_suspension_process(void) {
+    if (!susp_pending || susp_stack_ptr >= SUSP_STACK_DEPTH) {
+        return SCPE_OK;
+    }
+    
+    /* Find highest priority suspension request */
+    int i;
+    for (i = 31; i >= 0; i--) {
+        if (susp_req_bits & (1u << i)) {
+            susp_active_level = i;
+            break;
+        }
+    }
+    
+    /* Save current micro-processor state to suspension stack */
+    SuspContext *ctx = &susp_stack[susp_stack_ptr++];
+    ctx->U_reg = U;
+    ctx->J_reg = curr_bloc;  /* J register selects block */
+    ctx->T_reg = 0;          /* T register (micro-PC) - simulated */
+    ctx->B_ind = 0;          /* Micro-processor indicators */
+    ctx->Tz_ind = 0;
+    ctx->To_ind = 0;
+    ctx->Ao_ind = 0;
+    ctx->saved_bloc = curr_bloc;
+    
+    /* Clear the request bit */
+    susp_req_bits &= ~(1u << susp_active_level);
+    
+    /* Execute suspension micro-program (device-specific handler) */
+    /* This would call the appropriate device suspension handler */
+    io_suspension_dispatch(susp_active_level);
+    
+    /* Restore micro-processor state */
+    if (susp_stack_ptr > 0) {
+        SuspContext *rctx = &susp_stack[--susp_stack_ptr];
+        U = rctx->U_reg;
+        curr_bloc = rctx->saved_bloc;
+    }
+    
+    /* Check if more suspensions pending */
+    if (susp_req_bits == 0) {
+        susp_pending = FALSE;
+    }
+    
+    return SCPE_OK;
+}
+
+/* ========== Interrupt System (Section II-8.1) ========== */
+/*
+ * Normal interrupt acceptance:
+ * 1. Save context at address from CPT[int_level]
+ * 2. Load new context from CPT[int_level]
+ * 3. Update R8 (current level register)
+ *
+ * High-speed interrupt:
+ * 1. Save indicators in block 0, register 6
+ * 2. Switch to reserved block
+ * 3. Load indicators from reserved block
+ */
+t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
+    if (int_level >= 32) return SCPE_ARG;
+    
+    if (high_speed && (cpu_unit.flags & UNIT_HSINT)) {
+        /* High-speed interrupt (5μs) */
+        /* Save current indicators in block 0, register 6 */
+        uint16 ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
+                         ((MS & 1) << 13) | ((reg_block[0].OV & 1) << 12) |
+                         ((reg_block[0].C & 1) << 11);
+        
+        /* Store in reserved block (block 6 for high-speed) */
+        reg_block[6].V = ind_word;  /* Use V register for indicator save */
+        
+        /* Switch to reserved block */
+        curr_bloc = 6;
+        
+        /* Load indicators from reserved block */
+        ind_word = reg_block[6].V;
+        PR = (ind_word >> 15) & 1;
+        MA = (ind_word >> 14) & 1;
+        MS = (ind_word >> 13) & 1;
+        reg_block[curr_bloc].OV = (ind_word >> 12) & 1;
+        reg_block[curr_bloc].C = (ind_word >> 11) & 1;
+        
+    } else {
+        /* Normal interrupt (30μs) */
+        cpt_base = M[10];  /* CPT at absolute address 10 */
+        if (cpt_base >= MEMsize) return SCPE_STOP;
+        
+        uint16 ctx_ptr = read_word(cpt_base + int_level);
+        if (ctx_ptr >= MEMsize) return SCPE_STOP;
+        
+        /* Save current context */
+        uint16 ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
+                         ((MS & 1) << 13) | ((reg_block[curr_bloc].OV & 1) << 12) |
+                         ((reg_block[curr_bloc].C & 1) << 11);
+        
+        write_word(ctx_ptr, ind_word);
+        write_word(ctx_ptr + 1, reg_block[curr_bloc].X);
+        write_word(ctx_ptr + 2, reg_block[curr_bloc].E);
+        write_word(ctx_ptr + 3, reg_block[curr_bloc].A);
+        write_word(ctx_ptr + 4, reg_block[curr_bloc].G);
+        write_word(ctx_ptr + 5, reg_block[curr_bloc].L);
+        write_word(ctx_ptr + 6, reg_block[curr_bloc].P);
+        
+        /* Switch to new level */
+        int_lvl = int_level;
+        
+        /* Load new context */
+        ind_word = read_word(ctx_ptr);
+        PR = (ind_word >> 15) & 1;
+        MA = (ind_word >> 14) & 1;
+        MS = (ind_word >> 13) & 1;
+        reg_block[curr_bloc].OV = (ind_word >> 12) & 1;
+        reg_block[curr_bloc].C = (ind_word >> 11) & 1;
+        reg_block[curr_bloc].X = read_word(ctx_ptr + 1);
+        reg_block[curr_bloc].E = read_word(ctx_ptr + 2);
+        reg_block[curr_bloc].A = read_word(ctx_ptr + 3);
+        reg_block[curr_bloc].G = read_word(ctx_ptr + 4);
+        reg_block[curr_bloc].L = read_word(ctx_ptr + 5);
+        reg_block[curr_bloc].P = read_word(ctx_ptr + 6);
+    }
+    
+    /* Clear interrupt request */
+    int_req.intrp_level &= ~(1u << int_level);
+    
+    return SCPE_OK;
+}
+
 
 /* ========== SIMH Terminal Functions (wrappers) ========== */
 int sim_tt_getc(void) {
@@ -793,6 +1035,96 @@ void set_dyn_map(void) {
     mon_map[7] = (RL4 << 11) & MAP_PAGE;
     if (mon_map[6] == 0) mon_map[6] = MAP_PROT;
     if (mon_map[7] == 0) mon_map[7] = MAP_PROT;
+}
+
+/*
+ * DIT - De-activate Interrupt (Section VII-12)
+ * Returns from interrupt subroutine
+ */
+t_stat mitra_interrupt_return(t_bool high_speed) {
+    if (high_speed) {
+        /* DITR - Return from high-speed interrupt */
+        /* Save indicators in reserved block */
+        uint16 ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
+                         ((MS & 1) << 13) | ((reg_block[curr_bloc].OV & 1) << 12) |
+                         ((reg_block[curr_bloc].C & 1) << 11);
+        reg_block[curr_bloc].V = ind_word;
+        
+        /* Return to block 0 */
+        curr_bloc = 0;
+        
+        /* Restore indicators from block 0, register 6 */
+        ind_word = reg_block[6].V;
+        PR = (ind_word >> 15) & 1;
+        MA = (ind_word >> 14) & 1;
+        MS = (ind_word >> 13) & 1;
+        reg_block[curr_bloc].OV = (ind_word >> 12) & 1;
+        reg_block[curr_bloc].C = (ind_word >> 11) & 1;
+        
+    } else {
+        /* DIT - Return from normal interrupt */
+        cpt_base = M[10];
+        if (cpt_base >= MEMsize) return SCPE_STOP;
+        
+        uint16 ctx_ptr = read_word(cpt_base + int_lvl);
+        if (ctx_ptr >= MEMsize) return SCPE_STOP;
+        
+        /* Save current context */
+        uint16 ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
+                         ((MS & 1) << 13) | ((reg_block[curr_bloc].OV & 1) << 12) |
+                         ((reg_block[curr_bloc].C & 1) << 11);
+        
+        write_word(ctx_ptr, ind_word);
+        write_word(ctx_ptr + 1, reg_block[curr_bloc].X);
+        write_word(ctx_ptr + 2, reg_block[curr_bloc].E);
+        write_word(ctx_ptr + 3, reg_block[curr_bloc].A);
+        write_word(ctx_ptr + 4, reg_block[curr_bloc].G);
+        write_word(ctx_ptr + 5, reg_block[curr_bloc].L);
+        write_word(ctx_ptr + 6, reg_block[curr_bloc].P);
+        
+        /* Find next highest pending interrupt */
+        int next_lvl = -1;
+        for (int i = 31; i >= 0; i--) {
+            if (int_req.intrp_level & (1u << i)) {
+                next_lvl = i;
+                break;
+            }
+        }
+        
+        if (next_lvl >= 0) {
+            /* Accept next interrupt */
+            int_lvl = next_lvl;
+            ctx_ptr = read_word(cpt_base + int_lvl);
+            
+            ind_word = read_word(ctx_ptr);
+            PR = (ind_word >> 15) & 1;
+            MA = (ind_word >> 14) & 1;
+            MS = (ind_word >> 13) & 1;
+            reg_block[curr_bloc].OV = (ind_word >> 12) & 1;
+            reg_block[curr_bloc].C = (ind_word >> 11) & 1;
+            reg_block[curr_bloc].X = read_word(ctx_ptr + 1);
+            reg_block[curr_bloc].E = read_word(ctx_ptr + 2);
+            reg_block[curr_bloc].A = read_word(ctx_ptr + 3);
+            reg_block[curr_bloc].G = read_word(ctx_ptr + 4);
+            reg_block[curr_bloc].L = read_word(ctx_ptr + 5);
+            reg_block[curr_bloc].P = read_word(ctx_ptr + 6);
+        } else {
+            /* Return to level 0 */
+            int_lvl = 0;
+        }
+    }
+    
+    return SCPE_OK;
+}
+
+/* Helper to get highest pending interrupt */
+static int get_highest_interrupt(void) {
+    int i;
+    for (i = 31; i >= 0; i--) {
+        if (int_req.intrp_level & (1u << i))
+            return i;
+    }
+    return -1;
 }
 
 /* ========== Main Instruction Execution ========== */
@@ -858,6 +1190,27 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
     * trappc = pc;
     carry = 0;
     overflow = 0;
+    
+    /* Check for privileged instruction in slave mode */
+    /* Privileged opcodes: 0x3A (STR), 0x3B (LDP), 0x3D (TES), 
+       0xF4 (SYS: STM, CLM, DIT, RD, WD), 0xEA (STR in PX) */
+    if (mode == 0) {  /* Slave mode */
+        uint16 hexcode = inst & 0xF000;
+        if ((hexcode == 0x3000 && (opcode == 0x0A || opcode == 0x0B || opcode == 0x0D)) ||
+            (hexcode == 0xE000 && opcode == 0x0A) ||
+            (hexcode == 0xF000 && opcode == 0x04)) {  /* SYS instructions */
+            /* Check if it's a privileged SYS function */
+            if (opcode == 0x04) {  /* SYS */
+                if (disp == 0x01 || disp == 0x03 || disp == 0x08 || disp == 0x0C || disp == 0x20) {
+                    /* DIT, WD, STM, CLM, DITR are privileged */
+                    return mitra_trap(TRAP_VM, pc, trappc);
+                }
+            } else {
+                return mitra_trap(TRAP_VM, pc, trappc);
+            }
+        }
+    }
+    
     uint16 hexcode = inst & 0xF000;
 
     // We don't care of address mode here, it's: A first layer of dispatcher
@@ -929,6 +1282,12 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
             group_3_P(inst, mode);
             break;
     }
+    
+    /* Check for traps after instruction execution */
+    if (trap_pending) {
+        return mitra_trap(trap_cause, pc, trappc);
+    }
+    
     return SCPE_OK;
 }
 
@@ -2156,16 +2515,6 @@ uint16 group_2(uint16 inst, uint16 target_address, uint32 mode) {
     return 0;
 }
 
-/* Helper to get highest pending interrupt */
-static int get_highest_interrupt(void) {
-    int i;
-    for (i = 31; i >= 0; i--) {
-        if (int_req.intrp_level & (1u << i))
-            return i;
-    }
-    return 0;
-}
-
 /* ========== SIMH Interface Functions ========== */
 t_stat sim_instr(void) {
     uint16 inst, save_P, trap_P;
@@ -2193,7 +2542,9 @@ t_stat sim_instr(void) {
          */
 
         /* Check for interrupts */
-        if ((MA == 0) && int_reqhi && int_reqhi > int_lvl) {
+        int_reqhi = get_highest_interrupt();
+        
+        if ((MA == 0) && (int_reqhi >= 0) && (int_reqhi > int_lvl)) {
             uint16 pa = int_vec[int_reqhi];
             if (pa == 0) {
                 reason = STOP_ILLVEC;
@@ -2204,36 +2555,13 @@ t_stat sim_instr(void) {
              * CPT[i] = word address of the context save area for level i.
              * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P */
             if (int_req.high_speed == false) {
-                uint16 cpt_base = M[10];
-                uint16 ctx_ptr, ind_word;
-                /* --- Save old level --- */
-                ctx_ptr = read_word(cpt_base + int_lvl);
-                ind_word = ((PR & 1) << 15) | ((MA & 1) << 14) |
-                    ((MS & 1) << 13) | ((reg_block[curr_bloc].OV & 1) << 12) | ((reg_block[
-                        curr_bloc].C & 1) << 11);
-                write_word(ctx_ptr, ind_word);
-                write_word(ctx_ptr + 1, reg_block[curr_bloc].X);
-                write_word(ctx_ptr + 2, reg_block[curr_bloc].E);
-                write_word(ctx_ptr + 3, reg_block[curr_bloc].A);
-                write_word(ctx_ptr + 4, reg_block[curr_bloc].G);
-                write_word(ctx_ptr + 5, reg_block[curr_bloc].L);
-                write_word(ctx_ptr + 6, reg_block[curr_bloc].P);
-                /* --- Switch to new level --- */
-                int_lvl = int_reqhi;
-                /* --- Load new level's context (P comes from the save area = entry point) --- */
-                ctx_ptr = read_word(cpt_base + int_lvl);
-                ind_word = read_word(ctx_ptr);
-                PR = (ind_word >> 15) & 1;
-                MA = (ind_word >> 14) & 1;
-                MS = (ind_word >> 13) & 1;
-                reg_block[curr_bloc].OV = (ind_word >> 12) & 1;
-                reg_block[curr_bloc].C = (ind_word >> 11) & 1;
-                reg_block[curr_bloc].X = read_word(ctx_ptr + 1);
-                reg_block[curr_bloc].E = read_word(ctx_ptr + 2);
-                reg_block[curr_bloc].A = read_word(ctx_ptr + 3);
-                reg_block[curr_bloc].G = read_word(ctx_ptr + 4);
-                reg_block[curr_bloc].L = read_word(ctx_ptr + 5);
-                reg_block[curr_bloc].P = read_word(ctx_ptr + 6);
+		    /* Accept interrupt */
+		    reason = mitra_interrupt_accept(int_reqhi, int_req.high_speed);
+		    if (reason != SCPE_OK) break;
+		    
+		    if (pa != VEC_RTCP && rtc_pie) {
+		        int_req.intrp_level |= INT_RTCP;
+		    }
             } else {
                 /* High speed interrupt processing
                  * Acceptance of the high-speed interrupt includes the following operations:
@@ -2244,6 +2572,11 @@ t_stat sim_instr(void) {
                  */
                 curr_bloc = int_req.intrp_level;
             }
+
+            /* Accept interrupt */
+            reason = mitra_interrupt_accept(int_reqhi, int_req.high_speed);
+            if (reason != SCPE_OK) break;
+            
             if (pa != VEC_RTCP && rtc_pie) {
                 int_req.intrp_level |= INT_RTCP;
             }
@@ -2335,7 +2668,10 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_mode = 0;
     int_req.intrp_level = 0;
     int_lvl = 0;
-
+    susp_req_bits = 0;
+    susp_stack_ptr = 0;
+    trp_req_bits = 0;
+    trap_pending = FALSE;
     cpu_running = 0;
     interrupts_enabled = 0;
     routing_enabled = 0;
@@ -2353,19 +2689,6 @@ t_stat cpu_reset(DEVICE * dptr) {
     */
 
     return SCPE_OK;
-}
-
-void io_interrupt_dispatch(uint16 intr_lvl, t_bool hgh_spd) {
-    /* FIXME
-     * This is called when an interrupt occurs in a device.
-     * Its the way SIMH advertize an interrupt occured.
-     * The actual interrupt handling is done in sim_instr().
-     * This function just ensures the interrupt is processed. */
-    /* Force interrupt processing in the main loop */
-    /* The actual work is done in sim_instr() which checks int_req */
-
-    int_req.intrp_level = intr_lvl;
-    int_req.high_speed = hgh_spd;
 }
 
 t_stat cpu_set_size(UNIT * uptr, int32 val, CONST char * cptr, void * desc) {
