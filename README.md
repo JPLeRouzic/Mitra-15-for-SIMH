@@ -1,4 +1,5 @@
 # Mitra-15-for-SIMH
+<img width="1280" height="960" alt="image" src="https://github.com/user-attachments/assets/d698d34e-c89e-4577-b800-d59ca2342073" />
 https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/Mitra-15-ACONIT.jpg/1280px-Mitra-15-ACONIT.jpg
 
 ## A Mitra-15 Simulator for SIMH
