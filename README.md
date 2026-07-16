@@ -1,4 +1,5 @@
 # Mitra-15-for-SIMH
+https://upload.wikimedia.org/wikipedia/commons/thumb/6/6b/Mitra-15-ACONIT.jpg/1280px-Mitra-15-ACONIT.jpg
 
 ## A Mitra-15 Simulator for SIMH
 
