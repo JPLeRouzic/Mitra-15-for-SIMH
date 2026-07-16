@@ -2,19 +2,22 @@
 
 ## A Mitra-15 Simulator for SIMH
 
-This is a preliminary version. For now, my code compiles, but it is not a Mitra-15 simulator in the strict sense; rather, it is an intermediate system between the Mitra-15 and a fully functional simulator. Many thanks to Pascal Chour for the very useful documentation available on his website: https://www.pascalchour.fr/ressources/cii/mitra15.htm
+This is a preliminary version. For now, my code compiles, but it is not a Mitra-15 simulator in the strict sense; rather, it is a tentative effort toward a fully functional simulator. Many thanks to Pascal Chour for the very useful documentation available on his website: https://www.pascalchour.fr/ressources/cii/mitra15.htm
 
 The Mitra-15 is a microcomputer that features interesting concepts, such as the ability to program input/output peripherals using microcode.
 https://en.wikipedia.org/wiki/Mitra_15
 
 The Mitra-15 was a 16-bit minicomputer developed by **CII (Compagnie Internationale pour l'Informatique)** in the early 1970s. It was widely used in industrial automation, scientific computing, education, and military applications.
+I never programmed on Mitra-15, but I learned CS on a CII 10070 and later I worked at France Telecom which had telephone exchanges piloted with the Mitra family.
 
-Although it was once widespread in France, very little software and documentation has survived. This project contributes to the preservation of this important part of computing history. This Mitra-15 simulator is intended to eventually include:
+Although it was once widespread in France, very little software and documentation has survived. This project contributes to the preservation of this important part of computing history. 
+
+This Mitra-15 simulator is intended to eventually include:
 - Complete instruction decoder
 - SIMH console support
 - Memory management
 - Interrupt, fast interrupt, and trap systems
-- Various I/O devices:
+- Various I/O devices, but I lack documentation for many of those peripherals:
 IO_coupleurs_asynchrones.c
 IO_fast_channel_multiplexed.c
 IO_printer.c
@@ -23,11 +26,10 @@ IO_coupleurs_synchrones.c
 IO_front_panel.c
 IO_punched_tape.c
 IO_DRI_fix_disk.c
-IO_IOP_1.c
+IO_IOP_1.c and IO_IOP_2.c
 IO_sagem_fix_disk.c
 IO_card_reader.c
 IO_fast_channel_1_ADM.c
-IO_IOP_2.c
 IO_fast_channel_2_ADM.c
 IO_magn_tape.c
 - System instructions
@@ -48,6 +50,7 @@ Within the SIMH monitor, you can then load memory, examine registers, and execut
 
 ## Documentation
 
+Please look at the doc folder. 
 The implementation is primarily based on the original Mitra-15 technical documentation, including:
 
 - Processor reference manual
