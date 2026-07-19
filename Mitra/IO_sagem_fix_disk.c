@@ -145,7 +145,8 @@ All devices will follow the same integration pattern, they provide:
 #define SAGEM_TRACKS           128
 #define SAGEM_WORDS_PER_SECTOR (SAGEM_SECTOR_SIZE / 2)
 
-extern uint32 int_req;               /* interrupt request bits */
+extern uint32 intrp_level;  /* interrupt request bits */
+
 extern uint16 read_word(uint16 addr);
 extern uint16 read_word(uint16 addr);
 extern void write_word(uint16 addr, uint16 val);
@@ -175,8 +176,8 @@ static uint32 ts_to_sector(uint32 track, uint32 sector)
 
 static void sagem_interrupt(void)
 {
-    int_req |= (1 << 9);   /* typical interrupt level for SAGEM disk */
-        io_interrupt_dispatch(int_req, false);
+    uint32 int_req = (1 << 9);   /* typical interrupt level for SAGEM disk */
+    io_interrupt_dispatch(int_req, false);
 }
 
 /* Start a transfer */
@@ -309,12 +310,14 @@ void sagem_detach(void)
     sagem.active = 0;
 }
 
-/* WD handler (E=5) */
+/* WD handler (E=5) - Write AP to &3D */
 t_stat sagem_wd(uint16 e_reg, uint16 a_val)
 {
     if (e_reg != 5) return SCPE_IOERR;
     /* Write AP to register &3D (emulated) */
     write_word(0x3D, a_val);
+    
+    /* Decode AP: bits 1-7 = track, bits 8-11 = sector, bits 14-15 = mode */
     uint32 track  = (a_val >> 8) & 0x7F;
     uint32 sector = (a_val >> 4) & 0x0F;
     uint32 mode   = a_val & 0x03;
@@ -323,10 +326,19 @@ t_stat sagem_wd(uint16 e_reg, uint16 a_val)
         return SCPE_OK;
     }
 
+    /* Read AD (&3B) and CM (&3C) */
     uint16 ad = read_word(0x3B);
     uint16 cm = read_word(0x3C);
     uint32 mem_addr = ad + 2;
     uint32 byte_count = cm * 2;
+    
+    if (cm == 0) {
+        sagem.me = 0x1000;   /* CN zero word count (bit12) */
+        sagem.status = 0x02;
+        sagem_interrupt();
+        return SCPE_OK;
+    }
+    
     sagem_start_transfer(mem_addr, byte_count, track, sector, mode, 0);
     return SCPE_OK;
 }

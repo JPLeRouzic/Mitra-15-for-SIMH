@@ -163,13 +163,12 @@ All devices will follow the same integration pattern, they provide:
 #define DRI_CYLINDERS        203
 #define DRI_WORDS_PER_SECTOR (DRI_SECTOR_SIZE / 2)   /* 128 */
 
-extern uint32 int_req;               /* interrupt request bits */
-
 /* Memory Access Functions (defined in mitra_cpu.c) */
 extern uint16 read_word(uint16 addr);
 extern void write_word(uint16 addr, uint16 val);
 extern uint8 read_byte(uint16 va);
 extern void write_byte(uint16 va, uint8 val);
+extern uint32 intrp_level;  /* interrupt request bits */
 
 typedef struct {
     FILE *image;
@@ -202,7 +201,7 @@ static uint32 ads_to_sector(uint16 ads)
 
 static void dri_interrupt(int unit)
 {
-    int_req |= (1 << (7 + unit));   /* level 7 for unit0, 8 for unit1 */
+    uint32 int_req = (1 << (7 + unit));   /* level 7 for unit0, 8 for unit1 */
     io_interrupt_dispatch(int_req, false);
 }
 
@@ -327,28 +326,34 @@ void dri_detach(int unit)
 t_stat dri_wd(uint16 e_reg, uint16 a_val)
 {
     switch (e_reg) {
-        case 3:   /* selection */
-            if (a_val & 0x80) last_selected = 0;
-            else if (a_val & 0x40) last_selected = 1;
-            else return SCPE_IOERR;
-            if (a_val & 0x80) dri[last_selected].operation = 1;   /* write */
-            else if (!(a_val & 0x80) && !(a_val & 0xF0)) dri[last_selected].operation = 0; /* read */
+        case 3:   /* Selection */
+            if (a_val & 0x80) {
+                last_selected = 0;
+                dri[0].operation = (a_val & 0x0080) ? 1 : 0; /* write if bit7 set */
+            } else if (a_val & 0x40) {
+                last_selected = 1;
+                dri[1].operation = (a_val & 0x0080) ? 1 : 0;
+            } else {
+                return SCPE_IOERR;
+            }
+            /* Right byte controls operation */
+            if (a_val & 0x80) dri[last_selected].operation = 1;  /* write */
             else if (a_val & 0xF0) dri[last_selected].operation = 2; /* compare */
+            else dri[last_selected].operation = 0;  /* read */
             break;
-        case 5:   /* rest */
+        case 5:   /* Rest */
             if (a_val == 0x80) {
-                /* reset any pending error */
                 dri[last_selected].status = 0;
+                dri[last_selected].active = 0;
             }
             break;
-        case 0x15: /* start transfer */
+        case 0x15: /* Start transfer */
             {
                 uint16 adm = read_word(0x39);
                 uint16 cm  = read_word(0x3A);
-                uint16 ads = a_val;   /* supplied in A */
                 uint32 mem_addr = adm + 2;
                 uint32 byte_count = cm * 2;
-                dri_start_transfer(last_selected, mem_addr, byte_count, ads,
+                dri_start_transfer(last_selected, mem_addr, byte_count, a_val,
                                    dri[last_selected].operation, 0);
             }
             break;

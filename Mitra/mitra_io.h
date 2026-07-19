@@ -57,6 +57,10 @@
 #define OPL_M_GI      15   /* go input */
 #define OPL_M_GO      16   /* go output */
 
+// Interrupts save context in an area pointed by an index to the CPT table.
+// the CPT itself is pointed to by the contents of absolute address 10: M[10]
+// There is a "high-speed" interrupt mechanism that uses register block switching instead of memory-based context saves.
+
 /* External functions */
 t_stat io_csv_1o(uint32 cb_addr, int zio);
 t_stat io_csv_wait(uint32 cb_addr, int zwat);
@@ -64,10 +68,15 @@ t_stat io_rd(uint16 e_reg, uint16 *data_out);
 t_stat io_wd(uint16 e_reg, uint16 data);
 t_stat io_dit(void);
 t_stat io_ditr(void);
-void io_interrupt_dispatch(uint16 intr_lvl, t_bool hgh_spd);
+void io_interrupt_dispatch(uint32 intr_lvl, t_bool hgh_spd);
+void io_suspension_dispatch(uint16 susp_level);
 int    io_check_ready(void);
 void   io_dev_attach(int oplabel, const char *file, int write);
 t_stat read_byte_io(uint32 addr, uint8 *val, int zio) ;
 void write_byte_io(uint32 addr, uint8 val, int zio) ;
+
+/* Add at the end of mitra_io.h: */
+extern uint32 intrp_level;
+extern t_bool high_speed_int;
 
 #endif

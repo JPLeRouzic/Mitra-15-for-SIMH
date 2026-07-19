@@ -91,9 +91,10 @@ All devices will follow the same integration pattern, they provide:
 #include <stdlib.h>
 #include <stdbool.h>
 
-#define ASR33_R9   0x09
-#define ASR33_R10  0x0A
-#define ASR33_R11  0x0B
+/* ASR33 - Corrected Register Addresses */
+#define ASR33_R9   0x09   /* z bit (bit15) + byte count (bits 0-14) */
+#define ASR33_R10  0x0A   /* byte address - 1 */
+#define ASR33_R11  0x0B   /* compare char (bits 8-15) + data (bits 0-7) */
 
 /* Command codes */
 #define ASR_CMD_REPOS       0x00
@@ -105,7 +106,7 @@ All devices will follow the same integration pattern, they provide:
 #define ASR_CMD_LEC_SANS_IMP 0x09
 #define ASR_CMD_PERF_SANS_IMP 0x0A
 
-extern uint32 int_req;               /* interrupt request bits */
+extern uint32 intrp_level;  /* interrupt request bits */
 
 /* Memory Access Functions (defined in mitra_cpu.c) */
 extern uint16 read_word(uint16 addr);
@@ -145,7 +146,7 @@ void asr33_detach(void)
 
 static void asr_interrupt(void)
 {
-    int_req |= (1 << 3);   /* typical interrupt level for ASR33 */
+    uint32 int_req = (1 << 3);   /* typical interrupt level for ASR33 */
     io_interrupt_dispatch(int_req, false);
 
 }
@@ -236,6 +237,10 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
     uint8 cmd = a_val & 0xFF;
 
     /* Read channel registers: ADM at &1C, CM at &1D */
+    /* FIXME it is not clear if
+    	- Channel registers should be R9, R10, R11 (not &1C/&1D for ADM/CM)
+	- Registers are at absolute addresses 0x1C/0x1D or 9, 10, 11 
+    */
     uint16 adm = read_word(0x1C);
     uint16 cm  = read_word(0x1D);
     uint32 mem_addr = adm + 2;
@@ -247,21 +252,28 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
     asr_dev.stop_on_compare = (r9 >> 15) & 1;
     asr_dev.compare_char = (r11 >> 8) & 0xFF;
 
+    /* FIXME
+        - case ASR_CMD_REPOS:
+        - case ASR_CMD_STOP:
+        - case ASR_CMD_SUPPR:
+        - case ASR_CMD_LEC_SANS_IMP:
+        - case ASR_CMD_PERF_SANS_IMP:
+    */
     switch (cmd) {
-        case ASR_CMD_REPOS:
+        case ASR_CMD_REPOS: /* Repos */
         case ASR_CMD_STOP:
             asr_dev.active = 0;
-            asr_dev.status = 0x00;   /* repos */
+            asr_dev.status = 0x00;
             break;
-        case ASR_CMD_ECR_CLAV:
+        case ASR_CMD_ECR_CLAV: /* Écriture clavier */
             asr_dev.mode = 3;   /* write */
             asr_dev.active = 1;
             asr_dev.mem_addr = mem_addr;
             asr_dev.bytes_left = byte_count;
             asr_dev.status = 0x02;   /* écriture */
             break;
-        case ASR_CMD_LEC_CLAV:
-        case ASR_CMD_LEC_RUBAN:
+        case ASR_CMD_LEC_CLAV: /* Lecture clavier */
+        case ASR_CMD_LEC_RUBAN: /* Lecture ruban */
             asr_dev.mode = (cmd == ASR_CMD_LEC_CLAV) ? 1 : 2;
             asr_dev.active = 1;
             asr_dev.mem_addr = mem_addr;
@@ -297,3 +309,8 @@ void asr33_reset(void)
     asr_dev.status = 0;
     asr_dev.last_char = 0;
 }
+
+/* FIXME
+- Missing proper handling of z bit (stop on compare character)
+- Missing EBCDIC/ASCII conversion
+*/

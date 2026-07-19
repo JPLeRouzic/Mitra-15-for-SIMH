@@ -102,7 +102,7 @@ All devices will follow the same integration pattern, they provide:
 #define CDR_COLUMNS      80
 #define CDR_BYTES_PER_CARD 120
 
-extern uint32 int_req;               /* interrupt request bits */
+extern uint32 intrp_level;  /* interrupt request bits */
 
 /* Memory Access Functions (defined in mitra_cpu.c) */
 extern uint16 read_word(uint16 addr);
@@ -287,7 +287,7 @@ int cdr_poll(void)
 /* Generate interrupt (typical level 4 for card reader) */
 static void cdr_interrupt(void)
 {
-    int_req |= (1 << 4);
+    uint32 int_req = (1 << 4);
     io_interrupt_dispatch(9, false);
 }
 
@@ -295,12 +295,19 @@ static void cdr_interrupt(void)
 t_stat cdr_wd(uint16 e_reg, uint16 a_val)
 {
     if (e_reg != 7) return SCPE_IOERR;
-    /* Channel registers: ADM at &1C (address -2), CM at &1D (word count) */
+    
+    /* Mode from A bits 0-1: 00=binary, 10=EBCDIC, 11=idle 
+       Channel registers: ADM at &1C (address -2), CM at &1D (word count) 
+    */
     uint16 adm = read_word(0x1C);
     uint16 cm  = read_word(0x1D);
     uint32 mem_addr = adm + 2;
-    uint32 byte_count = cm * 2;
+    uint32 byte_count = cm * 2;  /* words → bytes */
     cdr_start_transfer(a_val, mem_addr, byte_count, 0); /* ZIO not used for CR */
+    
+    cdr_dev.zio = 0;
+    cdr_dev.active = 1;
+
     return SCPE_OK;
 }
 

@@ -97,7 +97,7 @@ All devices will follow the same integration pattern, they provide:
 #include <stdlib.h>
 #include <stdbool.h>
 
-extern uint32 int_req;               /* interrupt request bits */
+extern uint32 intrp_level;  /* interrupt request bits */
 
 /* Memory Access Functions (defined in mitra_cpu.c) */
 extern uint16 read_word(uint16 addr);
@@ -121,7 +121,7 @@ static LP_DEV printer_dev = {0};
 
 static void lp_interrupt(void)
 {
-    int_req |= (1 << 2);   /* typical interrupt level for printer_dev */
+    uint32 int_req = (1 << 2);   /* typical interrupt level for printer_dev */
     io_interrupt_dispatch(int_req, false);
 
 }
@@ -223,20 +223,38 @@ int printer_poll(void)
 t_stat printer_wd(uint16 e_reg, uint16 a_val)
 {
     if (e_reg != 3) return SCPE_IOERR;
+    
+    /* A low byte must be 0x40, high byte is jump code */
+    if ((a_val & 0xFF) != 0x40) return SCPE_IOERR;
+    
     printer_dev.jump_code = (a_val >> 8) & 0xFF;
+    
+    /* Read channel registers: &20 = address, &21 = byte count */
     printer_dev.format_mode = ((a_val & 0xFF) == 0x40) ? 1 : 0;   /* A low byte must be 0x40 */
 
     /* Read channel registers: &20 = address, &21 = byte count */
-    uint16 addr_reg = read_word(0x20);
-    uint16 count_reg = read_word(0x21);
-    printer_dev.mem_addr = addr_reg;   /* address already absolute? Documentation says address register */
+    uint16 addr_reg = read_word(0x20);  /* Address register */
+    uint16 count_reg = read_word(0x21); /* Byte count */
+    printer_dev.mem_addr = addr_reg;
     printer_dev.bytes_left = count_reg;
     printer_dev.zio = 0;   /* no ZIO for printer_dev */
     printer_dev.active = 1;
     printer_dev.status = 0x03;   /* printer_dev ready, line ready initially */
+    
+    /* Check for format mode: if first byte is a skip code, handle it */
+    if (printer_dev.bytes_left > 0) {
+        uint8 fmt_byte;
+        if (read_byte_io(printer_dev.mem_addr, &fmt_byte, printer_dev.zio) == SCPE_OK) {
+            /* Skip codes in EBCDIC: 0x60=single, 0x61=double, etc. */
+            if (fmt_byte >= 0x60 && fmt_byte <= 0x6F) {
+                printer_dev.mem_addr++;  /* Skip format byte */
+                printer_dev.bytes_left--;
+                printer_dev.format_mode = 1;
+            }
+        }
+    }
     return SCPE_OK;
 }
-
 /* RD handler (E=3) */
 t_stat printer_rd(uint16 e_reg, uint16 *result)
 {

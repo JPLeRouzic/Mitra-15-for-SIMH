@@ -75,6 +75,7 @@ All devices will follow the same integration pattern, they provide:
 /* External CPU control flags (defined in mitra_cpu.c) */
 extern int cpu_running;      /* 1 = running, 0 = stopped */
 extern int interrupts_enabled;
+extern uint32 intrp_level;  /* interrupt request bits */
 extern int routing_enabled;
 
 uint16 panel_addr_lights;

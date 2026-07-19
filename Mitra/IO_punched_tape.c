@@ -123,7 +123,8 @@ All devices will follow the same integration pattern, they provide:
 #include <stdlib.h>
 #include <stdbool.h>
 
-extern uint32 int_req;               /* interrupt request bits */
+extern uint32 intrp_level;  /* interrupt request bits */
+
 extern uint16 read_word(uint16 addr);
 
 /* ----- Reader state ----- */
@@ -177,7 +178,7 @@ void ptr_detach(void)
 
 static void ptr_interrupt(void)
 {
-    int_req |= (1 << 5);   /* typical interrupt level for reader */
+    uint32 int_req = (1 << 5);   /* typical interrupt level for reader */
     io_interrupt_dispatch(int_req, false);
 
 }
@@ -189,7 +190,7 @@ int ptr_poll(void)
     int c = fgetc(ptr.image);
     if (c == EOF) {
         ptr.active = 0;
-        ptr.status = 0x02;   /* stop/error */
+        ptr.status = 0x02;   /* error code 10 binary: stop/error */
         ptr_interrupt();
         return 1;
     }
@@ -208,7 +209,7 @@ int ptr_poll(void)
 
     if (ptr.bytes_left == 0) {
         ptr.active = 0;
-        ptr.status = 0;
+        ptr.status = 0;   /* no error */
         ptr_interrupt();
     }
     return 1;
@@ -218,18 +219,22 @@ t_stat ptr_wd(uint16 e_reg, uint16 a_val)
 {
     if (e_reg != 8) return SCPE_IOERR;
     uint16 cmd = a_val & 0xFF;
+    /* case 1: Advance with leader detection
+    /* case 3: Advance without leader detection */
     if (cmd == 1 || cmd == 3) {
         if (!ptr.image) return SCPE_UNATT;
         if (ptr.active) return SCPE_OK;   /* busy */
         ptr.mode = cmd;
         ptr.active = 1;
+        ptr.nzc = 0;  /* Reset leader detection */
+
         /* Channel registers: ADM at &1C, CM at &1D */
         uint16 adm = read_word(0x1C);
         uint16 cm  = read_word(0x1D);
         ptr.mem_addr = adm + 2;
         ptr.bytes_left = cm * 2;
         ptr.zio = 0;
-    } else if (cmd == 2) {
+    } else if (cmd == 2) { /* Stop */
         ptr.active = 0;
         ptr.status = 0x03;   /* stop */
     }
@@ -264,7 +269,7 @@ void ptp_detach(void)
 
 static void ptp_interrupt(void)
 {
-    int_req |= (1 << 6);   /* typical interrupt level for punch */
+    uint32 int_req = (1 << 6);   /* typical interrupt level for punch */
     io_interrupt_dispatch(int_req, false);
 
 }
@@ -305,7 +310,8 @@ t_stat ptp_wd(uint16 e_reg, uint16 a_val)
 {
     if (e_reg != 18) return SCPE_IOERR;
     if (!ptp.image) return SCPE_UNATT;
-    ptp.advance = (a_val >> 15) & 1;
+    
+    ptp.advance = (a_val >> 15) & 1;  /* Bit 15 = S flag */
     if (ptp.advance) {
         if (ptp.active) return SCPE_OK;
         ptp.active = 1;
@@ -314,6 +320,7 @@ t_stat ptp_wd(uint16 e_reg, uint16 a_val)
         ptp.mem_addr = adm + 2;
         ptp.bytes_left = cm * 2;
         ptp.zio = 0;
+        ptp.status = 0;   /* Clear status on start */
     } else {
         ptp.active = 0;
         ptp.status = 0x03;   /* stop */

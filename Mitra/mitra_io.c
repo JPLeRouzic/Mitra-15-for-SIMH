@@ -322,6 +322,7 @@ The firmware is implemented on 7 pages of 32 micro-instructions each.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 /* ========== External References from mitra_cpu.c ========== */
 extern uint16 G;                     /* general base register */
@@ -333,17 +334,17 @@ extern uint8 C, OV, MS, MA, PR;
 extern uint16 M[];
 extern uint32 MEMsize;
 
-extern struct { /* interrupt request bits */
-    uint32 intrp_level;
-    t_bool high_speed;
-} int_req;
+/* interrupt request bits */
+extern uint32 intrp_level;
+extern t_bool high_speed;
+
 extern uint32 susp_req_bits;
 
 extern uint32 xfr_req;               /* transfer request bits */
 
 /* Memory Access Functions (defined in mitra_cpu.c) */
-void io_interrupt_dispatch(uint16 intr_lvl, t_bool hgh_spd);
-void io_suspension_dispatch(uint16 susp_level);
+// void io_interrupt_dispatch(uint32 intr_lvl, t_bool hgh_spd);
+// void io_suspension_dispatch(uint16 susp_level);
 extern uint16 read_word(uint16 addr);
 extern void write_word(uint16 addr, uint16 val);
 extern uint8 read_byte(uint16 va);
@@ -437,7 +438,7 @@ void write_byte_io(uint32 addr, uint8 val, int zio) {
  * intr_lvl: interrupt level (0-31)
  * hgh_spd: TRUE for high-speed interrupt
  */
-void io_interrupt_dispatch(uint16 intr_lvl, t_bool hgh_spd) {
+void io_interrupt_dispatch(uint32 intr_lvl, t_bool hgh_spd) {
     /* FIXME
      * This is called when an interrupt occurs in a device.
      * Its the way SIMH advertize an interrupt occured.
@@ -448,8 +449,8 @@ void io_interrupt_dispatch(uint16 intr_lvl, t_bool hgh_spd) {
 
     if (intr_lvl >= 32) return;
     
-    int_req.intrp_level |= (1u << intr_lvl);
-    int_req.high_speed = hgh_spd;
+    intrp_level |= (1u << intr_lvl);
+    high_speed = hgh_spd;
 }
 
 
@@ -523,6 +524,9 @@ t_stat io_rd(uint16 e_reg, uint16 *result) {
        The mode is determined by the contents of E-register. */
     
     switch (e_reg) {
+        case 0x03:  /* Fast Printer status */
+            return printer_rd(e_reg, result);
+            
         case 0x08:  /* Paper Tape Reader status */
             return ptr_rd(e_reg, result);
 
@@ -573,16 +577,23 @@ t_stat io_wd(uint16 e_reg, uint16 a_val) {
             if (panel_wd(e_reg, a_val) == SCPE_OK) return SCPE_OK;
             return asr33_wd(e_reg, a_val);
 
-        case 0x03:  /* DRI Disk selection (E=3) */
-            return dri_wd(e_reg, a_val);
-
+        case 0x03:  /* Fast Printer command (E=3) */
+            if (a_val == 0x40 || (a_val >> 8) != 0) {
+                return printer_wd(e_reg, a_val);
+            }
+            /* DRI Disk selection (E=3) - check high byte */
+            if ((a_val & 0xC0) != 0) {
+                return dri_wd(e_reg, a_val);
+            }
+            return SCPE_IOERR;
+            
         case 0x05:  /* SAGEM Disk OR DRI Disk rest (E=5, A=&80) */
             if (a_val == 0x80) {
                 return dri_wd(e_reg, a_val);
             }
             /* return sagem_wd(e_reg, a_val); */
-            return SCPE_OK;
-
+            return SCPE_IOERR;
+            
         case 0x07:  /* Card Reader command (E=7) */
             return cdr_wd(e_reg, a_val);
 

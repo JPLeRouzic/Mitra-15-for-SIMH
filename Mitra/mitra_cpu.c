@@ -203,10 +203,10 @@ t_bool susp_pending = FALSE;
 // Interrupts save context in an area pointed by an index to the CPT table.
 // the CPT itself is pointed to by the contents of absolute address 10: M[10]
 // There is a "high-speed" interrupt mechanism that uses register block switching instead of memory-based context saves.
-struct {
-    uint32 intrp_level;  /* 32-bit bitmask of pending interrupts */
-    t_bool high_speed;   /* TRUE if high-speed interrupt */
-} int_req;
+
+/* Global interrupt state */
+uint32 intrp_level = 0;  /* 32-bit bitmask of pending interrupts */
+t_bool high_speed = FALSE;  /* TRUE if high-speed interrupt */
 
 uint16 int_lvl = 0;           /* Current interrupt level */
 uint32 int_reqhi = 0;         /* Highest pending interrupt level */
@@ -344,6 +344,12 @@ UNIT cpu_unit = {
     UDATA(NULL, UNIT_FIX + UNIT_BINK, MAX_MEM_WORDS)
 };
 
+/*
+The SIMH macros work as follows:
+*    FLDATA(name, var, reset) - For 1-bit boolean flags (uses a single bit in the register)
+*    ORDATA(name, var, width) - For numeric values that can be any width (1-32 bits)
+*    DRDATA(name, var, width) - For display-only numeric values
+*/
 REG cpu_reg[] = {
     { ORDATA(reg_block, reg_block, 16) },
     { FLDATA(MS, MS, 0) },
@@ -352,7 +358,8 @@ REG cpu_reg[] = {
     { ORDATA(S, S, 15) },
     { ORDATA(MREG, MREG, 18) },
     { ORDATA(U, U, 16) },
-    { ORDATA(INT_REQ, int_req.intrp_level, 32) },
+    /* Use separate variables for interrupt state instead of struct member */
+    { ORDATA(INT_REQ, intrp_level, 32) },
     { ORDATA(INT_LVL, int_lvl, 5) },
     { ORDATA(SUSP_REQ, susp_req_bits, 32) },
     { ORDATA(SUSP_LVL, susp_active_level, 5) },
@@ -1000,7 +1007,7 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
     }
     
     /* Clear interrupt request */
-    int_req.intrp_level &= ~(1u << int_level);
+    intrp_level &= ~(1u << int_level);
     
     return SCPE_OK;
 }
@@ -1085,7 +1092,7 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         /* Find next highest pending interrupt */
         int next_lvl = -1;
         for (int i = 31; i >= 0; i--) {
-            if (int_req.intrp_level & (1u << i)) {
+            if (intrp_level & (1u << i)) {
                 next_lvl = i;
                 break;
             }
@@ -1121,7 +1128,7 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
 static int get_highest_interrupt(void) {
     int i;
     for (i = 31; i >= 0; i--) {
-        if (int_req.intrp_level & (1u << i))
+        if (intrp_level & (1u << i))
             return i;
     }
     return -1;
@@ -1613,14 +1620,14 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
                     if (mode != 1) return MM_PRVINS;
                     if (!(cpu_unit.flags & UNIT_HSINT))
                         return MM_INVINS;
-                    int_req.intrp_level &= ~(1u << int_lvl);
+                    intrp_level &= ~(1u << int_lvl);
                     break;
                 case 2:
                     reg_block[curr_bloc].E = compute_parity( & reg_block[curr_bloc].A, count);
                     break;
                 case 3:
                     if (mode != 1) return MM_PRVINS;
-                    int_req.intrp_level &= ~(1u << int_lvl);
+                    intrp_level &= ~(1u << int_lvl);
                     int_lvl = 0;
                     break;
                 case 4:
@@ -2340,7 +2347,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
                         break;
                     case 1:
                         if (mode != 1) return MM_PRVINS;
-                        int_req.intrp_level &= ~(1u << int_lvl);
+                        intrp_level &= ~(1u << int_lvl);
                         int_lvl = 0;
                         break;
                     case 2:
@@ -2349,7 +2356,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
                         break;
                     case 3:
                         if (mode != 1) return MM_PRVINS;
-                        int_req.intrp_level &= ~(1u << int_lvl);
+                        intrp_level &= ~(1u << int_lvl);
                         int_lvl = 0;
                         break;
                     case 4:
@@ -2519,7 +2526,7 @@ uint16 group_2(uint16 inst, uint16 target_address, uint32 mode) {
 t_stat sim_instr(void) {
     uint16 inst, save_P, trap_P;
     t_stat reason = 0;
-    int_req.intrp_level = int_req.intrp_level & ~1;
+    intrp_level = intrp_level & ~1;
     set_dyn_map();
     io_poll_devices(); // also for checking front panel
     while (reason == 0) {
@@ -2554,13 +2561,13 @@ t_stat sim_instr(void) {
              * CPT is a 32-word table at absolute address M[10].
              * CPT[i] = word address of the context save area for level i.
              * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P */
-            if (int_req.high_speed == false) {
+            if (high_speed == false) {
 		    /* Accept interrupt */
-		    reason = mitra_interrupt_accept(int_reqhi, int_req.high_speed);
+		    reason = mitra_interrupt_accept(int_reqhi, high_speed);
 		    if (reason != SCPE_OK) break;
 		    
 		    if (pa != VEC_RTCP && rtc_pie) {
-		        int_req.intrp_level |= INT_RTCP;
+		        intrp_level |= INT_RTCP;
 		    }
             } else {
                 /* High speed interrupt processing
@@ -2570,15 +2577,15 @@ t_stat sim_instr(void) {
                  *	- R12 is loaded with the number of the block which is reserved for high-speed interrupt processing.
                  *	- Indicators are loaded with the contents of register 6 in the reserved block.
                  */
-                curr_bloc = int_req.intrp_level;
+                curr_bloc = intrp_level;
             }
 
             /* Accept interrupt */
-            reason = mitra_interrupt_accept(int_reqhi, int_req.high_speed);
+            reason = mitra_interrupt_accept(int_reqhi, high_speed);
             if (reason != SCPE_OK) break;
             
             if (pa != VEC_RTCP && rtc_pie) {
-                int_req.intrp_level |= INT_RTCP;
+                intrp_level |= INT_RTCP;
             }
         } else {
             /* Normal instruction fetch */
@@ -2630,7 +2637,7 @@ t_stat sim_instr(void) {
 /* ========== RTC Functions ========== */
 t_stat rtc_svc(UNIT * uptr) {
     if (rtc_pie)
-        int_req.intrp_level |= INT_RTCP;
+        intrp_level |= INT_RTCP;
     rtc_unit.wait = sim_rtcn_calb(rtc_tps, TMR_RTC);
     sim_activate( & rtc_unit, rtc_unit.wait);
     return SCPE_OK;
@@ -2666,7 +2673,7 @@ t_stat cpu_reset(DEVICE * dptr) {
     reg_block[curr_bloc].C = reg_block[curr_bloc].OV = MS = 0;
     MA = PR = 0;
     cpu_mode = 0;
-    int_req.intrp_level = 0;
+    intrp_level = 0;
     int_lvl = 0;
     susp_req_bits = 0;
     susp_stack_ptr = 0;

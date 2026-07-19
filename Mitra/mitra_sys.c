@@ -22,7 +22,6 @@ extern uint8  C, OV, MS, MA, PR;
 extern uint16 cpu_mode;
 extern uint32 int_req;
 extern uint32 susp_req_bits;
-extern DEVICE cpu_dev, rtc_dev;
 
 extern DEVICE cpu_dev;
 extern DEVICE rtc_dev;               /* Real-time clock */
@@ -143,11 +142,9 @@ const char *sim_stop_messages[] = {
 
 /* DRI Disk (2 units) */
 UNIT dri_unit[] = {
-    {
-        .action = NULL,
-        .flags  = UNIT_FIX | UNIT_BINK,
-        .capac  = 0
-    }
+    { UDATA(NULL, UNIT_FIX | UNIT_BINK, 0) },
+    { UDATA(NULL, UNIT_FIX | UNIT_BINK, 0) }
+    /* No NULL here - this is an array, not a terminated list */
 };
 
 MTAB dri_mod[] = {
@@ -164,11 +161,8 @@ DEVICE dri_dev = {
 
 /* SAGEM Disk (2 units) */
 UNIT sagem_unit[] = {
-    {
-        .action = NULL,
-        .flags  = UNIT_FIX | UNIT_BINK,
-        .capac  = 0
-    }
+    { UDATA(NULL, UNIT_FIX | UNIT_BINK, 0) },
+    { UDATA(NULL, UNIT_FIX | UNIT_BINK, 0) }
 };
 
 MTAB sagem_mod[] = {
@@ -185,11 +179,7 @@ DEVICE sagem_dev = {
 
 /* Card Reader (1 unit) */
 UNIT cdr_unit[] = {
-    {
-        .action = NULL,
-        .flags  = UNIT_SEQ | UNIT_BINK | UNIT_RO,
-        .capac  = 0
-    }
+    { UDATA(NULL, UNIT_SEQ | UNIT_BINK | UNIT_RO, 0) }
 };
 
 MTAB cdr_mod[] = {
@@ -757,8 +747,23 @@ static t_stat ptp_sim_reset (DEVICE *dptr)
 }
 
 /* System initialization */
+/* mitra_sys.c - Add debug function */
+
+void mitra_debug_devices(void) {
+    int i = 0;
+    fprintf(stderr, "=== Registered Devices ===\n");
+    while (sim_devices[i] != NULL) {
+        fprintf(stderr, "  [%d] %s\n", i, sim_devices[i]->name);
+        i++;
+    }
+    fprintf(stderr, "  Total: %d devices\n", i);
+    fprintf(stderr, "===========================\n");
+}
+
+/* Call this in mitra_sys_init: */
 t_stat mitra_sys_init(void)
 {
+    mitra_debug_devices();
     io_init_system();
     return SCPE_OK;
 }
