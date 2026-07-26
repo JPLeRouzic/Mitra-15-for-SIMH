@@ -151,7 +151,10 @@ All devices will follow the same integration pattern, they provide:
  *   bit3 – error summary (1=error)
  */
 
+#include "mitra_defs.h"
+#include "mitra_cpu.h"
 #include "mitra_io.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -162,12 +165,20 @@ All devices will follow the same integration pattern, they provide:
 #define DRI_TRACKS_PER_CYL    2
 #define DRI_CYLINDERS        203
 #define DRI_WORDS_PER_SECTOR (DRI_SECTOR_SIZE / 2)   /* 128 */
+#define DRI_NUM_UNITS        2
 
-/* Memory Access Functions (defined in mitra_cpu.c) */
-extern uint16 read_word(uint16 addr);
-extern void write_word(uint16 addr, uint16 val);
-extern uint8 read_byte(uint16 va);
-extern void write_byte(uint16 va, uint8 val);
+/* Declared in sim_disk.h; forward-declared here to avoid include-path issues */
+extern t_stat sim_disk_set_fmt(UNIT *uptr, int32 val, const char *cptr, void *desc);
+extern t_stat sim_disk_show_fmt(FILE *st, UNIT *uptr, int32 val, const void *desc);
+extern t_stat sim_disk_set_capac(UNIT *uptr, int32 val, const char *cptr, void *desc);
+extern t_stat sim_disk_show_capac(FILE *st, UNIT *uptr, int32 val, const void *desc);
+
+/* Memory Access Functions (defined in mitra_cpu.h) */
+extern t_value read_word(t_addr va);
+extern void write_word(t_addr va, t_value val);
+extern uint8 read_byte(t_addr va);
+extern void write_byte(t_addr va, uint8 val);
+
 extern uint32 intrp_level;  /* interrupt request bits */
 
 typedef struct {
@@ -183,7 +194,7 @@ typedef struct {
     uint16 cur_ads;          /* current ADS (updated after each sector) */
 } DRI_UNIT;
 
-static DRI_UNIT dri[2];      /* two units */
+static DRI_UNIT dri_state[2];      /* two units */
 static uint32 last_selected = 0;   /* last unit selected by WD E=3 */
 
 /* Convert ADS to logical sector number */
@@ -208,7 +219,7 @@ static void dri_interrupt(int unit)
 /* Start a transfer on a given unit */
 static void dri_start_transfer(int unit, uint32 mem_addr, uint32 byte_count, uint16 ads, int op, int zio)
 {
-    DRI_UNIT *d = &dri[unit];
+    DRI_UNIT *d = &dri_state[unit];
     if (d->active) return;
 
     uint32 sector = ads_to_sector(ads);
@@ -230,7 +241,7 @@ static void dri_start_transfer(int unit, uint32 mem_addr, uint32 byte_count, uin
 
 int dri_poll(int unit)
 {
-    DRI_UNIT *d = &dri[unit];
+    DRI_UNIT *d = &dri_state[unit];
     if (!d->active) return 0;
 
     FILE *f = d->image;
@@ -298,28 +309,33 @@ int dri_poll(int unit)
 }
 
 /* Attach a disk image file for a given unit */
-t_stat dri_attach(int unit, const char *filename)
+t_stat dri_attach(UNIT *unit, const char *filename)
 {
-    if (unit < 0 || unit >= 2) return SCPE_IERR;
-    if (dri[unit].image) fclose(dri[unit].image);
-    dri[unit].image = fopen(filename, "rb+");
-    if (!dri[unit].image) dri[unit].image = fopen(filename, "wb+");
-    if (!dri[unit].image) return SCPE_IOERR;
-    fseek(dri[unit].image, 0, SEEK_END);
-    long size = ftell(dri[unit].image);
-    dri[unit].total_sectors = size / DRI_SECTOR_SIZE;
-    if (dri[unit].total_sectors == 0)
-        dri[unit].total_sectors = DRI_CYLINDERS * DRI_TRACKS_PER_CYL * DRI_SECTORS_PER_TRACK;
-    fseek(dri[unit].image, 0, SEEK_SET);
-    dri[unit].status = 0;
+	uint8 unitnb = 1; // FIXME
+	
+    if (unitnb < 0 || unitnb >= 2) return SCPE_IERR;
+    if (dri_state[unitnb].image) fclose(dri_state[unitnb].image);
+    dri_state[unitnb].image = fopen(filename, "rb+");
+    if (!dri_state[unitnb].image) dri_state[unitnb].image = fopen(filename, "wb+");
+    if (!dri_state[unitnb].image) return SCPE_IOERR;
+    fseek(dri_state[unitnb].image, 0, SEEK_END);
+    long size = ftell(dri_state[unitnb].image);
+    dri_state[unitnb].total_sectors = size / DRI_SECTOR_SIZE;
+    if (dri_state[unitnb].total_sectors == 0)
+        dri_state[unitnb].total_sectors = DRI_CYLINDERS * DRI_TRACKS_PER_CYL * DRI_SECTORS_PER_TRACK;
+    fseek(dri_state[unitnb].image, 0, SEEK_SET);
+    dri_state[unitnb].status = 0;
     return SCPE_OK;
 }
 
-void dri_detach(int unit)
+t_stat dri_detach(UNIT *unit)
 {
-    if (dri[unit].image) fclose(dri[unit].image);
-    dri[unit].image = NULL;
-    dri[unit].active = 0;
+	uint8 unitnb = 1; // FIXME
+	
+    if (dri_state[unitnb].image) fclose(dri_state[unitnb].image);
+    dri_state[unitnb].image = NULL;
+    dri_state[unitnb].active = 0;
+    return SCPE_OK;
 }
 
 /* WD handler */
@@ -329,22 +345,22 @@ t_stat dri_wd(uint16 e_reg, uint16 a_val)
         case 3:   /* Selection */
             if (a_val & 0x80) {
                 last_selected = 0;
-                dri[0].operation = (a_val & 0x0080) ? 1 : 0; /* write if bit7 set */
+                dri_state[0].operation = (a_val & 0x0080) ? 1 : 0; /* write if bit7 set */
             } else if (a_val & 0x40) {
                 last_selected = 1;
-                dri[1].operation = (a_val & 0x0080) ? 1 : 0;
+                dri_state[1].operation = (a_val & 0x0080) ? 1 : 0;
             } else {
                 return SCPE_IOERR;
             }
             /* Right byte controls operation */
-            if (a_val & 0x80) dri[last_selected].operation = 1;  /* write */
-            else if (a_val & 0xF0) dri[last_selected].operation = 2; /* compare */
-            else dri[last_selected].operation = 0;  /* read */
+            if (a_val & 0x80) dri_state[last_selected].operation = 1;  /* write */
+            else if (a_val & 0xF0) dri_state[last_selected].operation = 2; /* compare */
+            else dri_state[last_selected].operation = 0;  /* read */
             break;
         case 5:   /* Rest */
             if (a_val == 0x80) {
-                dri[last_selected].status = 0;
-                dri[last_selected].active = 0;
+                dri_state[last_selected].status = 0;
+                dri_state[last_selected].active = 0;
             }
             break;
         case 0x15: /* Start transfer */
@@ -354,7 +370,7 @@ t_stat dri_wd(uint16 e_reg, uint16 a_val)
                 uint32 mem_addr = adm + 2;
                 uint32 byte_count = cm * 2;
                 dri_start_transfer(last_selected, mem_addr, byte_count, a_val,
-                                   dri[last_selected].operation, 0);
+                                   dri_state[last_selected].operation, 0);
             }
             break;
         default:
@@ -367,18 +383,19 @@ t_stat dri_wd(uint16 e_reg, uint16 a_val)
 t_stat dri_rd(uint16 e_reg, uint16 *result)
 {
     if (e_reg != 0x15) return SCPE_IOERR;
-    *result = dri[last_selected].status;
-    dri[last_selected].status = 0;
+    *result = dri_state[last_selected].status;
+    dri_state[last_selected].status = 0;
     return SCPE_OK;
 }
 
 /* Reset all units */
-void dri_reset(void)
+t_stat dri_reset(DEVICE *dptr)
 {
     for (int i = 0; i < 2; i++) {
-        dri[i].active = 0;
-        dri[i].status = 0;
+        dri_state[i].active = 0;
+        dri_state[i].status = 0;
     }
+    return SCPE_OK;
 }
 
 /* Poll all units */
@@ -388,3 +405,58 @@ void dri_poll_devices(void)
         dri_poll(i);
 }
 
+/* ========== UNIT Definition ========== */
+UNIT dri_unit[DRI_NUM_UNITS] = {
+    { UDATA(NULL, UNIT_FIX | UNIT_ATTABLE | UNIT_DISABLE, 0) },
+    { UDATA(NULL, UNIT_FIX | UNIT_ATTABLE | UNIT_DISABLE, 0) }
+};
+
+/* ========== MTAB for SET/SHOW ========== */
+MTAB dri_mod[] = {
+    { MTAB_XTD | MTAB_VDV, 0, "FORMAT", "FORMAT", 
+      &sim_disk_set_fmt, &sim_disk_show_fmt, NULL, "Disk format" },
+    { MTAB_XTD | MTAB_VUN, 0, "CAPACITY", "CAPACITY",
+      &sim_disk_set_capac, &sim_disk_show_capac, NULL, "Disk capacity" },
+    { 0 }
+};
+
+/* ========== REGISTER Definitions ========== */
+REG dri_reg[DRI_NUM_UNITS * 2 + 1] = {
+    /* Unit 0 state - DRI_UNIT has no "sector" field, use cur_ads (current disk address) */
+    { ORDATA("STATUS0", dri_state[0].status, 16) },
+    { ORDATA("ADS0", dri_state[0].cur_ads, 16) },
+    /* Unit 1 state */
+    { ORDATA("STATUS1", dri_state[1].status, 16) },
+    { ORDATA("ADS1", dri_state[1].cur_ads, 16) },
+    { NULL }
+};
+
+/* ========== DEVICE Structure ========== */
+DEVICE dri_dev = {
+    "DRI",           /* name */
+    dri_unit,        /* units */
+    dri_reg,         /* registers */
+    dri_mod,         /* modifiers */
+    DRI_NUM_UNITS,   /* numunits */
+    8,               /* aradix */
+    16,              /* awidth */
+    1,               /* aincr */
+    8,               /* dradix */
+    16,              /* dwidth */
+    NULL,            /* examine (dri_ex was never implemented) */
+    NULL,            /* deposit (dri_dep was never implemented) */
+    &dri_reset,      /* reset */
+    NULL,            /* boot */
+    &dri_attach,     /* attach */
+    &dri_detach,     /* detach */
+    NULL,            /* ctxt */
+    DEV_DISK | DEV_DISABLE,  /* flags */
+    0,               /* dctrl */
+    NULL,            /* debflags */
+    NULL,            /* msize */
+    NULL,            /* lname */
+    NULL,            /* help */
+    NULL,            /* attach_help */
+    NULL,            /* help_ctxt */
+    NULL             /* description */
+};

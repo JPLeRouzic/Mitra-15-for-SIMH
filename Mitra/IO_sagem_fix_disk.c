@@ -135,7 +135,10 @@ All devices will follow the same integration pattern, they provide:
  *   bits 0-1 (ER): 00=no error, 01=bad address/protected, 02=rhythm error, 03=not ready
  */
 
+#include "mitra_defs.h"
+#include "mitra_cpu.h"
 #include "mitra_io.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -144,14 +147,21 @@ All devices will follow the same integration pattern, they provide:
 #define SAGEM_SECTORS_PER_TRACK 12
 #define SAGEM_TRACKS           128
 #define SAGEM_WORDS_PER_SECTOR (SAGEM_SECTOR_SIZE / 2)
+#define SAGEM_NUM_UNITS        2
 
 extern uint32 intrp_level;  /* interrupt request bits */
 
-extern uint16 read_word(uint16 addr);
-extern uint16 read_word(uint16 addr);
-extern void write_word(uint16 addr, uint16 val);
-extern uint8 read_byte(uint16 va);
-extern void write_byte(uint16 va, uint8 val);
+/* Declared in sim_disk.h; forward-declared here to avoid include-path issues */
+extern t_stat sim_disk_set_fmt(UNIT *uptr, int32 val, const char *cptr, void *desc);
+extern t_stat sim_disk_show_fmt(FILE *st, UNIT *uptr, int32 val, const void *desc);
+extern t_stat sim_disk_set_capac(UNIT *uptr, int32 val, const char *cptr, void *desc);
+extern t_stat sim_disk_show_capac(FILE *st, UNIT *uptr, int32 val, const void *desc);
+
+/* Memory Access Functions (defined in mitra_cpu.h) */
+extern t_value read_word(t_addr va);
+extern void write_word(t_addr va, t_value val);
+extern uint8 read_byte(t_addr va);
+extern void write_byte(t_addr va, uint8 val);
 
 typedef struct {
     FILE *image;
@@ -167,7 +177,7 @@ typedef struct {
     int    mode;            /* 0=rest,1=write,2=read,3=compare */
 } SAGEM_DEV;
 
-static SAGEM_DEV sagem = {0};
+static SAGEM_DEV sagem_state[SAGEM_NUM_UNITS] = {{0}};
 
 static uint32 ts_to_sector(uint32 track, uint32 sector)
 {
@@ -183,131 +193,132 @@ static void sagem_interrupt(void)
 /* Start a transfer */
 static void sagem_start_transfer(uint32 mem_addr, uint32 byte_count, uint32 track, uint32 sector, int mode, int zio)
 {
-    if (sagem.active) return;
+    if (sagem_state[0].active) return;
 
     uint32 sec = ts_to_sector(track, sector);
-    if (sec >= sagem.total_sectors) {
-        sagem.me = 0x0800;   /* invalid sector address */
-        sagem.status = 0x01;
+    if (sec >= sagem_state[0].total_sectors) {
+        sagem_state[0].me = 0x0800;   /* invalid sector address */
+        sagem_state[0].status = 0x01;
         sagem_interrupt();
         return;
     }
     if (byte_count == 0) {
-        sagem.me = 0x1000;   /* zero word count */
-        sagem.status = 0x02;
+        sagem_state[0].me = 0x1000;   /* zero word count */
+        sagem_state[0].status = 0x02;
         sagem_interrupt();
         return;
     }
 
-    sagem.active = 1;
-    sagem.mem_addr = mem_addr;
-    sagem.bytes_left = byte_count;
-    sagem.mode = mode;
-    sagem.track = track;
-    sagem.sector = sector;
-    sagem.zio = zio;
+    sagem_state[0].active = 1;
+    sagem_state[0].mem_addr = mem_addr;
+    sagem_state[0].bytes_left = byte_count;
+    sagem_state[0].mode = mode;
+    sagem_state[0].track = track;
+    sagem_state[0].sector = sector;
+    sagem_state[0].zio = zio;
 }
 
 int sagem_poll(void)
 {
-    if (!sagem.active) return 0;
+    if (!sagem_state[0].active) return 0;
 
-    uint32 sector = ts_to_sector(sagem.track, sagem.sector);
+    uint32 sector = ts_to_sector(sagem_state[0].track, sagem_state[0].sector);
     uint32 offset = sector * SAGEM_SECTOR_SIZE;
-    FILE *f = sagem.image;
+    FILE *f = sagem_state[0].image;
 
-    if (sagem.mode == 2) {   /* read */
+    if (sagem_state[0].mode == 2) {   /* read */
         if (fseek(f, offset, SEEK_SET) != 0) {
-            sagem.active = 0;
-            sagem.me = 0x0400;   /* parity error (simulated) */
-            sagem.status = 0x03;
+            sagem_state[0].active = 0;
+            sagem_state[0].me = 0x0400;   /* parity error (simulated) */
+            sagem_state[0].status = 0x03;
             sagem_interrupt();
             return 1;
         }
-        uint32 bytes_to_do = (sagem.bytes_left < SAGEM_SECTOR_SIZE) ? sagem.bytes_left : SAGEM_SECTOR_SIZE;
+        uint32 bytes_to_do = (sagem_state[0].bytes_left < SAGEM_SECTOR_SIZE) ? sagem_state[0].bytes_left : SAGEM_SECTOR_SIZE;
         uint8 buf[SAGEM_SECTOR_SIZE];
         if (fread(buf, 1, bytes_to_do, f) != bytes_to_do) {
-            sagem.active = 0;
-            sagem.me = 0x0400;
-            sagem.status = 0x03;
+            sagem_state[0].active = 0;
+            sagem_state[0].me = 0x0400;
+            sagem_state[0].status = 0x03;
             sagem_interrupt();
             return 1;
         }
         for (uint32 i = 0; i < bytes_to_do; i++)
-            write_byte_io(sagem.mem_addr + i, buf[i], sagem.zio);
-        sagem.mem_addr += bytes_to_do;
-        sagem.bytes_left -= bytes_to_do;
-    } else if (sagem.mode == 1) {   /* write */
+            write_byte_io(sagem_state[0].mem_addr + i, buf[i], sagem_state[0].zio);
+        sagem_state[0].mem_addr += bytes_to_do;
+        sagem_state[0].bytes_left -= bytes_to_do;
+    } else if (sagem_state[0].mode == 1) {   /* write */
         if (fseek(f, offset, SEEK_SET) != 0) {
-            sagem.active = 0;
-            sagem.me = 0x0400;
-            sagem.status = 0x03;
+            sagem_state[0].active = 0;
+            sagem_state[0].me = 0x0400;
+            sagem_state[0].status = 0x03;
             sagem_interrupt();
             return 1;
         }
-        uint32 bytes_to_do = (sagem.bytes_left < SAGEM_SECTOR_SIZE) ? sagem.bytes_left : SAGEM_SECTOR_SIZE;
+        uint32 bytes_to_do = (sagem_state[0].bytes_left < SAGEM_SECTOR_SIZE) ? sagem_state[0].bytes_left : SAGEM_SECTOR_SIZE;
         uint8 buf[SAGEM_SECTOR_SIZE];
         for (uint32 i = 0; i < bytes_to_do; i++)
-            read_byte_io(sagem.mem_addr + i, &buf[i], sagem.zio);
+            read_byte_io(sagem_state[0].mem_addr + i, &buf[i], sagem_state[0].zio);
         if (fwrite(buf, 1, bytes_to_do, f) != bytes_to_do) {
-            sagem.active = 0;
-            sagem.me = 0x0400;
-            sagem.status = 0x03;
+            sagem_state[0].active = 0;
+            sagem_state[0].me = 0x0400;
+            sagem_state[0].status = 0x03;
             sagem_interrupt();
             return 1;
         }
-        sagem.mem_addr += bytes_to_do;
-        sagem.bytes_left -= bytes_to_do;
+        sagem_state[0].mem_addr += bytes_to_do;
+        sagem_state[0].bytes_left -= bytes_to_do;
     } else {
         /* compare or rest – not implemented, treat as error */
-        sagem.active = 0;
-        sagem.me = 0x2000;   /* compare error */
-        sagem.status = 0x02;
+        sagem_state[0].active = 0;
+        sagem_state[0].me = 0x2000;   /* compare error */
+        sagem_state[0].status = 0x02;
         sagem_interrupt();
         return 1;
     }
 
     /* Advance to next sector if more data remains */
-    if (sagem.bytes_left > 0) {
-        sagem.sector++;
-        if (sagem.sector >= SAGEM_SECTORS_PER_TRACK) {
-            sagem.sector = 0;
-            sagem.track++;
+    if (sagem_state[0].bytes_left > 0) {
+        sagem_state[0].sector++;
+        if (sagem_state[0].sector >= SAGEM_SECTORS_PER_TRACK) {
+            sagem_state[0].sector = 0;
+            sagem_state[0].track++;
         }
     }
 
-    if (sagem.bytes_left == 0) {
-        sagem.active = 0;
-        sagem.me = 0x8000;   /* success */
-        sagem.status = 0;
+    if (sagem_state[0].bytes_left == 0) {
+        sagem_state[0].active = 0;
+        sagem_state[0].me = 0x8000;   /* success */
+        sagem_state[0].status = 0;
         sagem_interrupt();
     }
     return 1;
 }
 
 /* Attach disk image */
-t_stat sagem_attach(const char *filename)
+t_stat sagem_attach(UNIT *unit, const char *filename)
 {
-    if (sagem.image) fclose(sagem.image);
-    sagem.image = fopen(filename, "rb+");
-    if (!sagem.image) sagem.image = fopen(filename, "wb+");
-    if (!sagem.image) return SCPE_IOERR;
-    fseek(sagem.image, 0, SEEK_END);
-    long size = ftell(sagem.image);
-    sagem.total_sectors = size / SAGEM_SECTOR_SIZE;
-    if (sagem.total_sectors == 0)
-        sagem.total_sectors = SAGEM_TRACKS * SAGEM_SECTORS_PER_TRACK;
-    fseek(sagem.image, 0, SEEK_SET);
-    sagem.me = 0;
-    sagem.status = 0;
+    if (sagem_state[0].image) fclose(sagem_state[0].image);
+    sagem_state[0].image = fopen(filename, "rb+");
+    if (!sagem_state[0].image) sagem_state[0].image = fopen(filename, "wb+");
+    if (!sagem_state[0].image) return SCPE_IOERR;
+    fseek(sagem_state[0].image, 0, SEEK_END);
+    long size = ftell(sagem_state[0].image);
+    sagem_state[0].total_sectors = size / SAGEM_SECTOR_SIZE;
+    if (sagem_state[0].total_sectors == 0)
+        sagem_state[0].total_sectors = SAGEM_TRACKS * SAGEM_SECTORS_PER_TRACK;
+    fseek(sagem_state[0].image, 0, SEEK_SET);
+    sagem_state[0].me = 0;
+    sagem_state[0].status = 0;
     return SCPE_OK;
 }
 
-void sagem_detach(void)
+t_stat sagem_detach(UNIT *unit)
 {
-    if (sagem.image) fclose(sagem.image);
-    sagem.image = NULL;
-    sagem.active = 0;
+    if (sagem_state[0].image) fclose(sagem_state[0].image);
+    sagem_state[0].image = NULL;
+    sagem_state[0].active = 0;
+    return SCPE_OK;
 }
 
 /* WD handler (E=5) - Write AP to &3D */
@@ -333,8 +344,8 @@ t_stat sagem_wd(uint16 e_reg, uint16 a_val)
     uint32 byte_count = cm * 2;
     
     if (cm == 0) {
-        sagem.me = 0x1000;   /* CN zero word count (bit12) */
-        sagem.status = 0x02;
+        sagem_state[0].me = 0x1000;   /* CN zero word count (bit12) */
+        sagem_state[0].status = 0x02;
         sagem_interrupt();
         return SCPE_OK;
     }
@@ -347,23 +358,24 @@ t_stat sagem_wd(uint16 e_reg, uint16 a_val)
 t_stat sagem_rd(uint16 e_reg, uint16 *result)
 {
     if (e_reg != 3) return SCPE_IOERR;
-    *result = sagem.status;
-    sagem.status = 0;
+    *result = sagem_state[0].status;
+    sagem_state[0].status = 0;
     return SCPE_OK;
 }
 
 /* Read ME register (used by CPU after interrupt) */
 uint16 sagem_get_me(void)
 {
-    return sagem.me;
+    return sagem_state[0].me;
 }
 
 /* Reset device */
-void sagem_reset(void)
+t_stat sagem_reset(DEVICE *dptr)
 {
-    sagem.active = 0;
-    sagem.me = 0;
-    sagem.status = 0;
+    sagem_state[0].active = 0;
+    sagem_state[0].me = 0;
+    sagem_state[0].status = 0;
+    return SCPE_OK;
 }
 
 /* Poll function */
@@ -371,3 +383,59 @@ void sagem_poll_devices(void)
 {
     sagem_poll();
 }
+
+/* ========== UNIT Definition ========== */
+UNIT sagem_unit[SAGEM_NUM_UNITS] = {
+    { UDATA(NULL, UNIT_FIX | UNIT_ATTABLE | UNIT_DISABLE, 0) },
+    { UDATA(NULL, UNIT_FIX | UNIT_ATTABLE | UNIT_DISABLE, 0) }
+};
+
+/* ========== MTAB for SET/SHOW ========== */
+MTAB sagem_mod[] = {
+    { MTAB_XTD | MTAB_VDV, 0, "FORMAT", "FORMAT", 
+      &sim_disk_set_fmt, &sim_disk_show_fmt, NULL, "Disk format" },
+    { MTAB_XTD | MTAB_VUN, 0, "CAPACITY", "CAPACITY",
+      &sim_disk_set_capac, &sim_disk_show_capac, NULL, "Disk capacity" },
+    { 0 }
+};
+
+/* ========== REGISTER Definitions ========== */
+REG sagem_reg[SAGEM_NUM_UNITS * 2 + 1] = {
+    /* Unit 0 state */
+    { ORDATA("STATUS0", sagem_state[0].status, 16) },
+    { ORDATA("SECTOR0", sagem_state[0].sector, 32) },
+    /* Unit 1 state */
+    { ORDATA("STATUS1", sagem_state[1].status, 16) },
+    { ORDATA("SECTOR1", sagem_state[1].sector, 32) },
+    { NULL }
+};
+
+/* ========== DEVICE Structure ========== */
+DEVICE sagem_dev = {
+    "SAGEM",         /* name (was "DRI", which duplicated the DRI device's name) */
+    sagem_unit,        /* units */
+    sagem_reg,         /* registers */
+    sagem_mod,         /* modifiers */
+    SAGEM_NUM_UNITS, /* numunits */
+    8,               /* aradix */
+    16,              /* awidth */
+    1,               /* aincr */
+    8,               /* dradix */
+    16,              /* dwidth */
+    NULL,            /* examine (sagem_ex was never implemented) */
+    NULL,            /* deposit (sagem_dep was never implemented) */
+    &sagem_reset,      /* reset */
+    NULL,            /* boot */
+    &sagem_attach,     /* attach */
+    &sagem_detach,     /* detach */
+    NULL,            /* ctxt */
+    DEV_DISK | DEV_DISABLE,  /* flags */
+    0,               /* dctrl */
+    NULL,            /* debflags */
+    NULL,            /* msize */
+    NULL,            /* lname */
+    NULL,            /* help */
+    NULL,            /* attach_help */
+    NULL,            /* help_ctxt */
+    NULL             /* description */
+};

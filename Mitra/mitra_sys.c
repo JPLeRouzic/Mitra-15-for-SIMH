@@ -1,553 +1,128 @@
-/* mitra_sys.c: Mitra 15 simulator interface
- *
- * Based on MITRA 15 Reference Manual (CII, 1973)
- * Integrates CPU, RTC, and I/O peripherals (DRI, CDR, ASR33, Panel, PTR, PTP)
- */
+/* sds_sys.c: SDS 940 simulator interface
+
+   Copyright (c) 2001-2020, Robert M Supnik
+
+   Permission is hereby granted, free of charge, to any person obtaining a
+   copy of this software and associated documentation files (the "Software"),
+   to deal in the Software without restriction, including without limitation
+   the rights to use, copy, modify, merge, publish, distribute, sublicense,
+   and/or sell copies of the Software, and to permit persons to whom the
+   Software is furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+   ROBERT M SUPNIK BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+   IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+   Except as contained in this notice, the name of Robert M Supnik shall not be
+   used in advertising or otherwise to promote the sale, use or other dealings
+   in this Software without prior written authorization from Robert M Supnik.
+
+   01-Nov-20    RMS     Fixed sds930-to-ascii entry 060 (Ken Rector)
+   05-May-16    RMS     Fixed ascii-to-sds940 data (Mark Pizzolato)
+   19-Mar-12    RMS     Fixed declarations of CCT arrays (Mark Pizzolato)
+*/
 
 #include "mitra_defs.h"
-#include <ctype.h>
-#include <stdlib.h>
-#include <string.h>
+#include "mitra_cpu.h"
 #include "mitra_io.h"
 
-/* ========== External Declarations from mitra_cpu.c ========== */
-extern uint16 M[MAXMEMSIZE];
-extern uint8 curr_bloc;
-extern struct {
-    uint16 A, E, X;
-    uint8 C, OV;
-    uint16 P, L, G, V, W;
-} reg_block[];
-extern uint8  C, OV, MS, MA, PR;
-extern uint16 cpu_mode;
-extern uint32 int_req;
-extern uint32 susp_req_bits;
+#include <ctype.h>
+#define FMTASC(x) ((x) < 040)? "<%03o>": "%c", (x)
 
 extern DEVICE cpu_dev;
-extern DEVICE rtc_dev;               /* Real-time clock */
+extern DEVICE panel_dev;
+extern DEVICE dri_dev;
+extern DEVICE sagem_dev;
+extern DEVICE chan_dev;
+extern DEVICE asr_dev;
+extern DEVICE ptr_dev;
+extern DEVICE ptp_dev;
+extern DEVICE cr_dev;
+extern DEVICE cdr_dev;
+extern DEVICE cp_dev;
+extern DEVICE tti_dev;
+extern DEVICE tto_dev;
+extern DEVICE lpt_dev;
+extern DEVICE lp_dev;
+extern DEVICE rtc_dev;
+extern DEVICE drm_dev;
+extern DEVICE rad_dev;
+extern DEVICE dsk_dev;
+extern DEVICE mt_dev;
+extern DEVICE mux_dev, muxl_dev;
+extern UNIT cpu_unit;
+extern REG cpu_reg[];
+extern uint32 cpu_mode;
+extern t_value M[MAX_MEM_WORDS];
 
-/* External I/O Device Functions (from IO_*.c files) */
-extern t_stat dri_attach(int unit, const char *filename);
-extern void   dri_detach(int unit);
-extern void   dri_reset(void);
+/* SCP data structures and interface routines
 
-extern t_stat sagem_attach(int unit, const char *filename);
-extern void   sagem_detach(int unit);
-extern void   sagem_reset(void);
+   sim_name             simulator name string
+   sim_PC               pointer to saved PC register descriptor
+   sim_emax             number of words for examine
+   sim_devices          array of pointers to simulated devices
+   sim_stop_messages    array of pointers to stop messages
+   sim_load             binary loader
+*/
 
-extern t_stat cdr_attach(const char *filename);
-extern void   cdr_detach(void);
-extern void   cdr_reset(void);
+char sim_name[] = "Mitra 15/30";
 
-extern t_stat magtape_attach(const char *filename);
-extern void   magtape_detach(void);
-extern void   magtape_reset(void);
+REG *sim_PC = &cpu_reg[0];
 
-extern t_stat asr33_attach(const char *filename);
-extern void   asr33_detach(void);
-extern void   asr33_reset(void);
-
-extern t_stat printer_attach(const char *filename);
-extern void   printer_detach(void);
-extern void   printer_reset(void);
-
-extern t_stat ptr_attach(const char *filename);
-extern void   ptr_detach(void);
-extern void   ptr_reset(void);
-
-extern void   panel_reset(void);
-
-extern t_stat ptp_attach(const char *filename);
-extern void   ptp_detach(void);
-extern void   ptp_reset(void);
-
-/* SIMH wrapper prototypes */
-static t_stat dri_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat dri_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat dri_sim_reset(DEVICE *dptr);
-static t_stat sagem_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat sagem_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat sagem_sim_reset(DEVICE *dptr);
-static t_stat cdr_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat cdr_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat cdr_sim_reset(DEVICE *dptr);
-static t_stat printer_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat printer_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat printer_sim_reset(DEVICE *dptr);
-
-static t_stat dri_sim_attach   (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat dri_sim_detach   (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat dri_sim_reset    (DEVICE *dptr);
-
-static t_stat sagem_sim_attach (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat sagem_sim_detach (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat sagem_sim_reset  (DEVICE *dptr);
-
-static t_stat cdr_sim_attach   (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat cdr_sim_detach   (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat cdr_sim_reset    (DEVICE *dptr);
-
-static t_stat printer_sim_attach (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat printer_sim_detach (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat printer_sim_reset  (DEVICE *dptr);
-
-static t_stat asr_sim_attach   (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat asr_sim_detach   (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat asr_sim_reset    (DEVICE *dptr);
-
-static t_stat panel_sim_reset (DEVICE *dptr);
-static t_stat ptr_sim_reset   (DEVICE *dptr);
-static t_stat ptp_sim_reset   (DEVICE *dptr);
-
-extern t_stat printer_attach (const char *filename);
-extern void   printer_detach (void);
-extern void   printer_reset (void);
-
-static t_stat ptr_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat ptr_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat ptr_sim_reset(DEVICE *dptr);
-
-static t_stat ptp_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat ptp_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc);
-static t_stat ptp_sim_reset(DEVICE *dptr);
-
-/* ========== SIMH Core Data Structures ========== */
-char sim_name[] = "Mitra 15";
-REG *sim_PC = NULL;
 int32 sim_emax = 1;
 
-/* Stop messages (manual section 11-8.3) */
-const char *sim_stop_messages[] = {
-    "Unknown error",
-    "I/O device not ready",
-    "HALT instruction",
-    "Breakpoint",
-    "Invalid I/O device",
-    "Invalid instruction",
-    "Invalid I/O operation",
-    "Indirect addressing limit exceeded",
-    "EXU loop limit exceeded",
-    "Memory management trap during interrupt",
-    "Memory management trap during trap",
-    "Trap instruction invalid",
-    "RTC instruction not valid",
-    "Interrupt vector zero",
-    "Suspension stack overflow",
-    NULL
-};
-
-/* ========== SIMH Device Structures ========== */
-/* Note: The DEVICE struct initialization assumes a standard SIMH layout. 
-   Adjust the number of trailing NULLs if your mitra_defs.h DEVICE struct has more fields. */
-
-/* DRI Disk (2 units) */
-UNIT dri_unit[] = {
-    { UDATA(NULL, UNIT_FIX | UNIT_BINK, 0) },
-    { UDATA(NULL, UNIT_FIX | UNIT_BINK, 0) }
-    /* No NULL here - this is an array, not a terminated list */
-};
-
-MTAB dri_mod[] = {
-    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &dri_sim_attach, NULL, NULL, "Attach disk image" },
-    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &dri_sim_detach, NULL, NULL, "Detach disk image" },
-    { 0 }
-};
-
-DEVICE dri_dev = {
-    "DRI", dri_unit, NULL, dri_mod,
-    2, 8, 16, 1, 8, 16,
-    NULL, NULL, &dri_sim_reset, NULL, NULL, NULL, NULL, 0, 0
-};
-
-/* SAGEM Disk (2 units) */
-UNIT sagem_unit[] = {
-    { UDATA(NULL, UNIT_FIX | UNIT_BINK, 0) },
-    { UDATA(NULL, UNIT_FIX | UNIT_BINK, 0) }
-};
-
-MTAB sagem_mod[] = {
-    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &sagem_sim_attach, NULL, NULL, "Attach disk image" },
-    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &sagem_sim_detach, NULL, NULL, "Detach disk image" },
-    { 0 }
-};
-
-DEVICE sagem_dev = {
-    "SAGEM", sagem_unit, NULL, sagem_mod,
-    2, 8, 16, 1, 8, 16,
-    NULL, NULL, &sagem_sim_reset, NULL, NULL, NULL, NULL, 0, 0
-};
-
-/* Card Reader (1 unit) */
-UNIT cdr_unit[] = {
-    { UDATA(NULL, UNIT_SEQ | UNIT_BINK | UNIT_RO, 0) }
-};
-
-MTAB cdr_mod[] = {
-    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &cdr_sim_attach, NULL, NULL, "Attach card deck" },
-    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &cdr_sim_detach, NULL, NULL, "Detach card deck" },
-    { 0 }
-};
-
-DEVICE cdr_dev = {
-    "CDR", cdr_unit, NULL, cdr_mod,
-    1, 8, 16, 1, 8, 16,
-    NULL, NULL, &cdr_sim_reset, NULL, NULL, NULL, NULL, DEV_DISABLE, 0
-};
-
-/* ASR33 Teletype (Console) */
-UNIT asr_unit[] = {
-    { UDATA(NULL, UNIT_SEQ, 0) }
-};
-
-MTAB asr_mod[] = {
-    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &asr_sim_attach, NULL, NULL, "Attach console log" },
-    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &asr_sim_detach, NULL, NULL, "Detach console log" },
-    { 0 }
-};
-DEVICE asr_dev = {
-    "ASR", asr_unit, NULL, asr_mod,
-    1, 8, 16, 1, 8, 16,
-    NULL, NULL, &asr_sim_reset, NULL, NULL, NULL, NULL, 0, 0
-};
-
-/* Line printer */
-UNIT lp_unit[] = {
-    { UDATA(NULL, UNIT_SEQ, 0) }
-};
-
-MTAB lp_mod[] = {
-    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &printer_sim_attach, NULL, NULL, "Attach printer output" },
-    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &printer_sim_detach, NULL, NULL, "Detach printer output" },
-    { 0 }
-};
-
-DEVICE printer_dev = {
-    "LP", lp_unit, NULL, lp_mod,
-    1, 8, 16, 1, 8, 16,
-    NULL, NULL, &printer_sim_reset, NULL, NULL, NULL, NULL, DEV_DISABLE, 0
-};
-
-/* Front Panel */
-UNIT panel_unit[] = {
-    { UDATA(NULL, 0, 0) }
-};
-
-DEVICE panel_dev = {
-    "PANEL", panel_unit, NULL, NULL,
-    1, 8, 16, 1, 8, 16,
-    NULL, NULL, &panel_sim_reset, NULL, NULL, NULL, NULL, 0, 0
-};
-
-/* Paper Tape Reader / Punch */
-UNIT ptr_unit[] = {
-    { UDATA(NULL, UNIT_SEQ | UNIT_RO, 0) }
-};
-
-MTAB ptr_mod[] = {
-    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &ptr_sim_attach, NULL, NULL, "Attach paper tape image" },
-    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &ptr_sim_detach, NULL, NULL, "Detach paper tape image" },
-    { 0 }
-};
-DEVICE ptr_dev = {
-    "PTR", ptr_unit, NULL, NULL,
-    1, 8, 16, 1, 8, 16,
-    NULL, NULL, &ptr_sim_reset, NULL, NULL, NULL, NULL, 0, 0
-};
-
-UNIT ptp_unit[] = {
-    { UDATA(NULL, UNIT_SEQ, 0) }
-
-};
-
-MTAB ptp_mod[] = {
-    { MTAB_XTD|MTAB_VUN, 0, "ATTACH", "ATTACH", &ptp_sim_attach, NULL, NULL, "Attach paper tape punch output" },
-    { MTAB_XTD|MTAB_VUN, 0, "DETACH", "DETACH", &ptp_sim_detach, NULL, NULL, "Detach paper tape punch output" },
-    { 0 }
-};
-
-DEVICE ptp_dev = {
-    "PTP", ptp_unit, NULL, ptp_mod,
-    1, 8, 16, 1, 8, 16,
-    NULL, NULL, &ptp_sim_reset, NULL, NULL, NULL, NULL, DEV_DISABLE, 0
-};
-
-/* Device list */
 DEVICE *sim_devices[] = {
     &cpu_dev,
+    &panel_dev,
     &rtc_dev,
-    &dri_dev, // DRI fixed disk
-    &sagem_dev, // SAGEM fixed disk
-    &cdr_dev, // Card reader
-    &asr_dev, // ASR33
-    &panel_dev, // Mitra's front panel
-    &printer_dev, // Line printer
-//    &mag_tape_dev, // magnetic tape reader
-    &ptr_dev, // Paper Tape reader
-    &ptp_dev, // Paper Tape puncher
+//    &chan_dev,
+    &dri_dev,
+    &sagem_dev,
+    &ptr_dev,
+    &ptp_dev,
+//    &tti_dev,
+//    &tto_dev,
+    &asr_dev,
+//    &lpt_dev,
+    &lp_dev,
+    &cdr_dev,
+//    &cp_dev,
+//    &drm_dev,
+//    &rad_dev,
+//    &dsk_dev,
+//    &mt_dev,
+//    &mux_dev,
+//    &muxl_dev,
     NULL
-};
-
-/* ========== Instruction Opcode Table ========== */
-static const char *opcode_table[256] = {
-    /* 00-0F */
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
-    /* 10-1F */
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
-    /* 20-2F (p mode - same as 00-0F) */
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
-    /* 30-3F */
-    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
-    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    "",
-    /* 40-4F (DG mode - same as 00-0F) */
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
-    /* 50-5F */
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
-    /* 60-6F (IL mode - same as 00-0F) */
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
-    /* 70-7F */
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
-    /* 80-8F (IGX mode - same as 00-0F) */
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
-    /* 90-9F */
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
-    /* A0-AF (ILX mode - same as 00-0F) */
-    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
-    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
-    /* B0-BF */
-    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
-    /* C0-CF (Class 2 - RP mode) */
-    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
-    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
-    /* D0-DF (Class 2 - RM/IL/IG modes) */
-    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
-    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
-    /* E0-EF (PX mode - class 1) */
-    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
-    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    "",
-    /* F0-FF (p mode - class 1 and system) */
-    "SHR", "SRG", "ICX", "DCX", "SYS", "ICL", "DCL", "CSV",
-    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    ""
-};
-
-const int8 odd_par[64] = {
-    0100, 0001, 0002, 0103, 0004, 0105, 0106, 0007,
-    0010, 0111, 0112, 0013, 0114, 0015, 0016, 0117,
-    0020, 0121, 0122, 0023, 0124, 0025, 0026, 0127,
-    0130, 0031, 0032, 0133, 0034, 0135, 0136, 0037,
-    0040, 0141, 0142, 0043, 0144, 0045, 0046, 0147,
-    0150, 0051, 0052, 0153, 0154, 0055, 0156, 0057,
-    0160, 0061, 0062, 0163, 0064, 0165, 0166, 0067,
-    0070, 0171, 0172, 0073, 0174, 0075, 0176, 0077
-};
-
-/* Addressing mode strings */
-static const char *mode_strings[] = {
-    "",      /* AM_DL */
-    "@",     /* AM_IL */
-    "@,X",   /* AM_ILX */
-    "",      
-    "#",     /* AM_DG */
-    "@#X",   /* AM_IGX */
-    "=",     /* AM_P */
-    "=,X"    /* AM_PX (class 1 only) */
-};
-
-/* ========== Disassembler / Assembler Helpers ========== */
-
-static const char *get_mnemonic(uint16 inst) {
-    uint16 opcode = (inst >> 8) & 0xFF;
-    const char *mnemonic = opcode_table[opcode];
-    return (mnemonic && mnemonic[0]) ? mnemonic : "???";
-}
-
-static const char *get_mode_string(uint16 inst) {
-    uint16 mode = (inst >> 13) & 0x07;
-    uint16 opcode = (inst >> 8) & 0xFF;
+    };
     
-    if (opcode >= 0xC0 && opcode <= 0xDF) {
-        if (mode == 6) return "";   /* RP - just displacement */
-        if (mode == 7) return "-";  /* RM - minus sign before displacement */
-        if (mode == 1) return "@";
-        if (mode == 4) return "@#";
-        return "";
-    }
-    
-    if (mode < 8 && mode_strings[mode])
-        return mode_strings[mode];
-    return "";
-}
-
-/* Symbolic disassembly */
-t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw)
-{
-    uint16 inst = val[0] & 0xFFFF;
-    uint16 disp = inst & 0xFF;
-    uint16 mode = (inst >> 13) & 0x07;
-    uint16 opcode = (inst >> 8) & 0xFF;
-    const char *mnemonic = get_mnemonic(inst);
-    const char *mode_str = get_mode_string(inst);
-    
-    if (sw & SWMASK('M')) {
-        /* CSV Instructions (0x37 and 0xF7) */
-        if (opcode == 0x37 || opcode == 0xF7) {
-            if (disp == M_10_SECTION)      fprintf(of, "CSV M:1O");
-            else if (disp == M_ZIO_SECTION)  fprintf(of, "CSV M:ZIO");
-            else if (disp == M_WAIT_SECTION) fprintf(of, "CSV M:WAIT");
-            else if (disp == M_ZWAT_SECTION) fprintf(of, "CSV M:ZWAT");
-            else                             fprintf(of, "CSV %03o", disp);
-            return SCPE_OK;
-        } 
-        
-        /* SYS Instructions (0xF4) */
-        if (opcode == 0xF4) {
-            switch (disp) {
-                case 0x00: fprintf(of, "RTS"); break;
-                case 0x01: fprintf(of, "DIT"); break;
-                case 0x02: fprintf(of, "RD");  break;
-                case 0x03: fprintf(of, "WD");  break;
-                case 0x08: fprintf(of, "STM"); break;
-                case 0x0C: fprintf(of, "CLM"); break;
-                case 0x20: fprintf(of, "DITR"); break;
-                case 0x40: fprintf(of, "RSV"); break;
-                default:   fprintf(of, "SYS %03o", disp);
-            }
-            return SCPE_OK;
-        }
-        
-        /* SRG family special mnemonics */
-        if ((opcode == 0x31 || opcode == 0xE1 || opcode == 0xF1) && (mode == 6 || mode == 7)) {
-            switch (disp & 0x1F) {
-                case 0x02: mnemonic = "XAE"; break; case 0x04: mnemonic = "XAX"; break;
-                case 0x06: mnemonic = "XEX"; break; case 0x08: mnemonic = "XAA"; break;
-                case 0x0A: mnemonic = "CCE"; break; case 0x0E: mnemonic = "ACE"; break;
-                case 0x10: mnemonic = "CCA"; break; case 0x12: mnemonic = "AEE"; break;
-                case 0x14: mnemonic = "CNX"; break; case 0x16: mnemonic = "AIE"; break;
-                case 0x18: mnemonic = "AAE"; break; case 0x1A: mnemonic = "LNE"; break;
-                case 0x1C: mnemonic = "CNA"; break; case 0x1E: mnemonic = "CHX"; break;
-            }
-            fprintf(of, "%s", mnemonic);
-            return SCPE_OK;
-        }
-        
-        /* Class 2 relative branches */
-        if (opcode >= 0xC0 && opcode <= 0xDF) {
-            int16 offset = disp;
-            if (mode == 7) offset = -disp;
-            fprintf(of, "%s %+d", mnemonic, offset);
-            return SCPE_OK;
-        }
-        
-        /* Normal instruction with addressing mode */
-        if (mode_str && mode_str[0]) {
-            fprintf(of, "%s %s%03o", mnemonic, mode_str, disp);
-        } else {
-            fprintf(of, "%s %03o", mnemonic, disp);
-        }
-        return SCPE_OK;
-    }
-    
-    /* Default: print raw octal */
-    fprintf(of, "%06o", inst);
-    return SCPE_OK;
-}
-
-/* Symbolic input (Assembler) */
-t_stat parse_sym(CONST char *cptr, t_addr addr, UNIT *uptr, t_value *val, int32 sw)
-{
-    char mnemonic[16];
-    char arg[16];
-    uint16 inst = 0;
-    int i;
-    
-    while (isspace((unsigned char)*cptr)) cptr++;
-    
-    i = 0;
-    while (*cptr && !isspace((unsigned char)*cptr) && *cptr != ',' && i < 15) {
-        mnemonic[i++] = toupper((unsigned char)*cptr++);
-    }
-    mnemonic[i] = '\0';
-    
-    while (isspace((unsigned char)*cptr)) cptr++;
-    
-    i = 0;
-    while (*cptr && !isspace((unsigned char)*cptr) && i < 15) {
-        arg[i++] = *cptr++;
-    }
-    arg[i] = '\0';
-    
-    for (i = 0; i < 256; i++) {
-        if (opcode_table[i] && strcmp(opcode_table[i], mnemonic) == 0) {
-            uint16 opcode = i;
-            uint16 mode = 0;
-            uint16 disp = 0;
-            
-            /* Parse addressing mode prefix (using octal parsing) */
-            if (arg[0] == '@') {
-                if (arg[1] == '#') {
-                    mode = 5;  /* IGX */
-                    if (arg[2]) disp = (uint16)strtol(arg + 2, NULL, 8);
-                } else if (arg[1] == ',') {
-                    mode = 2;  /* ILX */
-                    if (arg[2]) disp = (uint16)strtol(arg + 2, NULL, 8);
-                } else {
-                    mode = 1;  /* IL */
-                    if (arg[1]) disp = (uint16)strtol(arg + 1, NULL, 8);
-                }
-            } else if (arg[0] == '#') {
-                mode = 4;  /* DG */
-                if (arg[1]) disp = (uint16)strtol(arg + 1, NULL, 8);
-            } else if (arg[0] == '=') {
-                mode = 6;  /* p */
-                if (arg[1]) disp = (uint16)strtol(arg + 1, NULL, 8);
-            } else if (arg[0] == '-') {
-                mode = 7;  /* RM */
-                if (arg[1]) disp = (uint16)strtol(arg + 1, NULL, 8);
-            } else if (arg[0] == '+') {
-                mode = 6;  /* RP */
-                if (arg[1]) disp = (uint16)strtol(arg + 1, NULL, 8);
-            } else if (isdigit((unsigned char)arg[0])) {
-                mode = 0;  /* DL */
-                disp = (uint16)strtol(arg, NULL, 8);
-            }
-            
-            /* Special cases for SYS and CSV instructions */
-            if (strcmp(mnemonic, "CSV") == 0) {
-                if (strcmp(arg, "M:1O") == 0) disp = M_10_SECTION;
-                else if (strcmp(arg, "M:ZIO") == 0) disp = M_ZIO_SECTION;
-                else if (strcmp(arg, "M:WAIT") == 0) disp = M_WAIT_SECTION;
-                else if (strcmp(arg, "M:ZWAT") == 0) disp = M_ZWAT_SECTION;
-                else disp = (uint16)strtol(arg, NULL, 8);
-                inst = (0x37 << 8) | (disp & 0xFF);
-            } else if (strcmp(mnemonic, "RTS") == 0)  inst = 0xF400;
-              else if (strcmp(mnemonic, "DIT") == 0)  inst = 0xF401;
-              else if (strcmp(mnemonic, "RD") == 0)   inst = 0xF402;
-              else if (strcmp(mnemonic, "WD") == 0)   inst = 0xF403;
-              else if (strcmp(mnemonic, "STM") == 0)  inst = 0xF408;
-              else if (strcmp(mnemonic, "CLM") == 0)  inst = 0xF40C;
-              else if (strcmp(mnemonic, "DITR") == 0) inst = 0xF420;
-              else if (strcmp(mnemonic, "RSV") == 0)  inst = 0xF440;
-              else {
-                /* Build standard instruction word */
-                inst = (mode << 13) | (opcode << 8) | (disp & 0xFF);
-            }
-            
-            *val = inst;
-            return SCPE_OK;
-        }
-    }
-    
-    return SCPE_ARG;
-}
+const char *sim_stop_messages[SCPE_BASE] = {
+    "Unknown error",
+    "IO device not ready",
+    "HALT instruction",
+    "Breakpoint",
+    "Invalid IO device",
+    "Invalid instruction",
+    "Invalid I/O operation",
+    "Nested indirects exceed limit",
+    "Nested EXU's exceed limit",
+    "Memory management trap during interrupt",
+    "Memory management trap during trap",
+    "Trap instruction not BRM or BRU",
+    "RTC instruction not MIN or SKR",
+    "Interrupt vector zero",
+    "Runaway carriage control tape",
+    "Monitor-mode Breakpoint",
+    "Normal-mode Breakpoint",
+    "User-mode Breakpoint",
+    "Next expired"
+    };
 
 /* Binary loader for Mitra 15 paper tape format */
 t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag)
@@ -572,211 +147,493 @@ t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag)
     }
     
     /* Set PC to start address (usually address 2 contains bootstrap) */
-    if (MAXMEMSIZE > 2) reg_block[curr_bloc].P = M[2];
+    if (MAXMEMSIZE > 2) 
+    	cpu_state.reg_block[cpu_state.curr_bloc].P = M[2];
     
     return SCPE_OK;
 }
 
-/* ========== SIMH Device Integration Wrappers ========== */
-/* These bridge the device functions from IO_*.c with SIMH's DEVICE framework */
+/* Symbol tables */
 
-/* DRI Disk */
-static t_stat dri_sim_attach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
+#define I_V_FL          24                              /* inst class */
+#define I_M_FL          017                             /* class mask */
+#define I_V_NPN         000                             /* no operand */
+#define I_V_PPO         001                             /* POP */
+#define I_V_IOI         002                             /* IO */
+#define I_V_MRF         003                             /* memory reference */
+#define I_V_REG         004                             /* register change */
+#define I_V_SHF         005                             /* shift */
+#define I_V_OPO         006                             /* operand optional */
+#define I_V_CHC         007                             /* chan cmd */
+#define I_V_CHT         010                             /* chan test */
+#define I_V_SPP         011                             /* system POP */
+#define I_NPN           (I_V_NPN << I_V_FL)
+#define I_PPO           (I_V_PPO << I_V_FL)
+#define I_IOI           (I_V_IOI << I_V_FL)
+#define I_MRF           (I_V_MRF << I_V_FL)
+#define I_REG           (I_V_REG << I_V_FL)
+#define I_SHF           (I_V_SHF << I_V_FL)
+#define I_OPO           (I_V_OPO << I_V_FL)
+#define I_CHC           (I_V_CHC << I_V_FL)
+#define I_CHT           (I_V_CHT << I_V_FL)
+#define I_SPP           (I_V_SPP << I_V_FL)
+
+static const int32 masks[] = {
+ 037777777, 010000000, 017700000,                       /* NPN, PPO, IOI */
+ 017740000, 017700000, 017774000,                       /* MRF, REG, SHF */
+ 017740000, 017377677, 027737677,                       /* OPO, CHC, CHT */
+ 057740000                                              /* SPP           */
+ };
+
+static const char *opcode[] = {                         /* Note: syspops must preceed generic pop */
+ "WSI", "SWI", "BKPT","STO",
+ "WCD", "STI", "GCD", "SIC",
+ "ISC", "DBI", "DBO", "DWI",
+ "DWO", "LAS", "SAS", "IST",
+ "OST", "EXS", "FDV", "FMP",
+ "FSB", "FAD", "WCI", "WIO",
+ "CIO", "SKSG","SKSE","WCH",
+ "GCI", "LDP", "STP", "SBRM",
+ "SBRR","CTRL","BRS", "TCI",
+ "TCO", "BIO",
+
+ "WSI*", "SWI*", "BKPT*","STO*",
+ "WCD*", "STI*", "GCD*", "SIC*",
+ "ISC*", "DBI*", "DBO*", "DWI*",
+ "DWO*", "LAS*", "SAS*", "IST*",
+ "OST*", "EXS*", "FDV*", "FMP*",
+ "FSB*", "FAD*", "WCI*", "WIO*",
+ "CIO*", "SKSG*","SKSE*","WCH*",
+ "GCI*", "LDP*", "STP*", "SBRM*",
+ "SBRR*","CTRL*","BRS*", "TCI*",
+ "TCO*", "BIO*",
+
+ "POP", "EIR", "DIR",
+ "ROV", "REO", "OTO", "OVT",
+ "IDT", "IET",
+ "BPT4", "BPT3", "BPT2", "BPT1",
+ "CLAB", "ABC", "BAC", "XAB",
+ "XXB", "STE", "LDE", "XEE",
+ "CLEAR",
+
+ "HLT", "BRU", "EOM", "EOD",
+ "MIY", "BRI", "MIW", "POT",
+ "ETR", "MRG", "EOR",
+ "NOP", "EXU",
+ "YIM", "WIM", "PIN",
+ "STA", "STB", "STX",
+ "SKS", "BRX", "BRM",
+ "SKE", "BRR", "SKB", "SKN",
+ "SUB", "ADD", "SUC", "ADC",
+ "SKR", "MIN", "XMA", "ADM",
+ "MUL", "DIV",
+ "SKM", "LDX", "SKA", "SKG",
+ "SKD", "LDB", "LDA", "EAX",
+
+         "BRU*",
+ "MIY*", "BRI*", "MIW*", "POT*",
+ "ETR*", "MRG*", "EOR*",
+ "NOP*", "EXU*",
+ "YIM*", "WIM*", "PIN*",
+ "STA*", "STB*", "STX*",
+         "BRX*", "BRM*",
+ "SKE*", "BRR*", "SKB*", "SKN*",
+ "SUB*", "ADD*", "SUC*", "ADC*",
+ "SKR*", "MIN*", "XMA*", "ADM*",
+ "MUL*", "DIV*",
+ "SKM*", "LDX*", "SKA*", "SKG*",
+ "SKD*", "LDB*", "LDA*", "EAX*",
+
+ "RSH", "RCY", "LRSH",
+ "LSH", "NOD", "LCY",
+ "RSH*", "LSH*",
+
+ "ALC", "DSC", "ASC", "TOP",
+ "CAT", "CET", "CZT", "CIT",
+
+ "CLA", "CLB", "CAB",                                   /* encode only */
+ "CBA", "CBX", "CXB",
+ "XPO", "CXA", "CAX",
+ "CNA", "CLX", NULL,
+ NULL
+ };
+
+static const int32 opc_val[] = {
+ 050000000+I_SPP, 050100000+I_SPP, 053300000+I_SPP, 053400000+I_SPP,     /* WSI,  SWI,  BKPT, STO, */
+ 053500000+I_SPP, 053600000+I_SPP, 053700000+I_SPP, 054000000+I_SPP,     /* WCD,  STI,  GCD,  SIC, */
+ 054100000+I_SPP, 054200000+I_SPP, 054300000+I_SPP, 054400000+I_SPP,     /* ISC,  DBI,  DBO,  DWI, */
+ 054500000+I_SPP, 054600000+I_SPP, 054700000+I_SPP, 055000000+I_SPP,     /* DWO,  LAS,  SAS,  IST, */
+ 055100000+I_SPP, 055200000+I_SPP, 055300000+I_SPP, 055400000+I_SPP,     /* OST,  EXS,  FDV,  FMP, */
+ 055500000+I_SPP, 055600000+I_SPP, 055700000+I_SPP, 056000000+I_SPP,     /* FSB,  FAD,  WCI,  WIO, */
+ 056100000+I_SPP, 056200000+I_SPP, 056300000+I_SPP, 056400000+I_SPP,     /* CIO,  SKSG, SKSE, WCH, */
+ 056500000+I_SPP, 056600000+I_SPP, 056700000+I_SPP, 057000000+I_SPP,     /* GCI,  LDP,  STP,  SBRM,*/
+ 057100000+I_SPP, 057200000+I_SPP, 057300000+I_SPP, 057400000+I_SPP,     /* SBRR, CTRL, BRS,  TCI, */
+ 057500000+I_SPP, 057600000+I_SPP,                                       /* TCO,  BIO,             */
+
+ 054000000+I_SPP, 050140000+I_SPP, 053340000+I_SPP, 053440000+I_SPP,     /* WSI*,  SWI*,  BKPT*, STO*, */
+ 053540000+I_SPP, 053640000+I_SPP, 053740000+I_SPP, 054400000+I_SPP,     /* WCD*,  STI*,  GCD*,  SIC*, */
+ 054140000+I_SPP, 054240000+I_SPP, 054340000+I_SPP, 054440000+I_SPP,     /* ISC*,  DBI*,  DBO*,  DWI*, */
+ 054540000+I_SPP, 054640000+I_SPP, 054740000+I_SPP, 055400000+I_SPP,     /* DWO*,  LAS*,  SAS*,  IST*, */
+ 055140000+I_SPP, 055240000+I_SPP, 055340000+I_SPP, 055440000+I_SPP,     /* OST*,  EXS*,  FDV*,  FMP*, */
+ 055540000+I_SPP, 055640000+I_SPP, 055740000+I_SPP, 056400000+I_SPP,     /* FSB*,  FAD*,  WCI*,  WIO*, */
+ 056140000+I_SPP, 056240000+I_SPP, 056340000+I_SPP, 056440000+I_SPP,     /* CIO*,  SKSG*, SKSE*, WCH*, */
+ 056540000+I_SPP, 056640000+I_SPP, 056740000+I_SPP, 057400000+I_SPP,     /* GCI*,  LDP*,  STP*,  SBRM*,*/
+ 057140000+I_SPP, 057240000+I_SPP, 057340000+I_SPP, 057440000+I_SPP,     /* SBRR*, CTRL*, BRS*,  TCI*, */
+ 057540000+I_SPP, 057640000+I_SPP,                                       /* TCO*,  BIO*,               */
+
+ 010000000+I_PPO, 000220002+I_NPN, 000220004+I_NPN,                      /* POP,  EIR,  DIR,        */
+ 002200001+I_NPN, 002200010+I_NPN, 002200100+I_NPN, 002200101+I_NPN,     /* ROV,  REO,  OTO,  OVT,  */
+ 004020002+I_NPN, 004020004+I_NPN,                                       /* IDT,  IET,              */
+ 004020040+I_NPN, 004020100+I_NPN, 004020200+I_NPN, 004020400+I_NPN,     /* BPT4, BPT3, BPT2, BPT1, */
+ 004600003+I_NPN, 004600005+I_NPN, 004600012+I_NPN, 004600014+I_NPN,     /* CLAB, ABC,  BAC,  XAB,  */
+ 004600060+I_NPN, 004600122+I_NPN, 004600140+I_NPN, 004600160+I_NPN,     /* XXB,  STE,  LDE,  XEE,  */
+ 024600003+I_NPN,                                                        /* CLEAR,                  */
+
+ 000000000+I_NPN, 000100000+I_MRF, 000200000+I_IOI, 000600000+I_IOI,     /* HLT,  BRU,  EOM,  EOD,  */
+ 001000000+I_MRF, 001100000+I_MRF, 001200000+I_MRF, 001300000+I_MRF,     /* MIY,  BRI,  MIW,  POT,  */
+ 001400000+I_MRF, 001600000+I_MRF, 001700000+I_MRF,                      /* ETR,  MRG,  EOR,        */
+ 002000000+I_OPO, 002300000+I_MRF,                                       /* NOP,  EXU,              */
+ 003000000+I_MRF, 003200000+I_MRF, 003300000+I_MRF,                      /* YIM,  WIM,  PIN,        */
+ 003500000+I_MRF, 003600000+I_MRF, 003700000+I_MRF,                      /* STA,  STB,  STX,        */
+ 004000000+I_IOI, 004100000+I_MRF, 004300000+I_MRF,                      /* SKS,  BRX,  BRM,        */
+ 005000000+I_MRF, 005100000+I_MRF, 005200000+I_MRF, 005300000+I_MRF,     /* SKE,  BRR,  SKB,  SKN,  */
+ 005400000+I_MRF, 005500000+I_MRF, 005600000+I_MRF, 005700000+I_MRF,     /* SUB,  ADD,  SUC,  ADC,  */
+ 006000000+I_MRF, 006100000+I_MRF, 006200000+I_MRF, 006300000+I_MRF,     /* SKR,  MIN,  XMA,  ADM,  */
+ 006400000+I_MRF, 006500000+I_MRF,                                       /* MUL,  DIV,              */
+ 007000000+I_MRF, 007100000+I_MRF, 007200000+I_MRF, 007300000+I_MRF,     /* SKM,  LDX,  SKA,  SKG,  */
+ 007400000+I_MRF, 007500000+I_MRF, 007600000+I_MRF, 007700000+I_MRF,     /* SKD,  LDB,  LDA,  EAX,  */
+
+                  000140000+I_MRF,                                       /*       BRU*,             */
+ 001040000+I_MRF, 001140000+I_MRF, 001240000+I_MRF, 001340000+I_MRF,     /* MIY*, BRI*, MIW*, POT*, */
+ 001440000+I_MRF, 001640000+I_MRF, 001740000+I_MRF,                      /* ETR*, MRG*, EOR*,       */
+ 002040000+I_OPO, 002340000+I_MRF,                                       /* NOP*, EXU*,             */
+ 003040000+I_MRF, 003240000+I_MRF, 003340000+I_MRF,                      /* YIM*, WIM*, PIN*,       */
+ 003540000+I_MRF, 003640000+I_MRF, 003740000+I_MRF,                      /* STA*, STB*, STX*,       */
+                  004140000+I_MRF, 004340000+I_MRF,                      /*       BRX*, BRM*,       */
+ 005040000+I_MRF, 005140000+I_MRF, 005240000+I_MRF, 005340000+I_MRF,     /* SKE*, BRR*, SKB*, SKN*, */
+ 005440000+I_MRF, 005540000+I_MRF, 005640000+I_MRF, 005740000+I_MRF,     /* SUB*, ADD*, SUC*, ADC*, */
+ 006040000+I_MRF, 006140000+I_MRF, 006240000+I_MRF, 006340000+I_MRF,     /* SKR*, MIN*, XMA*, ADM*, */
+ 006440000+I_MRF, 006540000+I_MRF,                                       /* MUL*, DIV*,             */
+ 007040000+I_MRF, 007140000+I_MRF, 007240000+I_MRF, 007340000+I_MRF,     /* SKM*, LDX*, SKA*, SKG*, */
+ 007440000+I_MRF, 007540000+I_MRF, 007640000+I_MRF, 007740000+I_MRF,     /* SKD*, LDB*, LDA*, EAX*, */
+
+ 006600000+I_SHF, 006620000+I_SHF, 006624000+I_SHF,                      /* RSH,  RCY,  LRSH,       */
+ 006700000+I_SHF, 006710000+I_SHF, 006720000+I_SHF,                      /* LSH,  NOD,  LCY,        */
+ 006640000+I_MRF, 006740000+I_MRF,                                       /* RSH*, LSH*,             */
+
+ 000250000+I_CHC, 000200000+I_CHC, 000212000+I_CHC, 000214000+I_CHC,     /* ALC,  DSC,  ASC,  TOP,  */
+ 004014000+I_CHT, 004011000+I_CHT, 004012000+I_CHT, 004010400+I_CHT,     /* CAT,  CET,  CZT,  CIT,  */
+
+ 004600001+I_REG, 004600002+I_REG, 004600004+I_REG,                      /* CLA,  CLB, CAB,         */
+ 004600010+I_REG, 004600020+I_REG, 004600040+I_REG,                      /* CBA,  CBX, CXB,         */
+ 004600100+I_REG, 004600200+I_REG, 004600400+I_REG,                      /* XPO,  CXA, CAX,         */
+ 004601000+I_REG, 024600000+I_REG, 004600000+I_REG,                      /* CNA,  CLX, NULL,        */
+ -1
+ };
+
+static const char *chname[] = {
+ "W", "Y", "C", "D", "E", "F", "G", "H", NULL
+ };
+
+/* Register change decode
+
+   Inputs:
+        *of     =       output stream
+        inst    =       mask bits
+*/
+
+void fprint_reg (FILE *of, int32 inst)
 {
-    int unit = (int)(uptr - dri_unit);
-    return dri_attach(unit, cptr);
-}
+int32 i, j, sp;
 
-static t_stat dri_sim_detach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    int unit = (int)(uptr - dri_unit);
-    dri_detach(unit);
-    return SCPE_OK;
-}
-static t_stat dri_sim_reset (DEVICE *dptr)
-{
-    dri_reset ();
-    return SCPE_OK;
-}
-
-/* SAGEM Disk */
-static t_stat sagem_sim_attach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    int unit = (int)(uptr - sagem_unit);
-    return sagem_attach(unit, cptr);
-}
-
-static t_stat sagem_sim_detach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    int unit = (int)(uptr - sagem_unit);
-    sagem_detach(unit);
-    return SCPE_OK;
-}
-
-static t_stat sagem_sim_reset (DEVICE *dptr)
-{
-    sagem_reset ();
-    return SCPE_OK;
-}
-
-/* Card Reader */
-static t_stat cdr_sim_attach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    return cdr_attach(cptr);
-}
-
-static t_stat cdr_sim_detach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    cdr_detach();
-    return SCPE_OK;
-}
-
-static t_stat cdr_sim_reset (DEVICE *dptr)
-{
-    cdr_reset ();
-    return SCPE_OK;
-}
-
-/* ASR33 Teletype */
-static t_stat asr_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
-    return asr33_attach(cptr);
-}
-static t_stat asr_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
-    asr33_detach();
-    return SCPE_OK;
-}
-static t_stat asr_sim_reset(DEVICE *dptr) {
-    asr33_reset();
-    return SCPE_OK;
-}
-
-/* Line printer */
-static t_stat printer_sim_attach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    return printer_attach(cptr);
-}
-
-static t_stat printer_sim_detach
-(
-    UNIT *uptr,
-    int32 val,
-    CONST char *cptr,
-    void *desc
-)
-{
-    printer_detach();
-    return SCPE_OK;
-}
-
-static t_stat printer_sim_reset (DEVICE *dptr)
-{
-    printer_reset ();
-    return SCPE_OK;
-}
-
-/* Paper Tape Reader */
-static t_stat ptr_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
-    return ptr_attach(cptr);
-}
-
-static t_stat ptr_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
-    ptr_detach();
-    return SCPE_OK;
-}
-static t_stat ptr_sim_reset (DEVICE *dptr)
-{
-    ptr_reset ();
-    return SCPE_OK;
-}
-
-/* Paper Tape Punch */
-static t_stat ptp_sim_attach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
-    return ptp_attach(cptr);
-}
-static t_stat ptp_sim_detach(UNIT *uptr, int32 val, CONST char *cptr, void *desc) {
-    ptp_detach();
-    return SCPE_OK;
-}
-
-static t_stat ptp_sim_reset (DEVICE *dptr)
-{
-    ptp_reset ();
-    return SCPE_OK;
-}
-
-/* System initialization */
-/* mitra_sys.c - Add debug function */
-
-void mitra_debug_devices(void) {
-    int i = 0;
-    fprintf(stderr, "=== Registered Devices ===\n");
-    while (sim_devices[i] != NULL) {
-        fprintf(stderr, "  [%d] %s\n", i, sim_devices[i]->name);
-        i++;
+inst = inst & ~(I_M_OP << I_V_OP);                      /* clear opcode */
+for (i = sp = 0; opc_val[i] >= 0; i++) {                /* loop thru ops */
+    j = (opc_val[i] >> I_V_FL) & I_M_FL;                /* get class */
+    if ((j == I_V_REG) && (opc_val[i] & inst)) {        /* reg class? */
+        inst = inst & ~opc_val[i];                      /* mask bit set? */
+        fprintf (of, (sp? " %s": "%s"), opcode[i]);
+        sp = 1;
+        }
     }
-    fprintf(stderr, "  Total: %d devices\n", i);
-    fprintf(stderr, "===========================\n");
+return;
 }
 
-/* Call this in mitra_sys_init: */
-t_stat mitra_sys_init(void)
+/* Symbolic decode
+
+   Inputs:
+        *of     =       output stream
+        addr    =       current PC
+        *val    =       pointer to values
+        *uptr   =       pointer to unit
+        sw      =       switches
+   Outputs:
+        return  =       status code
+*/
+
+t_stat fprint_sym (FILE *of, t_addr addr, t_value *val,
+    UNIT *uptr, int32 sw)
 {
-    mitra_debug_devices();
-    io_init_system();
+int32 i, j, ch;
+int32 inst, op, tag, va, shf, nonop;
+
+inst = val[0];                                          /* get inst */
+op = I_GETOP (inst);                                    /* get fields */
+tag = (inst >> 21) & 06;
+va = inst & VA_MASK;
+shf = inst & I_SHFMSK;
+nonop = inst & 077777;
+
+if (sw & SWMASK ('A')) {                                /* SDS internal ASCII? */
+    for (i = 16; i >= 0; i -= 8) {
+        ch = (inst >> i) & 0377;                        /* map printable chars     */
+        if (ch <= 0137)
+             ch += 040;                                 /* from int. to ext. ASCII */
+        else
+             ch = '.';                                  /* or indicate not displayable */
+        fprintf (of, "%c", ch);
+        }
     return SCPE_OK;
+    }
+if (sw & SWMASK ('C')) {                                /* six-bit character? */
+    for (i = 18; i >= 0; i -= 6)
+        fprintf (of, "%c", inst);
+    return SCPE_OK;
+    }
+if (!(sw & SWMASK ('M'))) return SCPE_ARG;
+
+/* Instruction decode */
+
+for (i = 0; opc_val[i] >= 0; i++) {                     /* loop thru ops */
+    j = (opc_val[i] >> I_V_FL) & I_M_FL;                /* get class */
+    if ((opc_val[i] & DMASK) == (inst & masks[j])) {    /* match? */
+
+        switch (j) {                                    /* case on class */
+
+        case I_V_NPN:                                   /* no operand */
+            fprintf (of, "%s", opcode[i]);              /* opcode */
+            break;
+
+        case I_V_SHF:                                   /* shift */
+            fprintf (of, "%s %-o", opcode[i], shf);
+            if (tag)
+                fprintf (of, ",%-o", tag);
+            break;
+
+         case I_V_SPP:                                  /* syspop */
+            fprintf (of, "%s %-o", opcode[i], va);
+            if (tag & 2)
+                fprintf (of, ",2");
+            break;
+
+        case I_V_PPO:                                   /* pop */
+            fprintf (of, "POP %-o,%-o", op, nonop);
+            if (tag)
+                fprintf (of, ",%-o", tag);
+            break;
+
+        case I_V_IOI:                                   /* I/O */
+            fprintf (of, "%s %-o", opcode[i], nonop);
+            if (tag)
+                fprintf (of, ",%-o", tag);
+            break;
+
+        case I_V_OPO:                                   /* operand optional */
+            if (!tag && !va)
+            {
+                fprintf (of, "%s", opcode[i]);          /* opcode only */
+                break;
+            }                                           /* or fall through to MRF */
+
+        case I_V_MRF:                                   /* mem ref */
+            fprintf (of, "%s %-o", opcode[i], va);
+            if (tag)
+                fprintf (of, ",%-o", tag);
+            break;
+
+        case I_V_REG:                                   /* reg change */
+            fprint_reg (of, inst);                      /* decode */
+            break;
+
+        case I_V_CHC:                                   /* chan cmd */
+            ch = I_GETEOCH (inst);                      /* get chan */
+            fprintf (of, "%s %s", opcode[i], chname[ch]);
+            break;
+
+        case I_V_CHT:                                   /* chan test */
+            ch = I_GETSKCH (inst);                      /* get chan */
+            fprintf (of, "%s %s", opcode[i], chname[ch]);
+            break;
+            }                                           /* end case */
+
+        return SCPE_OK;
+        }                                               /* end if */
+    }                                                   /* end for */
+return SCPE_ARG;
 }
 
-/* Front Panel */
-static t_stat panel_sim_reset(DEVICE *dptr) {
-    panel_reset();
-    return SCPE_OK;
-}
+/* Get (optional) tag
 
-/* Memory clear */
-void mitra_mem_clear(void)
+   Inputs:
+        *cptr = pointer to input string
+        *tag  = pointer to tag
+   Outputs:
+        cptr  = updated pointer to input string
+*/
+
+CONST char *get_tag (CONST char *cptr, t_value *tag)
 {
-    for (uint32 i = 0; i < MAXMEMSIZE; i++) /* Unified macro name */
-        M[i] = 0;
+CONST char *tptr;
+char gbuf[CBUFSIZE];
+t_stat r;
+
+tptr = get_glyph (cptr, gbuf, 0);                       /* get next field */
+*tag = get_uint (gbuf, 8, 07, &r) << I_V_TAG;           /* parse */
+if (r == SCPE_OK)                                       /* ok? advance */
+    return tptr;
+*tag = 0;
+return cptr;                                            /* no change */
+}
+
+/* Symbolic input
+
+   Inputs:
+        *cptr   =       pointer to input string
+        addr    =       current PC
+        uptr    =       pointer to unit
+        *val    =       pointer to output values
+        sw      =       switches
+   Outputs:
+        status  =       error status
+*/
+
+t_stat parse_sym (CONST char *cptr, t_addr addr, UNIT *uptr, t_value *val, int32 sw)
+{
+int32 i, j, k, ch;
+t_value d, tag;
+t_stat r;
+char gbuf[CBUFSIZE], cbuf[2*CBUFSIZE];
+
+while (isspace (*cptr)) cptr++;
+memset (cbuf, '\0', sizeof(cbuf));
+strncpy (cbuf, cptr, sizeof(cbuf)-5);
+cptr = cbuf;
+if ((sw & SWMASK ('A')) || ((*cptr == '\'') && cptr++)) { /* ASCII char? */
+    if (cptr[0] == 0)                                   /* must have 1 char */
+        return SCPE_ARG;
+    for (i = j = 0, val[0] = 0; i < 3; i++) {
+        if (cptr[i] == 0)                               /* latch str end */
+            j = 1;
+        ch = cptr[i] & 0377;
+        if (ch <= 037 || ch >= 0200)
+            k = -1;
+        else
+            k = ch - 040;                               /* map ext. to int. ASCII */
+        if (j || (k < 0))                               /* bad, end? spc */
+            k = 0;
+        val[0] = (val[0] << 8) | k;
+        }
+    return SCPE_OK;
+    }
+if ((sw & SWMASK ('C')) || ((*cptr == '"') && cptr++)) { /* string of 6-bit chars? */
+    if (cptr[0] == 0)                                   /* must have 1 char */
+        return SCPE_ARG;
+    for (i = j = 0, val[0] = 0; i < 4; i++) {
+        if (cptr[i] == 0)                               /* latch str end */
+            j = 1;
+        k = cptr[i];                      /* cvt char */
+        if (j || (k < 0))                               /* bad, end? spc */
+            k = 0;
+        val[0] = (val[0] << 6) | k;
+        }
+    return SCPE_OK;
+    }
+
+cptr = get_glyph (cptr, gbuf, 0);                       /* get opcode */
+for (i = 0; (opcode[i] != NULL) && (strcmp (opcode[i], gbuf) != 0) ; i++) ;
+if (opcode[i] == NULL)
+    return SCPE_ARG;
+val[0] = opc_val[i] & DMASK;                            /* get value */
+j = (opc_val[i] >> I_V_FL) & I_M_FL;                    /* get class */
+
+switch (j) {                                            /* case on class */
+
+    case I_V_NPN:                                       /* no operand */
+        break;
+
+    case I_V_SHF:                                       /* shift */
+        cptr = get_glyph (cptr, gbuf, ',');             /* get next field */
+        d = get_uint (gbuf, 8, I_SHFMSK, &r);           /* shift count */
+        if (r != SCPE_OK)
+            return SCPE_ARG;
+        cptr = get_tag (cptr, &tag);                    /* get opt tag */
+        val[0] = val[0] | d | tag;
+        break;
+
+    case I_V_PPO:                                       /* pop */
+        cptr = get_glyph (cptr, gbuf, ',');             /* get next field */
+        d = get_uint (gbuf, 8, 077, &r);                /* opcode */
+        if (r != SCPE_OK)
+            return SCPE_ARG;
+        val[0] = val[0] | d;                            /* fall thru */
+
+    case I_V_IOI:                                       /* I/O */
+        cptr = get_glyph (cptr, gbuf, ',');             /* get next field */
+        d = get_uint (gbuf, 8, 077777, &r);             /* 15b address */
+        if (r != SCPE_OK)
+            return SCPE_ARG;
+        cptr = get_tag (cptr, &tag);                    /* get opt tag */
+        val[0] = val[0] | d | tag;
+        break;
+
+    case I_V_OPO:                                       /* operand optional */
+    case I_V_SPP:                                       /* syspop */
+    case I_V_MRF:                                       /* mem ref */
+        cptr = get_glyph (cptr, gbuf, ',');             /* get next field */
+        if (gbuf[0]=='\0' && j==I_V_OPO)                /* operand optional */
+            break;
+        d = get_uint (gbuf, 8, VA_MASK, &r);            /* virt address */
+        if (r != SCPE_OK)
+            return SCPE_ARG;
+        cptr = get_tag (cptr, &tag);                    /* get opt tag */
+        val[0] = val[0] | d | tag;
+        break;
+
+    case I_V_REG:                                       /* register */
+        for (cptr = get_glyph (cptr, gbuf, 0); gbuf[0] != 0;
+             cptr = get_glyph (cptr, gbuf, 0)) {
+            for (i = 0; (opcode[i] != NULL) &&
+                (strcmp (opcode[i], gbuf) != 0); i++) ;
+            if (opcode[i] != NULL) {
+                k = opc_val[i] & DMASK;;
+                if (I_GETOP (k) != RCH)
+                    return SCPE_ARG;
+                val[0] = val[0] | k;
+                }
+            else {
+                d = get_uint (gbuf, 8, 077777, &r);
+                if (r != SCPE_OK)
+                    return SCPE_ARG;
+                else val[0] = val[0] | d;
+                }
+            }
+        break;
+
+    case I_V_CHC: case I_V_CHT:                         /* channel */
+        cptr = get_glyph (cptr, gbuf, ',');             /* get next field */
+        for (i = 0; (chname[i] != NULL) && (strcmp (chname[i], gbuf) != 0);
+            i++);
+        if (chname[i] != NULL)                          /* named chan */
+            d = i;
+        else {
+            d = get_uint (gbuf, 8, NUM_CHAN - 1, &r);
+            if (r != SCPE_OK)                           /* numbered chan */
+                return SCPE_ARG;
+            }
+        val[0] = val[0] | ((j == I_V_CHC)? I_SETEOCH (d): I_SETSKCH (d));
+        break;
+        }                                               /* end case */
+
+if (*cptr != 0)                                         /* junk at end? */
+    return SCPE_ARG;
+return SCPE_OK;
 }

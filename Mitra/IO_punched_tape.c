@@ -118,14 +118,21 @@ All devices will follow the same integration pattern, they provide:
  *   bits 0-1: err (00=ok, 10=error, 11=stop)
  */
 
+#include "mitra_defs.h"
+#include "mitra_cpu.h"
 #include "mitra_io.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
 extern uint32 intrp_level;  /* interrupt request bits */
 
-extern uint16 read_word(uint16 addr);
+/* Memory Access Functions (defined in mitra_cpu.h) */
+extern t_value read_word(t_addr va);
+extern void write_word(t_addr va, t_value val);
+extern uint8 read_byte(t_addr va);
+extern void write_byte(t_addr va, uint8 val);
 
 /* ----- Reader state ----- */
 typedef struct {
@@ -157,7 +164,7 @@ static PTR_DEV ptr = {0};
 static PTP_DEV ptp = {0};
 
 /* ----- Reader functions ----- */
-t_stat ptr_attach(const char *filename)
+t_stat ptr_attach(UNIT *unit, const char *filename)
 {
     if (ptr.image) fclose(ptr.image);
     ptr.image = fopen(filename, "rb");
@@ -169,18 +176,18 @@ t_stat ptr_attach(const char *filename)
     return SCPE_OK;
 }
 
-void ptr_detach(void)
+t_stat ptr_detach(UNIT *unit)
 {
     if (ptr.image) fclose(ptr.image);
     ptr.image = NULL;
     ptr.active = 0;
+    return SCPE_OK;
 }
 
 static void ptr_interrupt(void)
 {
     uint32 int_req = (1 << 5);   /* typical interrupt level for reader */
     io_interrupt_dispatch(int_req, false);
-
 }
 
 int ptr_poll(void)
@@ -250,7 +257,7 @@ t_stat ptr_rd(uint16 e_reg, uint16 *result)
 }
 
 /* ----- Punch functions ----- */
-t_stat ptp_attach(const char *filename)
+t_stat ptp_attach(UNIT *unit, const char *filename)
 {
     if (ptp.image) fclose(ptp.image);
     ptp.image = fopen(filename, "wb");
@@ -260,18 +267,18 @@ t_stat ptp_attach(const char *filename)
     return SCPE_OK;
 }
 
-void ptp_detach(void)
+t_stat ptp_detach(UNIT *unit)
 {
     if (ptp.image) fclose(ptp.image);
     ptp.image = NULL;
     ptp.active = 0;
+    return SCPE_OK;
 }
 
 static void ptp_interrupt(void)
 {
     uint32 int_req = (1 << 6);   /* typical interrupt level for punch */
     io_interrupt_dispatch(int_req, false);
-
 }
 
 int ptp_poll(void)
@@ -346,3 +353,137 @@ void pt_poll_devices(void)
     ptr_poll();
     ptp_poll();
 }
+
+/* ========== SIMH STRUCTURES ========== */
+
+/* PTR service routine */
+t_stat ptr_svc(UNIT *uptr)
+{
+    return SCPE_OK;
+}
+
+/* PTR device reset routine */
+t_stat ptr_reset_dev(DEVICE *dptr)
+{
+    ptr_reset();
+    return SCPE_OK;
+}
+
+/* PTR device boot routine */
+t_stat ptr_boot(int32 unit_num, DEVICE *dptr)
+{
+    return SCPE_OK;
+}
+
+UNIT ptr_unit = {
+    UDATA (&ptr_svc, UNIT_SEQ+UNIT_ATTABLE+UNIT_ROABLE, 0),
+           SERIAL_IN_WAIT
+    };
+
+REG ptr_reg[] = {
+    { DRDATA("POS", ptr.pos, 18) },
+    { DRDATA("LASTCHAR", ptr.last_char, 8) },
+    { ORDATA("STATUS", ptr.status, 16) },
+    { FLDATA("ACTIVE", ptr.active, 0) },
+    { FLDATA("MODE", ptr.mode, 0) },
+    { NULL }
+    };
+
+/* PTR modifier table */
+MTAB ptr_mod[] = {
+    { MTAB_XTD|MTAB_VDV, 0, "CHANNEL", "CHANNEL",
+      &set_chan, &show_chan, NULL },
+    { 0 }
+    };
+
+DEVICE ptr_dev = {
+    "PTR",              /* name */
+    &ptr_unit,          /* units */
+    ptr_reg,            /* registers */
+    ptr_mod,            /* modifiers */
+    1,                  /* numunits */
+    10,                 /* aradix */
+    16,                 /* awidth */
+    1,                  /* aincr */
+    8,                  /* dradix */
+    8,                  /* dwidth */
+    NULL,               /* examine */
+    NULL,               /* deposit */
+    &ptr_reset_dev,     /* reset */
+    &ptr_boot,          /* boot */
+    &ptr_attach,        /* attach */
+    &ptr_detach,        /* detach */
+    NULL,               /* ctxt */
+    DEV_DISABLE,        /* flags */
+    0,                  /* dctrl */
+    NULL,               /* debflags */
+    NULL,               /* msize */
+    NULL,               /* lname */
+    NULL,               /* help */
+    NULL,               /* attach_help */
+    NULL,               /* help_ctxt */
+    NULL,               /* description */
+};
+
+/* ===== PTP Structures ===== */
+
+/* PTP service routine */
+t_stat ptp_svc(UNIT *uptr)
+{
+    return SCPE_OK;
+}
+
+/* PTP reset routine */
+t_stat ptp_reset_dev(DEVICE *dptr)
+{
+    ptp_reset();
+    return SCPE_OK;
+}
+
+/* PTP unit definition */
+UNIT ptp_unit = {
+    UDATA(&ptp_svc, UNIT_SEQ | UNIT_ATTABLE, 0)
+};
+
+REG ptp_reg[] = {
+    { DRDATA("POS", ptp.pos, 18) },
+    { ORDATA("STATUS", ptp.status, 16) },
+    { FLDATA("ACTIVE", ptp.active, 0) },
+    { FLDATA("ADVANCE", ptp.advance, 0) },
+    { NULL }
+    };
+
+MTAB ptp_mod[] = {
+    { MTAB_XTD|MTAB_VDV, 0, "CHANNEL", "CHANNEL",
+      &set_chan, &show_chan, NULL },
+    { 0 }
+    };
+
+DEVICE ptp_dev = {
+    "PTP",              /* name */
+    &ptp_unit,          /* units */
+    ptp_reg,            /* registers */
+    ptp_mod,            /* modifiers */
+    1,                  /* numunits */
+    10,                 /* aradix */
+    16,                 /* awidth */
+    1,                  /* aincr */
+    8,                  /* dradix */
+    8,                  /* dwidth */
+    NULL,               /* examine */
+    NULL,               /* deposit */
+    &ptp_reset_dev,     /* reset */
+    NULL,               /* boot */
+    &ptp_attach,        /* attach */
+    &ptp_detach,        /* detach */
+    NULL,               /* ctxt */
+    DEV_DISABLE,        /* flags */
+    0,                  /* dctrl */
+    NULL,               /* debflags */
+    NULL,               /* msize */
+    NULL,               /* lname */
+    NULL,               /* help */
+    NULL,               /* attach_help */
+    NULL,               /* help_ctxt */
+    NULL,               /* description */
+ };

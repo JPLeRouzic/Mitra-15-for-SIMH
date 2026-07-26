@@ -68,18 +68,16 @@ All devices will follow the same integration pattern, they provide:
  * WD (E=0): system reset (power failure)
  */
 
+#include "mitra_defs.h"
+#include "mitra_cpu.h"
 #include "mitra_io.h"
 #include <stdio.h>
 #include <stdbool.h>
 
 /* External CPU control flags (defined in mitra_cpu.c) */
-extern int cpu_running;      /* 1 = running, 0 = stopped */
-extern int interrupts_enabled;
-extern uint32 intrp_level;  /* interrupt request bits */
-extern int routing_enabled;
-
-uint16 panel_addr_lights;
-uint16 panel_data_lights;
+extern CPU_STATE cpu_state;
+void panel_reset(void);
+t_stat panel_reset_dev(DEVICE *dptr);
 
 /* RD (E=0x20) – read keys */
 t_stat panel_rd(uint16 e_reg, uint16 *result)
@@ -96,25 +94,25 @@ t_stat panel_wd(uint16 e_reg, uint16 a_val)
 {
     switch (e_reg) {
         case 0x20:   /* write address lights */
-            panel_addr_lights = a_val;
+            cpu_state.panel_addr_lights = a_val;
             return SCPE_OK;
         case 0x10:   /* write data lights */
-            panel_data_lights = a_val;
+            cpu_state.panel_data_lights = a_val;
             return SCPE_OK;
         case 1:
             switch (a_val) {
                 case 0x060:   /* turn off run light, mask interrupts, ignore routing */
-                    cpu_running = 0;          /* stop CPU */
-                    interrupts_enabled = 0;
-                    routing_enabled = 0;
+                    cpu_state.cpu_running = 0;          /* stop CPU */
+                    cpu_state.interrupts_enabled = 0;
+                    cpu_state.routing_enabled = 0;
                     break;
                 case 0x120:   /* stop CPU, show next instructions on data lights */
-                    cpu_running = 0;
+                    cpu_state.cpu_running = 0;
                     /* data lights would display the instruction at PC; handled elsewhere */
                     break;
                 case 0x220:   /* turn on run light, enable interrupts/routing (CPU remains stopped) */
-                    interrupts_enabled = 1;
-                    routing_enabled = 1;
+                    cpu_state.interrupts_enabled = 1;
+                    cpu_state.routing_enabled = 1;
                     /* run light on – but CPU still stopped until a RUN command */
                     break;
                 default:
@@ -124,11 +122,11 @@ t_stat panel_wd(uint16 e_reg, uint16 a_val)
             
         case 0:   /* system reset */
             /* Simulate power failure – reset entire system */
-            cpu_running = 0;
-            interrupts_enabled = 0;
-            routing_enabled = 0;
-            panel_addr_lights = 0;
-            panel_data_lights = 0;
+            cpu_state.cpu_running = 0;
+            cpu_state.interrupts_enabled = 0;
+            cpu_state.routing_enabled = 0;
+            cpu_state.panel_addr_lights = 0;
+            cpu_state.panel_data_lights = 0;
             /* Additional reset actions would be called from the main emulator */
             return SCPE_OK;
         default:
@@ -136,10 +134,78 @@ t_stat panel_wd(uint16 e_reg, uint16 a_val)
     }
 }
 
-/* Reset function for the panel device */
+/* ========== SIMH STRUCTURES ========== */
+
+/* Device reset routine */
+t_stat panel_reset_dev(DEVICE *dptr)
+{
+    panel_reset();
+    return SCPE_OK;
+}
+
+/* Unit definition */
+UNIT panel_unit[] = {
+    { UDATA(NULL, 0, 0) }
+};
+
+/* Register definitions */
+REG panel_reg[] = {
+    { ORDATA("ADDR", cpu_state.panel_addr_lights, 16) },
+    { ORDATA("DATA", cpu_state.panel_data_lights, 16) },
+    { FLDATA("RUN", cpu_state.cpu_running, 0) },
+    { FLDATA("INTEN", cpu_state.interrupts_enabled, 0) },
+    { FLDATA("ROUTING", cpu_state.routing_enabled, 0) },
+    { NULL }
+};
+
+MTAB panel_mod[] = {
+    { 0 }
+};
+
+/* Device definition */
+DEVICE panel_dev = {
+    "PANEL",            /* name */
+    panel_unit,         /* units */
+    panel_reg,          /* registers */
+    panel_mod,          /* modifiers */
+    1,                  /* numunits */
+    8,                  /* aradix */
+    16,                 /* awidth */
+    1,                  /* aincr */
+    8,                  /* dradix */
+    16,                 /* dwidth */
+    NULL,               /* examine */
+    NULL,               /* deposit */
+    &panel_reset_dev,   /* reset */
+    NULL,               /* boot */
+    NULL,               /* attach */
+    NULL,               /* detach */
+    NULL,               /* ctxt */
+    0,                  /* flags */
+    0,                  /* dctrl */
+    NULL,               /* debflags */
+    NULL,               /* msize */
+    NULL,               /* lname */
+    NULL,               /* help */
+    NULL,               /* attach_help */
+    NULL,               /* help_ctxt */
+    NULL,               /* description */
+    0,                  /* brk_types */
+    NULL               /* type_ctx */
+//    NULL                /* unit_test */
+};
+
+/* Reset function */
 void panel_reset(void)
 {
-    panel_addr_lights = 0;
-    panel_data_lights = 0;
-    /* Do not change CPU state here – that's handled by WD E=0 */
+    cpu_state.panel_addr_lights = 0;
+    cpu_state.panel_data_lights = 0;
+    /* FIXME Can we change CPU state here, are they instead handled by WD E=0 ? */
+    cpu_state.cpu_running = 0;
+    cpu_state.interrupts_enabled = 0;
+    cpu_state.routing_enabled = 0;
+    cpu_state.panel_addr_lights = 0;
+    cpu_state.panel_data_lights = 0;
 }
+
+

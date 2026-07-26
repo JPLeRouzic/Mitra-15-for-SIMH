@@ -86,7 +86,10 @@ All devices will follow the same integration pattern, they provide:
  * R11 bits 7-15 get the last character.
  */
 
+#include "mitra_defs.h"
+#include "mitra_cpu.h"
 #include "mitra_io.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -108,11 +111,11 @@ All devices will follow the same integration pattern, they provide:
 
 extern uint32 intrp_level;  /* interrupt request bits */
 
-/* Memory Access Functions (defined in mitra_cpu.c) */
-extern uint16 read_word(uint16 addr);
-extern void write_word(uint16 addr, uint16 val);
-extern uint8 read_byte(uint16 va);
-extern void write_byte(uint16 va, uint8 val);
+/* Memory Access Functions (defined in mitra_cpu.h) */
+extern t_value read_word(t_addr va);
+extern void write_word(t_addr va, t_value val);
+extern uint8 read_byte(t_addr va);
+extern void write_byte(t_addr va, uint8 val);
 
 typedef struct {
     int    active;
@@ -126,14 +129,14 @@ typedef struct {
     uint16 status;          /* last RD status */
 } ASR33_DEV;
 
-static ASR33_DEV asr_dev = {0};
+static ASR33_DEV asr_state = {0};
 
 /*
  * The ASR33 is the system console; it has no image file to attach.
  * asr33_attach / asr33_detach are kept as no-ops so mitra_sys.c can
  * reference them without errors.
  */
-t_stat asr33_attach(const char *filename)
+t_stat asr33_attach(UNIT *unit, const char *filename)
 {
     (void)filename;   /* console — nothing to attach */
     return SCPE_OK;
@@ -141,7 +144,7 @@ t_stat asr33_attach(const char *filename)
 
 void asr33_detach(void)
 {
-    asr_dev.active = 0;
+    asr_state.active = 0;
 }
 
 static void asr_interrupt(void)
@@ -151,77 +154,70 @@ static void asr_interrupt(void)
 
 }
 
-/* Write a character to the console (EBCDIC → ASCII conversion handled in mitra_io.c) */
+/* Write a character to the console */
 static void asr_putc(uint8 ch)
 {
-    /* sim_tt_putc expects ASCII; we assume caller has already converted */
-//    sim_tt_putc(ch);
-    sim_tt_outcvt(ch, TTUF_MODE_8B);
+    sim_putchar(ch);
 }
 
 /* Read a character from console (non‑blocking) – returns -1 if none */
 static int asr_getc(void)
 {
-//    return sim_tt_inchar();
-int32 c;
-
-c = sim_poll_kbd();
-
-if (c < SCPE_KFLAG)
-    return -1;
-
-return c & 0xFF;
+    int32 c = sim_poll_kbd();
+    if (c < SCPE_KFLAG)
+        return -1;
+    return c & 0xFF;
 }
 
 /* Poll routine – called from main I/O loop */
 int asr_poll(void)
 {
-    if (!asr_dev.active) return 0;
+    if (!asr_state.active) return 0;
 
-    if (asr_dev.mode == 3) {   /* output (write) */
-        if (asr_dev.bytes_left > 0) {
+    if (asr_state.mode == 3) {   /* output (write) */
+        if (asr_state.bytes_left > 0) {
             uint8 ch;
-            if (read_byte_io(asr_dev.mem_addr, &ch, 0) != SCPE_OK) {
-                asr_dev.active = 0;
-                asr_dev.status = 0x07;   /* error */
+            if (read_byte_io(asr_state.mem_addr, &ch, 0) != SCPE_OK) {
+                asr_state.active = 0;
+                asr_state.status = 0x07;   /* error */
                 asr_interrupt();
                 return 1;
             }
             asr_putc(ch);
-            asr_dev.mem_addr++;
-            asr_dev.bytes_left--;
-            asr_dev.last_char = ch;
+            asr_state.mem_addr++;
+            asr_state.bytes_left--;
+            asr_state.last_char = ch;
         }
-        if (asr_dev.bytes_left == 0) {
-            asr_dev.active = 0;
-            asr_dev.status = 0x02;   /* écriture finished */
+        if (asr_state.bytes_left == 0) {
+            asr_state.active = 0;
+            asr_state.status = 0x02;   /* écriture finished */
             asr_interrupt();
         }
         return 1;
     }
 
-    if (asr_dev.mode == 1 || asr_dev.mode == 2) {   /* input from keyboard or paper tape */
+    if (asr_state.mode == 1 || asr_state.mode == 2) {   /* input from keyboard or paper tape */
         int ch = asr_getc();
         if (ch == -1) return 0;   /* no character yet */
 
         uint8 ascii = (uint8)ch;
-        asr_dev.last_char = ascii;
-        write_byte_io(asr_dev.mem_addr, ascii, 0);
-        asr_dev.mem_addr++;
-        asr_dev.bytes_left--;
+        asr_state.last_char = ascii;
+        write_byte_io(asr_state.mem_addr, ascii, 0);
+        asr_state.mem_addr++;
+        asr_state.bytes_left--;
 
-        if (asr_dev.bytes_left == 0 || (asr_dev.stop_on_compare && ascii == asr_dev.compare_char)) {
+        if (asr_state.bytes_left == 0 || (asr_state.stop_on_compare && ascii == asr_state.compare_char)) {
             /* Transfer finished or compare character reached */
-            if (asr_dev.stop_on_compare && ascii == asr_dev.compare_char) {
+            if (asr_state.stop_on_compare && ascii == asr_state.compare_char) {
                 /* Update R9 with number of bytes not read */
-                write_word(ASR33_R9, (asr_dev.bytes_left & 0x7FFF) | (1 << 15)); /* z=1 */
+                write_word(ASR33_R9, (asr_state.bytes_left & 0x7FFF) | (1 << 15)); /* z=1 */
                 /* Update R11 high byte with last character */
                 uint16 r11 = read_word(ASR33_R11);
                 r11 = (r11 & 0x00FF) | (ascii << 8);
                 write_word(ASR33_R11, r11);
             }
-            asr_dev.active = 0;
-            asr_dev.status = 0x03;   /* lecture finished */
+            asr_state.active = 0;
+            asr_state.status = 0x03;   /* lecture finished */
             asr_interrupt();
         }
         return 1;
@@ -249,8 +245,8 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
     /* Read R9 (z and count) and R11 compare char */
     uint16 r9  = read_word(ASR33_R9);
     uint16 r11 = read_word(ASR33_R11);
-    asr_dev.stop_on_compare = (r9 >> 15) & 1;
-    asr_dev.compare_char = (r11 >> 8) & 0xFF;
+    asr_state.stop_on_compare = (r9 >> 15) & 1;
+    asr_state.compare_char = (r11 >> 8) & 0xFF;
 
     /* FIXME
         - case ASR_CMD_REPOS:
@@ -262,30 +258,30 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
     switch (cmd) {
         case ASR_CMD_REPOS: /* Repos */
         case ASR_CMD_STOP:
-            asr_dev.active = 0;
-            asr_dev.status = 0x00;
+            asr_state.active = 0;
+            asr_state.status = 0x00;
             break;
         case ASR_CMD_ECR_CLAV: /* Écriture clavier */
-            asr_dev.mode = 3;   /* write */
-            asr_dev.active = 1;
-            asr_dev.mem_addr = mem_addr;
-            asr_dev.bytes_left = byte_count;
-            asr_dev.status = 0x02;   /* écriture */
+            asr_state.mode = 3;   /* write */
+            asr_state.active = 1;
+            asr_state.mem_addr = mem_addr;
+            asr_state.bytes_left = byte_count;
+            asr_state.status = 0x02;   /* écriture */
             break;
         case ASR_CMD_LEC_CLAV: /* Lecture clavier */
         case ASR_CMD_LEC_RUBAN: /* Lecture ruban */
-            asr_dev.mode = (cmd == ASR_CMD_LEC_CLAV) ? 1 : 2;
-            asr_dev.active = 1;
-            asr_dev.mem_addr = mem_addr;
-            asr_dev.bytes_left = byte_count;
-            asr_dev.status = 0x03;   /* lecture */
+            asr_state.mode = (cmd == ASR_CMD_LEC_CLAV) ? 1 : 2;
+            asr_state.active = 1;
+            asr_state.mem_addr = mem_addr;
+            asr_state.bytes_left = byte_count;
+            asr_state.status = 0x03;   /* lecture */
             break;
         case ASR_CMD_SUPPR:
         case ASR_CMD_LEC_SANS_IMP:
         case ASR_CMD_PERF_SANS_IMP:
             /* Not fully simulated – just accept */
-            asr_dev.active = 0;
-            asr_dev.status = 0x00;
+            asr_state.active = 0;
+            asr_state.status = 0x00;
             break;
         default:
             return SCPE_IOERR;
@@ -297,20 +293,80 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
 t_stat asr33_rd(uint16 e_reg, uint16 *result)
 {
     if (e_reg != 0x10) return SCPE_IOERR;
-    *result = (asr_dev.status & 0x07) | (asr_dev.last_char << 7);  /* bits 7-15 = last char */
-    asr_dev.status = 0;   /* clear on read */
+    *result = (asr_state.status & 0x07) | (asr_state.last_char << 7);  /* bits 7-15 = last char */
+    asr_state.status = 0;   /* clear on read */
     return SCPE_OK;
 }
 
 /* Reset device */
 void asr33_reset(void)
 {
-    asr_dev.active = 0;
-    asr_dev.status = 0;
-    asr_dev.last_char = 0;
+    asr_state.active = 0;
+    asr_state.status = 0;
+    asr_state.last_char = 0;
 }
 
-/* FIXME
-- Missing proper handling of z bit (stop on compare character)
-- Missing EBCDIC/ASCII conversion
-*/
+/* ========== SIMH STRUCTURES ========== */
+
+/* Unit service routine */
+t_stat asr_svc(UNIT *uptr)
+{
+    return SCPE_OK; // FIXME
+}
+
+/* Device reset routine - must match t_stat (*)(DEVICE *) */
+t_stat asr_reset(DEVICE *dptr)
+{
+    asr33_reset();
+    return SCPE_OK;
+}
+
+/* Unit definition */
+UNIT asr_unit = { 
+    UDATA(&asr_svc, 0, 0) 
+};
+
+/* Register definitions - using asr_state variables */
+REG asr_reg[] = {
+    { ORDATA("MODE", asr_state.mode, 3) },
+    { ORDATA("STATUS", asr_state.status, 16) },
+    { ORDATA("LASTCHAR", asr_state.last_char, 8) },
+    { FLDATA("ACTIVE", asr_state.active, 0) },
+    { FLDATA("STOPCMP", asr_state.stop_on_compare, 0) },
+    { NULL }
+};
+
+/* Modifier table - FIXME */
+MTAB asr_mod[] = {
+	
+};
+
+/* Device definition */
+DEVICE asr_dev = {
+    "TTI",              /* name */
+    &asr_unit,          /* units */
+    asr_reg,            /* registers */
+    asr_mod,            /* modifiers */
+    1,                  /* numunits */
+    10,                 /* aradix */
+    16,                 /* awidth */
+    1,                  /* aincr */
+    8,                  /* dradix */
+    8,                  /* dwidth */
+    NULL,               /* examine */
+    NULL,               /* deposit */
+    &asr_reset,         /* reset */
+    NULL,               /* boot */
+    NULL,               /* attach */
+    NULL,               /* detach */
+    NULL,               /* ctxt */
+    0,                  /* flags */
+    0,                  /* dctrl */
+    NULL,               /* debflags */
+    NULL,               /* msize */
+    NULL,               /* lname */
+    NULL,               /* help */
+    NULL,               /* attach_help */
+    NULL,               /* help_ctxt */
+    NULL,               /* description */
+};

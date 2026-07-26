@@ -92,18 +92,21 @@ All devices will follow the same integration pattern, they provide:
  *   bit0 – printer_dev ready
  */
 
+#include "mitra_defs.h"
+#include "mitra_cpu.h"
 #include "mitra_io.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 
 extern uint32 intrp_level;  /* interrupt request bits */
 
-/* Memory Access Functions (defined in mitra_cpu.c) */
-extern uint16 read_word(uint16 addr);
-extern void write_word(uint16 addr, uint16 val);
-extern uint8 read_byte(uint16 va);
-extern void write_byte(uint16 va, uint8 val);
+/* Memory Access Functions (defined in mitra_cpu.h) */
+extern t_value read_word(t_addr va);
+extern void write_word(t_addr va, t_value val);
+extern uint8 read_byte(t_addr va);
+extern void write_byte(t_addr va, uint8 val);
 
 typedef struct {
     FILE *output;          /* file or terminal for printer_dev output */
@@ -255,6 +258,7 @@ t_stat printer_wd(uint16 e_reg, uint16 a_val)
     }
     return SCPE_OK;
 }
+
 /* RD handler (E=3) */
 t_stat printer_rd(uint16 e_reg, uint16 *result)
 {
@@ -265,7 +269,7 @@ t_stat printer_rd(uint16 e_reg, uint16 *result)
 }
 
 /* Attach printer_dev output to a file (or NULL for console) */
-t_stat printer_attach(const char *filename)
+t_stat printer_attach(UNIT *unit, const char *filename)
 {
     if (printer_dev.output) 
     	fclose(printer_dev.output);
@@ -291,3 +295,80 @@ void printer_reset(void)
     printer_dev.status = 0;
     /* do not close file */
 }
+
+/* ========== SIMH STRUCTURES ========== */
+
+/* Unit service routine - called when a timer expires */
+t_stat lpt_svc(UNIT *uptr)
+{
+    /* This would handle timed operations like paper movement */
+    return SCPE_OK;
+}
+
+/* Device reset routine - must match t_stat (*)(DEVICE *) */
+t_stat lpt_reset(DEVICE *dptr)
+{
+    printer_reset();
+    return SCPE_OK;
+}
+
+/* Device attach routine - must match t_stat (*)(UNIT *, const char *) */
+t_stat lpt_attach(UNIT *uptr, const char *cptr)
+{
+    return printer_attach(uptr, cptr);
+}
+
+/* Device detach routine - must match t_stat (*)(UNIT *) */
+t_stat lpt_detach(UNIT *uptr)
+{
+    printer_detach();
+    return SCPE_OK;
+}
+
+/* Unit definition - using UDATA macro correctly */
+UNIT lpt_unit = {
+    UDATA(&lpt_svc, UNIT_SEQ | UNIT_ATTABLE, 0)
+};
+
+REG lpt_reg[] = {
+    { ORDATA("STAT", printer_dev.status, 16) },
+    { ORDATA("ADDR", printer_dev.mem_addr, 16) },
+    { ORDATA("COUNT", printer_dev.bytes_left, 16) },
+    { ORDATA("JUMP", printer_dev.jump_code, 8) },
+    { FLDATA("ACTIVE", printer_dev.active, 0) },
+    { FLDATA("FMTMODE", printer_dev.format_mode, 0) },
+    { NULL }
+    };
+
+MTAB lpt_mod[] = {
+    { 0 }
+    };
+
+DEVICE lp_dev = {
+    "LPT",              /* name */
+    &lpt_unit,          /* units */
+    lpt_reg,            /* registers */
+    lpt_mod,            /* modifiers */
+    1,                  /* numunits */
+    10,                 /* aradix */
+    16,                 /* awidth */
+    1,                  /* aincr */
+    8,                  /* dradix */
+    8,                  /* dwidth */
+    NULL,               /* examine */
+    NULL,               /* deposit */
+    &lpt_reset,         /* reset */
+    NULL,               /* boot */
+    &lpt_attach,        /* attach */
+    &lpt_detach,        /* detach */
+    NULL,               /* ctxt */
+    DEV_DISABLE,        /* flags */
+    0,                  /* dctrl */
+    NULL,               /* debflags */
+    NULL,               /* msize */
+    NULL,               /* lname */
+    NULL,               /* help */
+    NULL,               /* attach_help */
+    NULL,               /* help_ctxt */
+    NULL                /* description */
+};
