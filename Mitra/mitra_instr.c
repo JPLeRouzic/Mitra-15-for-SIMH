@@ -71,8 +71,8 @@ The Mitra-15 is fundamentally a 16-bit word-addressable machine. Data size is ch
 
 /* For LOAD instructions: C=1 if result=0, O=1 if result negative */
 static void set_condition_codes_load(uint16 result) {
-    cpu_state.reg_block[cpu_state.curr_bloc].C = (result == 0) ? 1 : 0;
-    cpu_state.reg_block[cpu_state.curr_bloc].OV = (result & 0x8000) ? 1 : 0;
+    cpu_state.C = (result == 0) ? 1 : 0;
+    cpu_state.OV = (result & 0x8000) ? 1 : 0;
 }
 
 /* For COMPARE instructions: 
@@ -83,14 +83,14 @@ static void set_condition_codes_load(uint16 result) {
 static void set_condition_codes_compare(uint16 a, uint16 b, uint16 result) {
     (void) result;
     if (a == b) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 0;
+        cpu_state.C = 1;
+        cpu_state.OV = 0;
     } else if (a < b) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 0;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 1;
+        cpu_state.C = 0;
+        cpu_state.OV = 1;
     } else {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 0;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 0;
+        cpu_state.C = 0;
+        cpu_state.OV = 0;
     }
 }
 
@@ -99,21 +99,21 @@ static void set_condition_codes_compare(uint16 a, uint16 b, uint16 result) {
  * O = overflow (operands same sign, result opposite sign)
  */
 static void set_condition_codes_arithmetic(uint16 result, uint16 carry, uint16 overflow) {
-    cpu_state.reg_block[cpu_state.curr_bloc].C = carry;
-    cpu_state.reg_block[cpu_state.curr_bloc].OV = overflow;
+    cpu_state.C = carry;
+    cpu_state.OV = overflow;
 }
 
 /* For string operations and tests */
 static void set_condition_codes_string(int equal, int less) {
     if (equal) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 0;
+        cpu_state.C = 1;
+        cpu_state.OV = 0;
     } else if (less) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 0;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 1;
+        cpu_state.C = 0;
+        cpu_state.OV = 1;
     } else {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 0;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 0;
+        cpu_state.C = 0;
+        cpu_state.OV = 0;
     }
 }
 
@@ -166,7 +166,7 @@ static uint16 shift_lls(uint16 val, int count) {
     uint16 result = val;
     int i;
     for (i = 0; i < count; i++) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = (result & 0x8000) ? 1 : 0;
+        cpu_state.C = (result & 0x8000) ? 1 : 0;
         result <<= 1;
     }
     return result;
@@ -177,7 +177,7 @@ static uint16 shift_rls(uint16 val, int count) {
     uint16 result = val;
     int i;
     for (i = 0; i < count; i++) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = result & 1;
+        cpu_state.C = result & 1;
         result >>= 1;
     }
     return result;
@@ -188,7 +188,7 @@ static uint16 shift_sas(uint16 val, int count) {
     uint16 result = val;
     int i;
     for (i = 0; i < count; i++) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = result & 1;
+        cpu_state.C = result & 1;
         uint16 sign = result & 0x8000;
         result >>= 1;
         if (sign) result |= 0x8000;
@@ -201,7 +201,7 @@ static uint16 shift_srcs(uint16 val, int count) {
     uint16 result = val;
     int i;
     for (i = 0; i < count; i++) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = result & 1;
+        cpu_state.C = result & 1;
         result = (result >> 1) | ((result & 1) << 15);
     }
     return result;
@@ -212,7 +212,7 @@ static uint16 shift_slcs(uint16 val, int count) {
     uint16 result = val;
     int i;
     for (i = 0; i < count; i++) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = (result & 0x8000) ? 1 : 0;
+        cpu_state.C = (result & 0x8000) ? 1 : 0;
         result = (result << 1) | ((result & 0x8000) ? 1 : 0);
     }
     return result;
@@ -222,7 +222,7 @@ static uint16 shift_slcs(uint16 val, int count) {
 static void shift_lld(uint16 * E, uint16 * A, int count) {
     int i;
     for (i = 0; i < count; i++) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = ( * E & 0x8000) ? 1 : 0;
+        cpu_state.C = ( * E & 0x8000) ? 1 : 0;
         * E = ( * E << 1) | (( * A & 0x8000) ? 1 : 0);
         * A <<= 1;
     }
@@ -232,7 +232,7 @@ static void shift_lld(uint16 * E, uint16 * A, int count) {
 static void shift_rld(uint16 * E, uint16 * A, int count) {
     int i;
     for (i = 0; i < count; i++) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = * A & 1;
+        cpu_state.C = * A & 1;
         * A = ( * A >> 1) | (( * E & 1) << 15);
         * E >>= 1;
     }
@@ -242,7 +242,7 @@ static void shift_rld(uint16 * E, uint16 * A, int count) {
 static void shift_sad(uint16 * E, uint16 * A, int count) {
     int i;
     for (i = 0; i < count; i++) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = * A & 1;
+        cpu_state.C = * A & 1;
         uint16 sign = * E & 0x8000;
         * A = ( * A >> 1) | (( * E & 1) << 15);
         * E = ( * E >> 1);
@@ -255,7 +255,7 @@ static void shift_lcd(uint16 * E, uint16 * A, int count) {
     int i;
     for (i = 0; i < count; i++) {
         uint16 msb = ( * E & 0x8000) ? 1 : 0;
-        cpu_state.reg_block[cpu_state.curr_bloc].C = msb;
+        cpu_state.C = msb;
         * E = ( * E << 1) | (( * A & 0x8000) ? 1 : 0);
         * A = ( * A << 1) | msb;
     }
@@ -266,7 +266,7 @@ static void shift_rcd(uint16 * E, uint16 * A, int count) {
     int i;
     for (i = 0; i < count; i++) {
         uint16 lsb = * A & 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].C = lsb;
+        cpu_state.C = lsb;
         * A = ( * A >> 1) | (( * E & 1) << 15);
         * E = ( * E >> 1) | (lsb << 15);
     }
@@ -287,14 +287,14 @@ static int normalize(uint16 * E, uint16 * A, uint16 * X, int max_steps) {
     * X -= steps;
 
     if (steps == 0) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 0;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 1;
+        cpu_state.C = 0;
+        cpu_state.OV = 1;
     } else if (steps == max_steps) {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 0;
+        cpu_state.C = 1;
+        cpu_state.OV = 0;
     } else {
-        cpu_state.reg_block[cpu_state.curr_bloc].C = 0;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = 0;
+        cpu_state.C = 0;
+        cpu_state.OV = 0;
     }
     return steps;
 }
@@ -309,8 +309,8 @@ static uint16 compute_parity(uint16 * A, int count) {
         result = (result << 1) | ((result & 0x8000) ? 1 : 0);
     }
     * A = result;
-    cpu_state.reg_block[cpu_state.curr_bloc].C = (result & 0x8000) ? 1 : 0;
-    cpu_state.reg_block[cpu_state.curr_bloc].OV = 0;
+    cpu_state.C = (result & 0x8000) ? 1 : 0;
+    cpu_state.OV = 0;
     return parity_count;
 }
 
@@ -411,9 +411,9 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
     MLOG_INST("[INST] P=%05o inst=%06o (opcode=%02o disp=%03o hexcode=%04X) mode=%s blk=%d\n",
               pc, inst, opcode, disp, inst & 0xF000, mode ? "MASTER" : "SLAVE", cpu_state.curr_bloc);
     MLOG_INST("  regs-before: A=%06o E=%06o X=%06o C=%d O=%d L=%05o G=%05o\n",
-              cpu_state.reg_block[cpu_state.curr_bloc].A, cpu_state.reg_block[cpu_state.curr_bloc].E, cpu_state.reg_block[cpu_state.curr_bloc].X,
-              cpu_state.reg_block[cpu_state.curr_bloc].C, cpu_state.reg_block[cpu_state.curr_bloc].OV,
-              cpu_state.reg_block[cpu_state.curr_bloc].L, cpu_state.reg_block[cpu_state.curr_bloc].G);
+              cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
+              cpu_state.C, cpu_state.OV,
+              cpu_state.reg_L, cpu_state.reg_G);
     
     /* Check for privileged instruction in slave mode
      * Privileged opcodes are: 0x3A (STR), 0x3B (LDP), 0x3D (TES), 
@@ -511,9 +511,9 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
     }
     
     MLOG_INST("  regs-after : P=%05o A=%06o E=%06o X=%06o C=%d O=%d L=%05o G=%05o\n",
-              cpu_state.reg_block[cpu_state.curr_bloc].P, cpu_state.reg_block[cpu_state.curr_bloc].A, cpu_state.reg_block[cpu_state.curr_bloc].E,
-              cpu_state.reg_block[cpu_state.curr_bloc].X, cpu_state.reg_block[cpu_state.curr_bloc].C, cpu_state.reg_block[cpu_state.curr_bloc].OV,
-              cpu_state.reg_block[cpu_state.curr_bloc].L, cpu_state.reg_block[cpu_state.curr_bloc].G);
+              cpu_state.reg_P, cpu_state.reg_A, cpu_state.reg_E,
+              cpu_state.reg_X, cpu_state.C, cpu_state.OV,
+              cpu_state.reg_L, cpu_state.reg_G);
 
     /* Check for traps after instruction execution */
     if (cpu_state.trap_pending) {
@@ -541,7 +541,7 @@ uint16 group_1_DL(uint16 inst) {
     uint16 disp = inst & I_DISP_MASK; /* 8-bit unsigned displacement / param */
     uint16 tmp;
     uint16 target_address;
-    target_address = (cpu_state.reg_block[cpu_state.curr_bloc].L + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_L + disp) & 0x7FFF;
     group_1(target_address, inst);
     return 0;
 }
@@ -551,7 +551,7 @@ uint16 group_2_DL(uint16 inst, uint32 mode) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    target_address = (cpu_state.reg_block[cpu_state.curr_bloc].L + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_L + disp) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
@@ -576,7 +576,7 @@ uint16 group_1_P(uint16 inst) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    target_address = (cpu_state.reg_block[cpu_state.curr_bloc].P - 2) & 0x0FF;
+    target_address = (cpu_state.reg_P - 2) & 0x0FF;
     group_1(target_address, inst);
     return 0;
 }
@@ -601,7 +601,7 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
     uint16 data;
     uint16 target_address;
     uint16 count;
-    target_address = (cpu_state.reg_block[cpu_state.curr_bloc].L + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_L + disp) & 0x7FFF;
 
     switch (opcode) {
         case 0x30: {
@@ -614,113 +614,110 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
             count = shr_word & 0x1F;
             switch (type) {
                 case SHIFT_SLLS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_lls(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_lls(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRCS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_srcs(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_srcs(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SAD:
-                    shift_sad( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_sad( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
                 case SHIFT_SLCD:
-                    shift_lcd( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_lcd( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
                 case SHIFT_SLCS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_slcs(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_slcs(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SAS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_sas(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_sas(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRLS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_rls(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_rls(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRCD:
-                    shift_rcd( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_rcd( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
             }
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
         }
         break;
         case 0x31: {
             srg_op_t srg_op = disp & 0x1E;
             switch (srg_op) {
                 case SRG_RTS: {
-                    uint16 saved_P = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L) + GPRIME;
-                    uint16 saved_L = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L + 2) + GPRIME;
-                    cpu_state.reg_block[cpu_state.curr_bloc].P = saved_P;
-                    cpu_state.reg_block[cpu_state.curr_bloc].L = saved_L;
+                    uint16 saved_P = read_word(cpu_state.reg_L) + GPRIME;
+                    uint16 saved_L = read_word(cpu_state.reg_L + 2) + GPRIME;
+                    cpu_state.reg_P = saved_P;
+                    cpu_state.reg_L = saved_L;
                     break;
                 }
                 case SRG_XAE:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].A;
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = data;
+                    data = cpu_state.reg_A;
+                    cpu_state.reg_A = cpu_state.reg_E;
+                    cpu_state.reg_E = data;
                     break;
                 case SRG_XAX:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].A;
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].X;
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = data;
+                    data = cpu_state.reg_A;
+                    cpu_state.reg_A = cpu_state.reg_X;
+                    cpu_state.reg_X = data;
                     break;
                 case SRG_XEX:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = cpu_state.reg_block[cpu_state.curr_bloc].X;
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = data;
+                    data = cpu_state.reg_E;
+                    cpu_state.reg_E = cpu_state.reg_X;
+                    cpu_state.reg_X = data;
                     break;
                 case SRG_XAA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = ((cpu_state.reg_block[cpu_state.curr_bloc].A & 0xFF) << 8) | ((
-                        cpu_state.reg_block[cpu_state.curr_bloc].A >> 8) & 0xFF);
+                    cpu_state.reg_A = ((cpu_state.reg_A & 0xFF) << 8) | ((
+                        cpu_state.reg_A >> 8) & 0xFF);
                     break;
                 case SRG_CCE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = ~cpu_state.reg_block[cpu_state.curr_bloc].E & 0xFFFF;
+                    cpu_state.reg_E = ~cpu_state.reg_E & 0xFFFF;
                     break;
                 case SRG_RSV:
                     if (mode != 1) return MM_PRVINS;
                     {
-                        uint16 saved_flags = read_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 4);
-                        cpu_state.reg_block[cpu_state.curr_bloc].C = (saved_flags >> 14) & 1;
-                        cpu_state.reg_block[cpu_state.curr_bloc].OV = (saved_flags >> 13) & 1;
+                        uint16 saved_flags = read_word(cpu_state.reg_G + 4);
+                        cpu_state.C = (saved_flags >> 14) & 1;
+                        cpu_state.OV = (saved_flags >> 13) & 1;
                         cpu_state.MS = 0;
                         cpu_state.MA = (saved_flags >> 12) & 1;
                         cpu_state.PR = (saved_flags >> 11) & 1;
                     }
-                    cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].G + read_word(cpu_state.reg_block[
-                        cpu_state.curr_bloc].G + 2)) & 0x7FFF;
-                    cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].G + 2 + read_word(cpu_state.reg_block[
-                        cpu_state.curr_bloc].G)) & 0x7FFF;
+                    cpu_state.reg_L = (cpu_state.reg_G + read_word(cpu_state.reg_G + 2)) & 0x7FFF;
+                    cpu_state.reg_P = (cpu_state.reg_G + 2 + read_word(cpu_state.reg_G)) & 0x7FFF;
                     break;
                 case SRG_ACE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = (cpu_state.reg_block[cpu_state.curr_bloc].E + cpu_state.reg_block[cpu_state.curr_bloc].C) &
+                    cpu_state.reg_E = (cpu_state.reg_E + cpu_state.C) &
                         0xFFFF;
                     break;
                 case SRG_CCA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = ~cpu_state.reg_block[cpu_state.curr_bloc].A & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A = ~cpu_state.reg_A & 0xFFFF;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AEE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A ^= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A ^= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CNX:
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = (~cpu_state.reg_block[cpu_state.curr_bloc].X + 1) & 0xFFFF;
+                    cpu_state.reg_X = (~cpu_state.reg_X + 1) & 0xFFFF;
                     break;
                 case SRG_AIE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A |= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A |= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AAE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A &= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A &= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_LNE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = 0xFFFF;
+                    cpu_state.reg_E = 0xFFFF;
                     break;
                 case SRG_CNA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = (~cpu_state.reg_block[cpu_state.curr_bloc].A + 1) & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A = (~cpu_state.reg_A + 1) & 0xFFFF;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CHX:
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X >> 1) | (cpu_state.reg_block[
-                        cpu_state.curr_bloc].X & 0x8000);
+                    cpu_state.reg_X = (cpu_state.reg_X >> 1) | (cpu_state.reg_X & 0x8000);
                     break;
                 default:
                     break;
@@ -728,77 +725,76 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
         }
         break;
         case 0x32:
-            cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X + read_word(target_address)) &
+            cpu_state.reg_X = (cpu_state.reg_X + read_word(target_address)) &
                 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].X);
+            set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0x33:
-            cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X - read_word(target_address)) &
+            cpu_state.reg_X = (cpu_state.reg_X - read_word(target_address)) &
                 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].X);
+            set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0x34:
             break;
         case 0x35:
-            cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].L + read_word(target_address)) &
+            cpu_state.reg_L = (cpu_state.reg_L + read_word(target_address)) &
                 0x7FFF;
             break;
         case 0x36:
-            cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].L - read_word(target_address)) &
+            cpu_state.reg_L = (cpu_state.reg_L - read_word(target_address)) &
                 0x7FFF;
             break;
         case 0x37: {
             uint16 section = target_address;
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G, cpu_state.reg_block[cpu_state.curr_bloc].P - GPRIME);
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 2, cpu_state.reg_block[cpu_state.curr_bloc].L - GPRIME);
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 4, (cpu_state.reg_block[cpu_state.curr_bloc].C ? 1 : 0) | (
-                cpu_state.reg_block[cpu_state.curr_bloc].OV ? 2 : 0) | (cpu_state.MS ? 4 : 0));
+            write_word(cpu_state.reg_G, cpu_state.reg_P - GPRIME);
+            write_word(cpu_state.reg_G + 2, cpu_state.reg_L - GPRIME);
+            write_word(cpu_state.reg_G + 4, (cpu_state.C ? 1 : 0) | (
+                cpu_state.OV ? 2 : 0) | (cpu_state.MS ? 4 : 0));
             uint16 PRTS_addr = read_word(12);
-            cpu_state.reg_block[cpu_state.curr_bloc].L = ((PRTS_addr - (4 * section)) + cpu_state.reg_block[cpu_state.curr_bloc].G) &
+            cpu_state.reg_L = ((PRTS_addr - (4 * section)) + cpu_state.reg_G) &
                 0x7FFF;
-            cpu_state.reg_block[cpu_state.curr_bloc].P = ((PRTS_addr - (4 * section) + 2) + cpu_state.reg_block[cpu_state.curr_bloc]
-                .G) & 0x7FFF;
+            cpu_state.reg_P = ((PRTS_addr - (4 * section) + 2) + cpu_state.reg_G) & 0x7FFF;
             cpu_state.MS = 1;
             cpu_state.PR = 1;
         }
         break;
         case 0x38: {
             uint16 section = target_address;
-            uint16 called_Lbase = read_word((cpu_state.reg_block[cpu_state.curr_bloc].G - 4 * section + 2) &
+            uint16 called_Lbase = read_word((cpu_state.reg_G - 4 * section + 2) &
             0x7FFF);
-            uint16 called_Pbase = read_word((cpu_state.reg_block[cpu_state.curr_bloc].G - 4 * section) & 0x7FFF);
-            uint16 LDS = (called_Lbase + cpu_state.reg_block[cpu_state.curr_bloc].G) & 0x7FFF;
-            write_word(LDS, (cpu_state.reg_block[cpu_state.curr_bloc].P - GPRIME) & 0x7FFF);
-            write_word(LDS + 2, (cpu_state.reg_block[cpu_state.curr_bloc].L - GPRIME) & 0x7FFF);
-            cpu_state.reg_block[cpu_state.curr_bloc].L = LDS;
-            cpu_state.reg_block[cpu_state.curr_bloc].P = (called_Pbase + cpu_state.reg_block[cpu_state.curr_bloc].G) & 0x7FFF;
+            uint16 called_Pbase = read_word((cpu_state.reg_G - 4 * section) & 0x7FFF);
+            uint16 LDS = (called_Lbase + cpu_state.reg_G) & 0x7FFF;
+            write_word(LDS, (cpu_state.reg_P - GPRIME) & 0x7FFF);
+            write_word(LDS + 2, (cpu_state.reg_L - GPRIME) & 0x7FFF);
+            cpu_state.reg_L = LDS;
+            cpu_state.reg_P = (called_Pbase + cpu_state.reg_G) & 0x7FFF;
         }
         break;
         case 0x39: {
             uint16 reg_num = target_address & 0x3F;
             switch (reg_num & 0x07) {
                 case 0:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                    cpu_state.reg_A = cpu_state.reg_A;
                     break;
                 case 1:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].E;
+                    cpu_state.reg_A = cpu_state.reg_E;
                     break;
                 case 2:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].P;
+                    cpu_state.reg_A = cpu_state.reg_P;
                     break;
                 case 3:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].X;
+                    cpu_state.reg_A = cpu_state.reg_X;
                     break;
                 case 4:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].L;
+                    cpu_state.reg_A = cpu_state.reg_L;
                     break;
                 case 5:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].G;
+                    cpu_state.reg_A = cpu_state.reg_G;
                     break;
                 default:
                     break;
             }
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
         }
         break;
         case 0x3A:
@@ -807,22 +803,22 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
                 uint16 reg_num = target_address & 0x3F;
                 switch (reg_num & 0x07) {
                     case 0:
-                        cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                        cpu_state.reg_A = cpu_state.reg_A;
                         break;
                     case 1:
-                        cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                        cpu_state.reg_A = cpu_state.reg_A;
                         break;
                     case 2:
-                        cpu_state.reg_block[cpu_state.curr_bloc].P = cpu_state.reg_block[cpu_state.curr_bloc].A & 0x7FFF;
+                        cpu_state.reg_P = cpu_state.reg_A & 0x7FFF;
                         break;
                     case 3:
-                        cpu_state.reg_block[cpu_state.curr_bloc].X = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                        cpu_state.reg_X = cpu_state.reg_A;
                         break;
                     case 4:
-                        cpu_state.reg_block[cpu_state.curr_bloc].L = cpu_state.reg_block[cpu_state.curr_bloc].A & 0x7FFF;
+                        cpu_state.reg_L = cpu_state.reg_A & 0x7FFF;
                         break;
                     case 5:
-                        cpu_state.reg_block[cpu_state.curr_bloc].G = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                        cpu_state.reg_G = cpu_state.reg_A;
                         break;
                     default:
                         break;
@@ -840,42 +836,41 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
             count = shc_word & 0x1F;
             switch (shc_type) {
                 case 0:
-                    shift_lld( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_lld( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
                 case 1:
                     if (mode != 1) return MM_PRVINS;
                     if (!(cpu_unit.flags & UNIT_HSINT))
                         return MM_INVINS;
-                    cpu_state.intrp_level &= ~(1u << cpu_state.int_lvl);
+                    cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
                     break;
                 case 2:
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = compute_parity( & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_E = compute_parity( & cpu_state.reg_A, count);
                     break;
                 case 3:
                     if (mode != 1) return MM_PRVINS;
-                    cpu_state.intrp_level &= ~(1u << cpu_state.int_lvl);
+                    cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
                     cpu_state.int_lvl = 0;
                     break;
                 case 4:
-                    shift_rld( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_rld( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
                 case 5:
                     break;
                 case 6:
-                    normalize( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, & cpu_state.reg_block[
-                        cpu_state.curr_bloc].X, count);
+                    normalize( & cpu_state.reg_E, & cpu_state.reg_A, & cpu_state.reg_X, count);
                     break;
                 case 7:
                     break;
             }
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
         }
         break;
         case 0x3D:
             if (mode != 1) return MM_PRVINS;
-            cpu_state.reg_block[cpu_state.curr_bloc].A = read_word(target_address);
+            cpu_state.reg_A = read_word(target_address);
             write_word(target_address, 0);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0x3E:
         case 0x3F:
@@ -901,7 +896,7 @@ uint16 group_1_DG(uint16 inst) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    target_address = (cpu_state.reg_block[cpu_state.curr_bloc].G + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_G + disp) & 0x7FFF;
     group_1(target_address, inst);
     return 0;
 }
@@ -922,7 +917,7 @@ uint16 group_2_DG(uint16 inst, uint32 mode) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    target_address = (cpu_state.reg_block[cpu_state.curr_bloc].G + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_G + disp) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
@@ -944,7 +939,7 @@ uint16 group_1_IL(uint16 inst) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    tmp = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L + disp);
+    tmp = read_word(cpu_state.reg_L + disp);
     target_address = (GPRIME + tmp) & 0x7FFF;
     group_1(target_address, inst);
     return 0;
@@ -965,7 +960,7 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
      */
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
-    tmp = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L + disp);
+    tmp = read_word(cpu_state.reg_L + disp);
     uint16 target_address;
     target_address = (GPRIME + tmp) & 0x7FFF;
     group_2(inst, target_address, mode);
@@ -983,14 +978,14 @@ uint16 group_1_IGX(uint16 inst) {
      *    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
      *
      * Element of an array pointed at through the common segment.
-     *  Y = (G) + ((G)+D) + (cpu_state.reg_block[cpu_state.curr_bloc].X)
+     *  Y = (G) + ((G)+D) + (cpu_state.reg_X)
      */
     uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    tmp = read_word(cpu_state.reg_block[cpu_state.curr_bloc].G + disp);
-    target_address = (cpu_state.reg_block[cpu_state.curr_bloc].G + tmp + cpu_state.reg_block[cpu_state.curr_bloc].X) & 0x7FFF;
+    tmp = read_word(cpu_state.reg_G + disp);
+    target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x7FFF;
     group_1(target_address, inst);
     return 0;
 }
@@ -1006,14 +1001,14 @@ uint16 group_2_IGX(uint16 inst, uint32 mode) {
      *    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
      *
      * Element of an array pointed at through the common segment.
-     *  Y = (G) + ((G)+D) + (cpu_state.reg_block[cpu_state.curr_bloc].X)
+     *  Y = (G) + ((G)+D) + (cpu_state.reg_X)
      */
     uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    tmp = read_word(cpu_state.reg_block[cpu_state.curr_bloc].G + disp);
-    target_address = (cpu_state.reg_block[cpu_state.curr_bloc].G + tmp + cpu_state.reg_block[cpu_state.curr_bloc].X) & 0x7FFF;
+    tmp = read_word(cpu_state.reg_G + disp);
+    target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
@@ -1028,15 +1023,15 @@ uint16 group_1_ILX(uint16 inst) {
      *    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
      *    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
      *
-     * Element of cpu_state.reg_block[cpu_state.curr_bloc].A byte, word or double-word array located anywhere and pointed at through the local segment.
-     *  Y = G' + ((L)+D)+(cpu_state.reg_block[cpu_state.curr_bloc].X)
+     * Element of cpu_state.reg_A byte, word or double-word array located anywhere and pointed at through the local segment.
+     *  Y = G' + ((L)+D)+(cpu_state.reg_X)
      */
     uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    tmp = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L + disp);
-    target_address = (GPRIME + tmp + cpu_state.reg_block[cpu_state.curr_bloc].X) & 0x7FFF;
+    tmp = read_word(cpu_state.reg_L + disp);
+    target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x7FFF;
     group_1(target_address, inst);
     return 0;
 }
@@ -1058,8 +1053,8 @@ uint16 group_2_ILX(uint16 inst, uint32 mode) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    tmp = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L + disp);
-    target_address = (GPRIME + tmp + cpu_state.reg_block[cpu_state.curr_bloc].X) & 0x7FFF;
+    tmp = read_word(cpu_state.reg_L + disp);
+    target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
@@ -1080,51 +1075,51 @@ uint16 group_4_RP(uint16 inst) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    target_address = cpu_state.reg_block[cpu_state.curr_bloc].P + (disp << 1);
+    target_address = cpu_state.reg_P + (disp << 1);
     switch (opcode) {
         case 0xC0:
             /* BCT - Branch on Carry True (RP mode) */
-            if (cpu_state.reg_block[cpu_state.curr_bloc].C) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (cpu_state.C) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xC1:
             /* BRX - Branch Indexed (RP mode) */
-            cpu_state.reg_block[cpu_state.curr_bloc].P = (target_address + cpu_state.reg_block[cpu_state.curr_bloc].X) & 0x7FFF;
+            cpu_state.reg_P = (target_address + cpu_state.reg_X) & 0x7FFF;
             break;
         case 0xC2:
             /* BOT - Branch on Overflow True (RP mode) */
-            if (cpu_state.reg_block[cpu_state.curr_bloc].OV) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (cpu_state.OV) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xC3:
             /* BCF - Branch on Carry False (RP mode) */
-            if (!cpu_state.reg_block[cpu_state.curr_bloc].C) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (!cpu_state.C) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xC4:
-            /* BAN - Branch on cpu_state.reg_block[cpu_state.curr_bloc].A Negative (RP mode) */
-            if (cpu_state.reg_block[cpu_state.curr_bloc].A & 0x8000)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            /* BAN - Branch on cpu_state.reg_A Negative (RP mode) */
+            if (cpu_state.reg_A & 0x8000)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xC5:
-            /* BAZ - Branch on cpu_state.reg_block[cpu_state.curr_bloc].A Zero (RP mode) */
-            if (cpu_state.reg_block[cpu_state.curr_bloc].A == 0)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            /* BAZ - Branch on cpu_state.reg_A Zero (RP mode) */
+            if (cpu_state.reg_A == 0)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xC6:
             /* BOF - Branch on Overflow False (RP mode) */
-            if (!cpu_state.reg_block[cpu_state.curr_bloc].OV)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (!cpu_state.OV)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xC7:
             /* BRU - Branch Unconditional (RP mode) */
-            cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            cpu_state.reg_P = target_address;
             break;
     }
 }
@@ -1143,42 +1138,42 @@ uint16 group_4_RM(uint16 inst) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    target_address = cpu_state.reg_block[cpu_state.curr_bloc].P - (disp << 1);
+    target_address = cpu_state.reg_P - (disp << 1);
     switch (opcode) {
         case 0xC8:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].C) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (cpu_state.C) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xC9:
-            cpu_state.reg_block[cpu_state.curr_bloc].P = (target_address + cpu_state.reg_block[cpu_state.curr_bloc].X) & 0x7FFF;
+            cpu_state.reg_P = (target_address + cpu_state.reg_X) & 0x7FFF;
             break;
         case 0xCA:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].OV) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (cpu_state.OV) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xCB:
-            if (!cpu_state.reg_block[cpu_state.curr_bloc].C) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (!cpu_state.C) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xCC:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].A & 0x8000)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (cpu_state.reg_A & 0x8000)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xCD:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].A == 0)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (cpu_state.reg_A == 0)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xCE:
-            if (!cpu_state.reg_block[cpu_state.curr_bloc].OV) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (!cpu_state.OV) cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xCF:
-            cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            cpu_state.reg_P = target_address;
             break;
     }
     return 0;
@@ -1200,50 +1195,50 @@ uint16 group_5_IL(uint16 inst) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    tmp = (cpu_state.reg_block[cpu_state.curr_bloc].L + disp) & 0x7FFF;
+    tmp = (cpu_state.reg_L + disp) & 0x7FFF;
     target_address = GPRIME + tmp;
     switch (opcode) {
         case 0xD0:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].C)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (cpu_state.C)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD1:
-            cpu_state.reg_block[cpu_state.curr_bloc].P = (target_address + cpu_state.reg_block[cpu_state.curr_bloc].X) & 0x7FFF;
+            cpu_state.reg_P = (target_address + cpu_state.reg_X) & 0x7FFF;
             break;
         case 0xD2:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].OV)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (cpu_state.OV)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD3:
-            if (!cpu_state.reg_block[cpu_state.curr_bloc].C)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (!cpu_state.C)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD4:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].A & 0x8000)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (cpu_state.reg_A & 0x8000)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD5:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].A == 0)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (cpu_state.reg_A == 0)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD6:
-            if (!cpu_state.reg_block[cpu_state.curr_bloc].OV)
-                cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            if (!cpu_state.OV)
+                cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD7:
-            cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            cpu_state.reg_P = target_address;
             break;
     }
     return 0;
@@ -1265,38 +1260,38 @@ uint16 group_5_IG(uint16 inst) {
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
-    tmp = read_word(cpu_state.reg_block[cpu_state.curr_bloc].G + disp);
+    tmp = read_word(cpu_state.reg_G + disp);
     target_address = (GPRIME + tmp) & 0x7FFF;
     switch (opcode) {
         case 0xD8:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].C) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (cpu_state.C) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD9:
-            cpu_state.reg_block[cpu_state.curr_bloc].P = (target_address + cpu_state.reg_block[cpu_state.curr_bloc].X) & 0x7FFF;
+            cpu_state.reg_P = (target_address + cpu_state.reg_X) & 0x7FFF;
             break;
         case 0xDA:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].OV) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (cpu_state.OV) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xDB:
-            if (!cpu_state.reg_block[cpu_state.curr_bloc].C) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (!cpu_state.C) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xDC:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].A & 0x8000) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (cpu_state.reg_A & 0x8000) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xDD:
-            if (cpu_state.reg_block[cpu_state.curr_bloc].A == 0) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (cpu_state.reg_A == 0) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xDE:
-            if (!cpu_state.reg_block[cpu_state.curr_bloc].OV) cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
-            else cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            if (!cpu_state.OV) cpu_state.reg_P = target_address;
+            else cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xDF:
-            cpu_state.reg_block[cpu_state.curr_bloc].P = target_address;
+            cpu_state.reg_P = target_address;
             break;
     }
     return 0;
@@ -1311,7 +1306,7 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
      *    (Class 1 - PX addressing mode)
      *    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
      *
-     * (Y) = D+(cpu_state.reg_block[cpu_state.curr_bloc].X)
+     * (Y) = D+(cpu_state.reg_X)
      *  Y = (P)
      */
     uint16 opcode = (inst >> I_OPCODE_SHIFT);
@@ -1328,111 +1323,109 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
             count = disp & 0x1F;
             switch (type) {
                 case SHIFT_SLLS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_lls(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_lls(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRCS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_srcs(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_srcs(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SAD:
-                    shift_sad( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_sad( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
                 case SHIFT_SLCD:
-                    shift_lcd( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_lcd( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
                 case SHIFT_SLCS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_slcs(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_slcs(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SAS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_sas(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_sas(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRLS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_rls(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_rls(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRCD:
-                    shift_rcd( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_rcd( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
             }
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
         }
         break;
         case 0xE1: {
             srg_op_t srg_op = disp & 0x1E;
             switch (srg_op) {
                 case SRG_RTS:
-                    uint16 saved_P = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L) + GPRIME;
-                    uint16 saved_L = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L + 2) + GPRIME;
-                    cpu_state.reg_block[cpu_state.curr_bloc].P = saved_P;
-                    cpu_state.reg_block[cpu_state.curr_bloc].L = saved_L;
+                    uint16 saved_P = read_word(cpu_state.reg_L) + GPRIME;
+                    uint16 saved_L = read_word(cpu_state.reg_L + 2) + GPRIME;
+                    cpu_state.reg_P = saved_P;
+                    cpu_state.reg_L = saved_L;
                     break;
                 case SRG_XAE:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].A;
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = data;
+                    data = cpu_state.reg_A;
+                    cpu_state.reg_A = cpu_state.reg_E;
+                    cpu_state.reg_E = data;
                     break;
                 case SRG_XAX:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].A;
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].X;
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = data;
+                    data = cpu_state.reg_A;
+                    cpu_state.reg_A = cpu_state.reg_X;
+                    cpu_state.reg_X = data;
                     break;
                 case SRG_XEX:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = cpu_state.reg_block[cpu_state.curr_bloc].X;
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = data;
+                    data = cpu_state.reg_E;
+                    cpu_state.reg_E = cpu_state.reg_X;
+                    cpu_state.reg_X = data;
                     break;
                 case SRG_XAA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = ((cpu_state.reg_block[cpu_state.curr_bloc].A & 0xFF) << 8) | ((
-                        cpu_state.reg_block[cpu_state.curr_bloc].A >> 8) & 0xFF);
+                    cpu_state.reg_A = ((cpu_state.reg_A & 0xFF) << 8) | ((
+                        cpu_state.reg_A >> 8) & 0xFF);
                     break;
                 case SRG_CCE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = ~cpu_state.reg_block[cpu_state.curr_bloc].E & 0xFFFF;
+                    cpu_state.reg_A = ~cpu_state.reg_E & 0xFFFF;
                     break;
                 case SRG_RSV:
                     if (mode != 1) return MM_PRVINS;
                     {
-                        uint16 saved_flags = read_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 4);
-                        cpu_state.reg_block[cpu_state.curr_bloc].C = (saved_flags >> 14) & 1;
-                        cpu_state.reg_block[cpu_state.curr_bloc].OV = (saved_flags >> 13) & 1;
+                        uint16 saved_flags = read_word(cpu_state.reg_G + 4);
+                        cpu_state.C = (saved_flags >> 14) & 1;
+                        cpu_state.OV = (saved_flags >> 13) & 1;
                         cpu_state.MA = (saved_flags >> 12) & 1;
                         cpu_state.PR = (saved_flags >> 11) & 1;
                         cpu_state.MS = 0;
                     }
-                    cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].G + read_word(cpu_state.reg_block[
-                        cpu_state.curr_bloc].G + 2)) & 0x7FFF;
-                    cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].G + 2 + read_word(cpu_state.reg_block[
-                        cpu_state.curr_bloc].G)) & 0x7FFF;
+                    cpu_state.reg_L = (cpu_state.reg_G + read_word(cpu_state.reg_G + 2)) & 0x7FFF;
+                    cpu_state.reg_P = (cpu_state.reg_G + 2 + read_word(cpu_state.reg_G)) & 0x7FFF;
                     break;
                 case SRG_ACE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = (cpu_state.reg_block[cpu_state.curr_bloc].E + cpu_state.reg_block[cpu_state.curr_bloc].C) &
+                    cpu_state.reg_A = (cpu_state.reg_E + cpu_state.C) &
                         0xFFFF;
                     break;
                 case SRG_CCA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = ~cpu_state.reg_block[cpu_state.curr_bloc].A & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A = ~cpu_state.reg_A & 0xFFFF;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AEE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A ^= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A ^= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CNX:
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = (~cpu_state.reg_block[cpu_state.curr_bloc].X + 1) & 0xFFFF;
+                    cpu_state.reg_X = (~cpu_state.reg_X + 1) & 0xFFFF;
                     break;
                 case SRG_AIE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A |= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A |= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AAE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A &= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A &= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_LNE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = 0xFFFF;
+                    cpu_state.reg_A = 0xFFFF;
                     break;
                 case SRG_CNA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = (~cpu_state.reg_block[cpu_state.curr_bloc].A + 1) & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A = (~cpu_state.reg_A + 1) & 0xFFFF;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CHX:
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X >> 1) | (cpu_state.reg_block[cpu_state.curr_bloc].X & 0x8000);
+                    cpu_state.reg_X = (cpu_state.reg_X >> 1) | (cpu_state.reg_X & 0x8000);
                     break;
                 default:
                     break;
@@ -1440,32 +1433,31 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
         }
         break;
         case 0xE2:
-            cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X + target_address) & 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].X);
+            cpu_state.reg_X = (cpu_state.reg_X + target_address) & 0x7FFF;
+            set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0xE3:
-            cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X - target_address) & 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].X);
+            cpu_state.reg_X = (cpu_state.reg_X - target_address) & 0x7FFF;
+            set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0xE4:
             break;
         case 0xE5:
-            cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].L + target_address) & 0x7FFF;
+            cpu_state.reg_L = (cpu_state.reg_L + target_address) & 0x7FFF;
             break;
         case 0xE6:
-            cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].L - target_address) & 0x7FFF;
+            cpu_state.reg_L = (cpu_state.reg_L - target_address) & 0x7FFF;
             break;
         case 0xE7: {
             uint16 section = target_address;
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G, cpu_state.reg_block[cpu_state.curr_bloc].P - GPRIME);
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 2, cpu_state.reg_block[cpu_state.curr_bloc].L - GPRIME);
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 4, (cpu_state.reg_block[cpu_state.curr_bloc].C ? 1 : 0) | (
-                cpu_state.reg_block[cpu_state.curr_bloc].OV ? 2 : 0) | (cpu_state.MS ? 4 : 0));
+            write_word(cpu_state.reg_G, cpu_state.reg_P - GPRIME);
+            write_word(cpu_state.reg_G + 2, cpu_state.reg_L - GPRIME);
+            write_word(cpu_state.reg_G + 4, (cpu_state.C ? 1 : 0) | (
+                cpu_state.OV ? 2 : 0) | (cpu_state.MS ? 4 : 0));
             uint16 PRTS_addr = read_word(12);
-            cpu_state.reg_block[cpu_state.curr_bloc].L = ((PRTS_addr - (4 * section)) + cpu_state.reg_block[cpu_state.curr_bloc].G) &
+            cpu_state.reg_L = ((PRTS_addr - (4 * section)) + cpu_state.reg_G) &
                 0x7FFF;
-            cpu_state.reg_block[cpu_state.curr_bloc].P = ((PRTS_addr - (4 * section) + 2) + cpu_state.reg_block[cpu_state.curr_bloc]
-                .G) & 0x7FFF;
+            cpu_state.reg_P = ((PRTS_addr - (4 * section) + 2) + cpu_state.reg_G) & 0x7FFF;
             cpu_state.MS = 1;
             cpu_state.PR = 1;
         }
@@ -1506,31 +1498,31 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
                     {
                 /* Save context at context pointer address */
                 uint16 ctx_ptr = int_vec[cpu_state.int_lvl];
-                write_word(ctx_ptr, ((cpu_state.reg_block[cpu_state.curr_bloc].C ? 1 : 0) | (cpu_state.reg_block[cpu_state.curr_bloc].OV ? 2 : 0) | (cpu_state.MS ? 4 : 0)));
-                write_word(ctx_ptr + 2, cpu_state.reg_block[cpu_state.curr_bloc].X);
-                write_word(ctx_ptr + 4, cpu_state.reg_block[cpu_state.curr_bloc].E);
-                write_word(ctx_ptr + 6, cpu_state.reg_block[cpu_state.curr_bloc].A);
-                write_word(ctx_ptr + 8, cpu_state.reg_block[cpu_state.curr_bloc].G);
-                write_word(ctx_ptr + 10, cpu_state.reg_block[cpu_state.curr_bloc].L);
-                write_word(ctx_ptr + 12, cpu_state.reg_block[cpu_state.curr_bloc].P);
+                write_word(ctx_ptr, ((cpu_state.C ? 1 : 0) | (cpu_state.OV ? 2 : 0) | (cpu_state.MS ? 4 : 0)));
+                write_word(ctx_ptr + 2, cpu_state.reg_X);
+                write_word(ctx_ptr + 4, cpu_state.reg_E);
+                write_word(ctx_ptr + 6, cpu_state.reg_A);
+                write_word(ctx_ptr + 8, cpu_state.reg_G);
+                write_word(ctx_ptr + 10, cpu_state.reg_L);
+                write_word(ctx_ptr + 12, cpu_state.reg_P);
                 /* Deactivate current level */
-                cpu_state.intrp_level &= ~(1u << cpu_state.int_lvl);
+                cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
                 /* Find next highest priority level */
                 cpu_state.int_lvl = get_highest_interrupt();
                 /* Restore context */
                 ctx_ptr = int_vec[cpu_state.int_lvl];
                 {
                     uint16 saved_flags = read_word(ctx_ptr);
-                    cpu_state.reg_block[cpu_state.curr_bloc].C = (saved_flags >> 0) & 1;
-                    cpu_state.reg_block[cpu_state.curr_bloc].OV = (saved_flags >> 1) & 1;
+                    cpu_state.C = (saved_flags >> 0) & 1;
+                    cpu_state.OV = (saved_flags >> 1) & 1;
                     cpu_state.MS = (saved_flags >> 2) & 1;
                 }
-                cpu_state.reg_block[cpu_state.curr_bloc].X = read_word(ctx_ptr + 2);
-                cpu_state.reg_block[cpu_state.curr_bloc].E = read_word(ctx_ptr + 4);
-                cpu_state.reg_block[cpu_state.curr_bloc].A = read_word(ctx_ptr + 6);
-                cpu_state.reg_block[cpu_state.curr_bloc].G = read_word(ctx_ptr + 8);
-                cpu_state.reg_block[cpu_state.curr_bloc].L = read_word(ctx_ptr + 10);
-                cpu_state.reg_block[cpu_state.curr_bloc].P = read_word(ctx_ptr + 12);
+                cpu_state.reg_X = read_word(ctx_ptr + 2);
+                cpu_state.reg_E = read_word(ctx_ptr + 4);
+                cpu_state.reg_A = read_word(ctx_ptr + 6);
+                cpu_state.reg_G = read_word(ctx_ptr + 8);
+                cpu_state.reg_L = read_word(ctx_ptr + 10);
+                cpu_state.reg_P = read_word(ctx_ptr + 12);
                     }
                     break;
                     
@@ -1566,112 +1558,109 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
     switch (opcode) {
         case 0xF0: {
                 case SHIFT_SLLS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_lls(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_lls(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRCS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_srcs(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_srcs(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SAD:
-                    shift_sad( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_sad( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
                 case SHIFT_SLCD:
-                    shift_lcd( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_lcd( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
                 case SHIFT_SLCS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_slcs(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_slcs(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SAS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_sas(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_sas(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRLS:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = shift_rls(cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    cpu_state.reg_A = shift_rls(cpu_state.reg_A, count);
                     break;
                 case SHIFT_SRCD:
-                    shift_rcd( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                    shift_rcd( & cpu_state.reg_E, & cpu_state.reg_A, count);
                     break;
             }
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
         break;
         
         case 0xF1: {
             srg_op_t srg_op = disp & 0x1E;
             switch (srg_op) {
                 case SRG_RTS:
-                    uint16 saved_P = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L) + GPRIME;
-                    uint16 saved_L = read_word(cpu_state.reg_block[cpu_state.curr_bloc].L + 2) + GPRIME;
-                    cpu_state.reg_block[cpu_state.curr_bloc].P = saved_P;
-                    cpu_state.reg_block[cpu_state.curr_bloc].L = saved_L;
+                    uint16 saved_P = read_word(cpu_state.reg_L) + GPRIME;
+                    uint16 saved_L = read_word(cpu_state.reg_L + 2) + GPRIME;
+                    cpu_state.reg_P = saved_P;
+                    cpu_state.reg_L = saved_L;
                     break;
                 case SRG_XAE:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].A;
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = data;
+                    data = cpu_state.reg_A;
+                    cpu_state.reg_A = cpu_state.reg_E;
+                    cpu_state.reg_E = data;
                     break;
                 case SRG_XAX:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].A;
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].X;
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = data;
+                    data = cpu_state.reg_A;
+                    cpu_state.reg_A = cpu_state.reg_X;
+                    cpu_state.reg_X = data;
                     break;
                 case SRG_XEX:
-                    data = cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = cpu_state.reg_block[cpu_state.curr_bloc].X;
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = data;
+                    data = cpu_state.reg_E;
+                    cpu_state.reg_E = cpu_state.reg_X;
+                    cpu_state.reg_X = data;
                     break;
                 case SRG_XAA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = ((cpu_state.reg_block[cpu_state.curr_bloc].A & 0xFF) << 8) | ((
-                cpu_state.reg_block[cpu_state.curr_bloc].A >> 8) & 0xFF);
+                    cpu_state.reg_A = ((cpu_state.reg_A & 0xFF) << 8) | ((
+                cpu_state.reg_A >> 8) & 0xFF);
                     break;
                 case SRG_CCE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = ~cpu_state.reg_block[cpu_state.curr_bloc].E & 0xFFFF;
+                    cpu_state.reg_A = ~cpu_state.reg_E & 0xFFFF;
                     break;
                 case SRG_RSV:
                     if (mode != 1) return MM_PRVINS;
                     {
-                uint16 saved_flags = read_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 4);
-                cpu_state.reg_block[cpu_state.curr_bloc].C = (saved_flags >> 14) & 1;
-                cpu_state.reg_block[cpu_state.curr_bloc].OV = (saved_flags >> 13) & 1;
+                uint16 saved_flags = read_word(cpu_state.reg_G + 4);
+                cpu_state.C = (saved_flags >> 14) & 1;
+                cpu_state.OV = (saved_flags >> 13) & 1;
                 cpu_state.MA = (saved_flags >> 12) & 1;
                 cpu_state.PR = (saved_flags >> 11) & 1;
                 cpu_state.MS = 0;
                     }
-                    cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].G + read_word(cpu_state.reg_block[
-                cpu_state.curr_bloc].G + 2)) & 0x7FFF;
-                    cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].G + 2 + read_word(cpu_state.reg_block[
-                cpu_state.curr_bloc].G)) & 0x7FFF;
+                    cpu_state.reg_L = (cpu_state.reg_G + read_word(cpu_state.reg_G + 2)) & 0x7FFF;
+                    cpu_state.reg_P = (cpu_state.reg_G + 2 + read_word(cpu_state.reg_G)) & 0x7FFF;
                     break;
                 case SRG_ACE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = (cpu_state.reg_block[cpu_state.curr_bloc].E + cpu_state.reg_block[cpu_state.curr_bloc].C) &
+                    cpu_state.reg_A = (cpu_state.reg_E + cpu_state.C) &
                 0xFFFF;
                     break;
                 case SRG_CCA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = ~cpu_state.reg_block[cpu_state.curr_bloc].A & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A = ~cpu_state.reg_A & 0xFFFF;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AEE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A ^= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A ^= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CNX:
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = (~cpu_state.reg_block[cpu_state.curr_bloc].X + 1) & 0xFFFF;
+                    cpu_state.reg_X = (~cpu_state.reg_X + 1) & 0xFFFF;
                     break;
                 case SRG_AIE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A |= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A |= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AAE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A &= cpu_state.reg_block[cpu_state.curr_bloc].E;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A &= cpu_state.reg_E;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_LNE:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = 0xFFFF;
+                    cpu_state.reg_A = 0xFFFF;
                     break;
                 case SRG_CNA:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = (~cpu_state.reg_block[cpu_state.curr_bloc].A + 1) & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                    cpu_state.reg_A = (~cpu_state.reg_A + 1) & 0xFFFF;
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CHX:
-                    cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X >> 1) | (cpu_state.reg_block[
-                cpu_state.curr_bloc].X & 0x8000);
+                    cpu_state.reg_X = (cpu_state.reg_X >> 1) | (cpu_state.reg_X & 0x8000);
                     break;
                 default:
                     break;
@@ -1679,32 +1668,31 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
         }
         break;
         case 0xF2:
-            cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X + target_address) & 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].X);
+            cpu_state.reg_X = (cpu_state.reg_X + target_address) & 0x7FFF;
+            set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0xF3:
-            cpu_state.reg_block[cpu_state.curr_bloc].X = (cpu_state.reg_block[cpu_state.curr_bloc].X - target_address) & 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].X);
+            cpu_state.reg_X = (cpu_state.reg_X - target_address) & 0x7FFF;
+            set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0xF4:
             break;
         case 0xF5:
-            cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].L + target_address) & 0x7FFF;
+            cpu_state.reg_L = (cpu_state.reg_L + target_address) & 0x7FFF;
             break;
         case 0xF6:
-            cpu_state.reg_block[cpu_state.curr_bloc].L = (cpu_state.reg_block[cpu_state.curr_bloc].L - target_address) & 0x7FFF;
+            cpu_state.reg_L = (cpu_state.reg_L - target_address) & 0x7FFF;
             break;
         case 0xF7: {
             uint16 section = target_address;
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G, cpu_state.reg_block[cpu_state.curr_bloc].P - GPRIME);
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 2, cpu_state.reg_block[cpu_state.curr_bloc].L - GPRIME);
-            write_word(cpu_state.reg_block[cpu_state.curr_bloc].G + 4, (cpu_state.reg_block[cpu_state.curr_bloc].C ? 1 : 0) | (
-                cpu_state.reg_block[cpu_state.curr_bloc].OV ? 2 : 0) | (cpu_state.MS ? 4 : 0));
+            write_word(cpu_state.reg_G, cpu_state.reg_P - GPRIME);
+            write_word(cpu_state.reg_G + 2, cpu_state.reg_L - GPRIME);
+            write_word(cpu_state.reg_G + 4, (cpu_state.C ? 1 : 0) | (
+                cpu_state.OV ? 2 : 0) | (cpu_state.MS ? 4 : 0));
             uint16 PRTS_addr = read_word(12);
-            cpu_state.reg_block[cpu_state.curr_bloc].L = ((PRTS_addr - (4 * section)) + cpu_state.reg_block[cpu_state.curr_bloc].G) &
+            cpu_state.reg_L = ((PRTS_addr - (4 * section)) + cpu_state.reg_G) &
                 0x7FFF;
-            cpu_state.reg_block[cpu_state.curr_bloc].P = ((PRTS_addr - (4 * section) + 2) + cpu_state.reg_block[cpu_state.curr_bloc]
-                .G) & 0x7FFF;
+            cpu_state.reg_P = ((PRTS_addr - (4 * section) + 2) + cpu_state.reg_G) & 0x7FFF;
             cpu_state.MS = 1;
             cpu_state.PR = 1;
         }
@@ -1712,41 +1700,41 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
         
         case 0xF8: {
             uint16 section = target_address;
-            uint16 called_Lbase = read_word((cpu_state.reg_block[cpu_state.curr_bloc].G - 4 * section + 2) &
+            uint16 called_Lbase = read_word((cpu_state.reg_G - 4 * section + 2) &
             0x7FFF);
-            uint16 called_Pbase = read_word((cpu_state.reg_block[cpu_state.curr_bloc].G - 4 * section) & 0x7FFF);
-            uint16 LDS = (called_Lbase + cpu_state.reg_block[cpu_state.curr_bloc].G) & 0x7FFF;
-            write_word(LDS, (cpu_state.reg_block[cpu_state.curr_bloc].P - GPRIME) & 0x7FFF);
-            write_word(LDS + 2, (cpu_state.reg_block[cpu_state.curr_bloc].L - GPRIME) & 0x7FFF);
-            cpu_state.reg_block[cpu_state.curr_bloc].L = LDS;
-            cpu_state.reg_block[cpu_state.curr_bloc].P = (called_Pbase + cpu_state.reg_block[cpu_state.curr_bloc].G) & 0x7FFF;
+            uint16 called_Pbase = read_word((cpu_state.reg_G - 4 * section) & 0x7FFF);
+            uint16 LDS = (called_Lbase + cpu_state.reg_G) & 0x7FFF;
+            write_word(LDS, (cpu_state.reg_P - GPRIME) & 0x7FFF);
+            write_word(LDS + 2, (cpu_state.reg_L - GPRIME) & 0x7FFF);
+            cpu_state.reg_L = LDS;
+            cpu_state.reg_P = (called_Pbase + cpu_state.reg_G) & 0x7FFF;
         }
         break;
         case 0xF9: {
             uint16 reg_num = target_address & 0x3F;
             switch (reg_num & 0x07) {
                 case 0:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                    cpu_state.reg_A = cpu_state.reg_A;
                     break;
                 case 1:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].E;
+                    cpu_state.reg_A = cpu_state.reg_E;
                     break;
                 case 2:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].P;
+                    cpu_state.reg_A = cpu_state.reg_P;
                     break;
                 case 3:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].X;
+                    cpu_state.reg_A = cpu_state.reg_X;
                     break;
                 case 4:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].L;
+                    cpu_state.reg_A = cpu_state.reg_L;
                     break;
                 case 5:
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].G;
+                    cpu_state.reg_A = cpu_state.reg_G;
                     break;
                 default:
                     break;
             }
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
         }
         break;
         case 0xFA:
@@ -1755,22 +1743,22 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
                 uint16 reg_num = target_address & 0x3F;
                 switch (reg_num & 0x07) {
                     case 0:
-                        cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                        cpu_state.reg_A = cpu_state.reg_A;
                         break;
                     case 1:
-                        cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                        cpu_state.reg_A = cpu_state.reg_A;
                         break;
                     case 2:
-                        cpu_state.reg_block[cpu_state.curr_bloc].P = cpu_state.reg_block[cpu_state.curr_bloc].A & 0x7FFF;
+                        cpu_state.reg_P = cpu_state.reg_A & 0x7FFF;
                         break;
                     case 3:
-                        cpu_state.reg_block[cpu_state.curr_bloc].X = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                        cpu_state.reg_X = cpu_state.reg_A;
                         break;
                     case 4:
-                        cpu_state.reg_block[cpu_state.curr_bloc].L = cpu_state.reg_block[cpu_state.curr_bloc].A & 0x7FFF;
+                        cpu_state.reg_L = cpu_state.reg_A & 0x7FFF;
                         break;
                     case 5:
-                        cpu_state.reg_block[cpu_state.curr_bloc].G = cpu_state.reg_block[cpu_state.curr_bloc].A;
+                        cpu_state.reg_G = cpu_state.reg_A;
                         break;
                     default:
                         break;
@@ -1787,42 +1775,42 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
                 uint8 shc_type = (disp >> 5) & 0x07;
                 switch (shc_type) {
                     case 0:
-                        shift_lld( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                        shift_lld( & cpu_state.reg_E, & cpu_state.reg_A, count);
                         break;
                     case 1:
                         if (mode != 1) return MM_PRVINS;
-                        cpu_state.intrp_level &= ~(1u << cpu_state.int_lvl);
+                        cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
                         cpu_state.int_lvl = 0;
                         break;
                     case 2:
-                        cpu_state.reg_block[cpu_state.curr_bloc].A = compute_parity( & cpu_state.reg_block[cpu_state.curr_bloc].A,
+                        cpu_state.reg_A = compute_parity( & cpu_state.reg_A,
                             count);
                         break;
                     case 3:
                         if (mode != 1) return MM_PRVINS;
-                        cpu_state.intrp_level &= ~(1u << cpu_state.int_lvl);
+                        cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
                         cpu_state.int_lvl = 0;
                         break;
                     case 4:
-                        shift_rld( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, count);
+                        shift_rld( & cpu_state.reg_E, & cpu_state.reg_A, count);
                         break;
                     case 5:
                         break;
                     case 6:
-                        normalize( & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc].A, &
-                            cpu_state.reg_block[cpu_state.curr_bloc].X, count);
+                        normalize( & cpu_state.reg_E, & cpu_state.reg_A, &
+                            cpu_state.reg_X, count);
                         break;
                     case 7:
                         break;
                 }
-                set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+                set_condition_codes_load(cpu_state.reg_A);
             }
             break;
         case 0xFD:
             if (mode != 1) return MM_PRVINS;
-            cpu_state.reg_block[cpu_state.curr_bloc].A = read_word(target_address);
+            cpu_state.reg_A = read_word(target_address);
             write_word(target_address, 0);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0xFE:
         case 0xFF:
@@ -1844,40 +1832,40 @@ uint16 group_1(uint16 target_address, uint16 inst) {
     uint16 carry, overflow;
     switch (opcode) {
         case 0x00:
-            cpu_state.reg_block[cpu_state.curr_bloc].A = read_word(target_address);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            cpu_state.reg_A = read_word(target_address);
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0x01:
-            cpu_state.reg_block[cpu_state.curr_bloc].E = read_word(target_address);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].E);
+            cpu_state.reg_E = read_word(target_address);
+            set_condition_codes_load(cpu_state.reg_E);
             break;
         case 0x02:
-            cpu_state.reg_block[cpu_state.curr_bloc].X = read_word(target_address);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].X);
+            cpu_state.reg_X = read_word(target_address);
+            set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0x03:
-            cpu_state.reg_block[cpu_state.curr_bloc].A ^= read_word(target_address);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            cpu_state.reg_A ^= read_word(target_address);
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0x04:
-            cpu_state.reg_block[cpu_state.curr_bloc].A = (target_address - GPRIME) & 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            cpu_state.reg_A = (target_address - GPRIME) & 0x7FFF;
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0x05:
             carry = 0;
-            cpu_state.reg_block[cpu_state.curr_bloc].A = add16(cpu_state.reg_block[cpu_state.curr_bloc].A, read_word(target_address), &
+            cpu_state.reg_A = add16(cpu_state.reg_A, read_word(target_address), &
                 carry, & overflow);
-            set_condition_codes_arithmetic(cpu_state.reg_block[cpu_state.curr_bloc].A, carry, overflow);
+            set_condition_codes_arithmetic(cpu_state.reg_A, carry, overflow);
             break;
         case 0x06:
             carry = 0;
-            cpu_state.reg_block[cpu_state.curr_bloc].A = sub16(cpu_state.reg_block[cpu_state.curr_bloc].A, read_word(target_address), &
+            cpu_state.reg_A = sub16(cpu_state.reg_A, read_word(target_address), &
                 carry, & overflow);
-            set_condition_codes_arithmetic(cpu_state.reg_block[cpu_state.curr_bloc].A, carry, overflow);
+            set_condition_codes_arithmetic(cpu_state.reg_A, carry, overflow);
             break;
         case 0x07:
-            cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].A | read_word(target_address);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            cpu_state.reg_A = cpu_state.reg_A | read_word(target_address);
+            set_condition_codes_load(cpu_state.reg_A);
             break;
     }
     return 0;
@@ -1904,63 +1892,61 @@ uint16 group_2(uint16 inst, uint16 target_address, uint32 mode) {
             if (!(cpu_unit.flags & UNIT_MULDIV))
                 return MM_INVINS;
             data = read_word(target_address);
-            if (div32(cpu_state.reg_block[cpu_state.curr_bloc].E, cpu_state.reg_block[cpu_state.curr_bloc].A, data, & cpu_state.reg_block[
-                    cpu_state.curr_bloc].A, & cpu_state.reg_block[cpu_state.curr_bloc].E) != 0) {
-                cpu_state.reg_block[cpu_state.curr_bloc].OV = 1;
+            if (div32(cpu_state.reg_E, cpu_state.reg_A, data, & cpu_state.reg_A, & cpu_state.reg_E) != 0) {
+                cpu_state.OV = 1;
             }
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0x09:
-            cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].A & read_word(target_address);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            cpu_state.reg_A = cpu_state.reg_A & read_word(target_address);
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0x0A:
             if (!(cpu_unit.flags & UNIT_EXTINS))
                 return MM_INVINS;
             s_byte = read_byte(disp);
-            for (i = 0; i < cpu_state.reg_block[cpu_state.curr_bloc].E; i++) {
-                d_byte = read_byte(cpu_state.reg_block[cpu_state.curr_bloc].G + cpu_state.reg_block[cpu_state.curr_bloc].A + i);
+            for (i = 0; i < cpu_state.reg_E; i++) {
+                d_byte = read_byte(cpu_state.reg_G + cpu_state.reg_A + i);
                 if (s_byte == d_byte) {
-                    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].G + cpu_state.reg_block[cpu_state.curr_bloc].A +
+                    cpu_state.reg_A = cpu_state.reg_G + cpu_state.reg_A +
                     i;
-                    cpu_state.reg_block[cpu_state.curr_bloc].E = 0;
+                    cpu_state.reg_E = 0;
                     set_condition_codes_string(0, s_byte < d_byte);
                     break;
                 }
             }
-            if (i == cpu_state.reg_block[cpu_state.curr_bloc].E) {
-                cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].G + cpu_state.reg_block[cpu_state.curr_bloc].A;
-                cpu_state.reg_block[cpu_state.curr_bloc].E = 0;
+            if (i == cpu_state.reg_E) {
+                cpu_state.reg_A = cpu_state.reg_G + cpu_state.reg_A;
+                cpu_state.reg_E = 0;
                 set_condition_codes_string(1, 0);
             }
             break;
         case 0x0B:
             data = read_word(target_address);
-            sub16(cpu_state.reg_block[cpu_state.curr_bloc].A, data, & carry, & overflow);
-            set_condition_codes_compare(cpu_state.reg_block[cpu_state.curr_bloc].A, data, 0);
+            sub16(cpu_state.reg_A, data, & carry, & overflow);
+            set_condition_codes_compare(cpu_state.reg_A, data, 0);
             break;
         case 0x0C:
             if (!(cpu_unit.flags & UNIT_MULDIV))
                 return MM_INVINS;
             data = read_word(target_address);
-            mul32(cpu_state.reg_block[cpu_state.curr_bloc].A, data, & cpu_state.reg_block[cpu_state.curr_bloc].E, & cpu_state.reg_block[cpu_state.curr_bloc]
-                .A);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].E);
+            mul32(cpu_state.reg_A, data, & cpu_state.reg_E, & cpu_state.reg_A);
+            set_condition_codes_load(cpu_state.reg_E);
             break;
         case 0x0D:
             data = read_word(target_address);
-            cpu_state.reg_block[cpu_state.curr_bloc].A = (cpu_state.reg_block[cpu_state.curr_bloc].A & 0x00FF) | (data & 0xFF00);
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            cpu_state.reg_A = (cpu_state.reg_A & 0x00FF) | (data & 0xFF00);
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0x0E:
             data = read_word(target_address);
-            cpu_state.reg_block[cpu_state.curr_bloc].A = data & 0x00FF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].A);
+            cpu_state.reg_A = data & 0x00FF;
+            set_condition_codes_load(cpu_state.reg_A);
             break;
         case 0x0F:
             data = read_word(target_address);
-            cpu_state.reg_block[cpu_state.curr_bloc].X = data & 0x00FF;
-            set_condition_codes_load(cpu_state.reg_block[cpu_state.curr_bloc].X);
+            cpu_state.reg_X = data & 0x00FF;
+            set_condition_codes_load(cpu_state.reg_X);
             break;
     }
     return 0;

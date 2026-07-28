@@ -126,7 +126,7 @@ All devices will follow the same integration pattern, they provide:
 #include <stdlib.h>
 #include <stdbool.h>
 
-extern uint32 intrp_level;  /* interrupt request bits */
+extern uint32 intrpt_mask;  /* interrupt request bits */
 
 /* Memory Access Functions (defined in mitra_cpu.h) */
 extern t_value read_word(t_addr va);

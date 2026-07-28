@@ -76,7 +76,7 @@ t_stat read_byte_io(uint32 addr, uint8 *val, int zio) ;
 void write_byte_io(uint32 addr, uint8 val, int zio) ;
 
 /* Add at the end of mitra_io.h: */
-extern uint32 intrp_level;
+extern uint32 intrpt_mask;
 extern t_bool high_speed_int;
 
 #endif

@@ -57,15 +57,10 @@
 /* Main memory - declared extern in mitra_cpu.h; this is the one real instance */
 t_value M[MAX_MEM_WORDS];
 
-/* CPU state - declared extern in mitra_cpu.h; this is the one real, shared instance.
-   (It was previously declared 'static' in the header, which silently gave every
-   .c file that included mitra_cpu.h its own private, disconnected copy.) */
+/* CPU state - declared extern in mitra_cpu.h; this is the one real, shared instance. */
 CPU_STATE cpu_state;
 
-/* Diagnostic trace-logging toggles - declared extern in mitra_cpu.h; defined once here.
-   (They were previously plain global definitions inside the header itself, so every
-   .c file including it got its own strong definition, causing multiple-definition
-   errors at link time under GCC's default -fno-common.) */
+/* Diagnostic trace-logging toggles - declared extern in mitra_cpu.h; defined once here. */
 int32 mitra_log_enable = 1;
 int32 mitra_log_inst = 0;
 int32 mitra_log_mem = 0;
@@ -147,28 +142,35 @@ UNIT cpu_unit = {
 };
 
 /*
-The SIMH macros work as follows:
+* The SIMH macros are used in dialog with user, they work as follows:
 *    FLDATA(name, var, reset) - For 1-bit boolean flags (uses a single bit in the register)
 *    ORDATA(name, var, width) - For numeric values that can be any width (1-32 bits)
 *    DRDATA(name, var, width) - For display-only numeric values
 */
 REG cpu_reg[] = {
-    { ORDATA(cpu_state.reg_block, cpu_state.reg_block, 16) },
-    { FLDATA(cpu_state.MS, cpu_state.MS, 0) },
-    { FLDATA(cpu_state.MA, cpu_state.MA, 0) },
-    { FLDATA(cpu_state.PR, cpu_state.PR, 0) },
-    { ORDATA(cpu_state.S, cpu_state.S, 15) },
-    { ORDATA(cpu_state.MREG, cpu_state.MREG, 18) },
-    { ORDATA(cpu_state.U, cpu_state.U, 16) },
+    { ORDATA(P, cpu_state.reg_P, 16) }, // The order is important
+    { ORDATA(L, cpu_state.reg_L, 16) },
+    { ORDATA(G, cpu_state.reg_G, 16) },
+    { ORDATA(A, cpu_state.reg_A, 16) },
+    { ORDATA(E, cpu_state.reg_E, 16) },
+    { ORDATA(X, cpu_state.reg_X, 16) },
+    { ORDATA(V, cpu_state.reg_V, 16) },
+    { ORDATA(W, cpu_state.reg_W, 16) },
+    { ORDATA(reg_8, cpu_state.reg_8, 16) },
+    { FLDATA(C, cpu_state.C, 0) },
+    { FLDATA(OV, cpu_state.OV, 0) },
+    { FLDATA(MS, cpu_state.MS, 0) },
+    { FLDATA(MA, cpu_state.MA, 0) },
+    { FLDATA(PR, cpu_state.PR, 0) },
+    { ORDATA(MREG, cpu_state.MREG, 18) },
+    { ORDATA(S, cpu_state.S, 16) }, // FIXME or 15?
+    { ORDATA(U, cpu_state.U, 16) },
     /* Use separate variables for interrupt state instead of struct member */
-    { ORDATA(INT_REQ, cpu_state.intrp_level, 32) },
+    { ORDATA(INT_REQ, cpu_state.intrpt_mask, 32) },
     { ORDATA(INT_LVL, cpu_state.int_lvl, 5) },
     { ORDATA(SUSP_REQ, cpu_state.susp_req_bits, 32) },
     { ORDATA(SUSP_LVL, cpu_state.susp_active_level, 5) },
     { ORDATA(TRP_REQ, cpu_state.trp_req_bits, 16) },
-    { ORDATA(RL1, RL1, 16) },
-    { ORDATA(RL2, RL2, 16) },
-    { ORDATA(RL4, RL4, 16) },
     { ORDATA(CPU_MODE, cpu_state.cpu_mode, 2) },
     { DRDATA(INDLIM, ind_lim, 8), REG_NZ + PV_LEFT },
     { DRDATA(EXULIM, exu_lim, 8), REG_NZ + PV_LEFT },
@@ -272,7 +274,7 @@ uint32 trp_reqhi = 0; 		// Highest trap request
 t_stat sim_instr(void) {
     uint16 inst, save_P, trap_P;
     t_stat reason = 0;
-    cpu_state.intrp_level = cpu_state.intrp_level & ~1;
+    cpu_state.intrpt_mask = cpu_state.intrpt_mask & ~1;
     while (reason == 0) {
         if (cpu_astop) {
             cpu_astop = 0;
@@ -284,54 +286,23 @@ t_stat sim_instr(void) {
         }
         sim_interval--;
 
-        /* Check for traps
+        /* Check for traps.
          * Traps are not implemented in the current simulator FIXME
+         */
+         int trap = -1; // Dummy code to be fixed late
+         if(trap >= 0) { // FIXME
+		uint16 * trappc = 0;
+		mitra_trap(trap, cpu_state.reg_P, trappc);
+             }
+        /* 
+         * Check for suspensions
+         * Suspensions are called interrupts in modern parlance as they are unconditionaly processed at the end of the current instruction.
+         * In contrast Mitra's interrupts are managed by the code, not the hardware. 
          * The manual (section II-8.2) describes a hardware suspension system distinct from interrupts, operating at the micro-program level with a 4-deep stack.
          * Suspensions are used to couple peripherals requiring "urgent or frequent transfers" with 300 μs maximum response time. 
-         * Currently the emulator has no suspension machinery whatsoever. 
-         * For DMA-style peripherals relying on suspensions, this means those transfer paths are non-functional.
-         */
-
-        /* Check for interrupts */
-        cpu_state.int_reqhi = get_highest_interrupt();
+        */
+        mitra_suspension_process();
         
-        if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > cpu_state.int_lvl)) {
-            uint16 pa = int_vec[cpu_state.int_reqhi];
-            if (pa == 0) {
-                reason = STOP_ILLVEC;
-                break;
-            }
-            /* Save context of currently-running level (per DIT manual section)
-             * CPT is a 32-word table at absolute address M[10].
-             * CPT[i] = word address of the context save area for level i.
-             * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P */
-            if (cpu_state.high_speed == false) {
-		    /* Accept interrupt */
-		    reason = mitra_interrupt_accept(cpu_state.int_reqhi, cpu_state.high_speed);
-		    if (reason != SCPE_OK) break;
-		    
-		    if (pa != VEC_RTCP && rtc_pie) {
-		        cpu_state.intrp_level |= INT_RTCP;
-		    }
-            } else {
-                /* High speed interrupt processing
-                 * Acceptance of the high-speed interrupt includes the following operations:
-                 *	- Normal interrupts are placed in waiting status until acknowledgment of the high-speed interrupt.
-                 *	- Current indicators are saved in register 6 of block O.
-                 *	- R12 is loaded with the number of the block which is reserved for high-speed interrupt processing.
-                 *	- Indicators are loaded with the contents of register 6 in the reserved block.
-                 */
-                cpu_state.curr_bloc = cpu_state.intrp_level;
-            }
-
-            /* Accept interrupt */
-            reason = mitra_interrupt_accept(cpu_state.int_reqhi, cpu_state.high_speed);
-            if (reason != SCPE_OK) break;
-            
-            if (pa != VEC_RTCP && rtc_pie) {
-                cpu_state.intrp_level |= INT_RTCP;
-            }
-        } else {
             /* Normal instruction fetch */
             if (sim_brk_summ) {
                 static uint32 bmask[] = {
@@ -339,7 +310,7 @@ t_stat sim_instr(void) {
                     SWMASK('E') | SWMASK('M'),
                     SWMASK('E') | SWMASK('U')
                 };
-                uint32 btyp = sim_brk_test(cpu_state.reg_block[cpu_state.curr_bloc].P, bmask[cpu_state.cpu_mode]);
+                uint32 btyp = sim_brk_test(cpu_state.reg_P, bmask[cpu_state.cpu_mode]);
                 if (btyp) {
                     if (btyp & SWMASK('E'))
                         reason = STOP_IBKPT;
@@ -360,22 +331,21 @@ t_stat sim_instr(void) {
                     break;
                 }
             }
-            cpu_state.trap_P = save_P = cpu_state.reg_block[cpu_state.curr_bloc].P;
-            inst = read_word(cpu_state.reg_block[cpu_state.curr_bloc].P);
-            cpu_state.reg_block[cpu_state.curr_bloc].P = (cpu_state.reg_block[cpu_state.curr_bloc].P + 2) & 0x7FFF;
+            cpu_state.trap_P = save_P = cpu_state.reg_P;
+            inst = read_word(cpu_state.reg_P);
+            cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             if (inst != 0) {
                 MLOG_INST("--- sim_instr: fetched inst=%06o at P=%05o, calling one_inst() ---\n", inst, save_P);
                 reason = one_inst(inst, save_P, cpu_state.cpu_mode, & cpu_state.trap_P);
                 MLOG_INST("--- sim_instr: one_inst() returned reason=%d (cpu_state.trap_P=%05o) ---\n", reason, cpu_state.trap_P);
                 if (reason > 0 && reason != STOP_HALT) {
                     MLOG_INST("    P restored to %05o (was advanced to %05o) due to reason=%d\n",
-                              save_P, cpu_state.reg_block[cpu_state.curr_bloc].P, reason);
-                    cpu_state.reg_block[cpu_state.curr_bloc].P = save_P;
+                              save_P, cpu_state.reg_P, reason);
+                    cpu_state.reg_P = save_P;
                 }
                 if (reason == STOP_IONRDY)
                     reason = 0;
             }
-        }
     }
     if (pcq_r)
         pcq_r->qptr = pcq_p;
@@ -386,8 +356,8 @@ t_stat sim_instr(void) {
 int get_highest_interrupt(void) {
     int i;
     for (i = 31; i >= 0; i--) {
-        if (cpu_state.intrp_level & (1u << i)) {
-            MLOG_INT("[INT] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrp_level);
+        if (cpu_state.intrpt_mask & (1u << i)) {
+            MLOG_INT("[INT] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrpt_mask);
             return i;
         }
     }
@@ -450,14 +420,13 @@ void write_byte(t_addr va, uint8 val) {
 
 /* ========== CPU Reset and Management ========== */
 t_stat cpu_reset(DEVICE * dptr) {
-    cpu_state.reg_block[cpu_state.curr_bloc].A = cpu_state.reg_block[cpu_state.curr_bloc].E = cpu_state.reg_block[cpu_state.curr_bloc].X = cpu_state.reg_block[
-        cpu_state.curr_bloc].L = cpu_state.reg_block[cpu_state.curr_bloc].G = cpu_state.reg_block[cpu_state.curr_bloc].P = cpu_state.S = 0;
+    cpu_state.reg_A = cpu_state.reg_E = cpu_state.reg_X = cpu_state.reg_L = cpu_state.reg_G = cpu_state.reg_P = cpu_state.S = 0;
     cpu_state.curr_bloc = 0;
-    cpu_state.MREG = cpu_state.reg_block[cpu_state.curr_bloc].V = cpu_state.reg_block[cpu_state.curr_bloc].W = cpu_state.U = 0;
-    cpu_state.reg_block[cpu_state.curr_bloc].C = cpu_state.reg_block[cpu_state.curr_bloc].OV = cpu_state.MS = 0;
+    cpu_state.MREG = cpu_state.reg_V = cpu_state.reg_W = cpu_state.U = 0;
+    cpu_state.C = cpu_state.OV = cpu_state.MS = 0;
     cpu_state.MA = cpu_state.PR = 0;
     cpu_state.cpu_mode = 0;
-    cpu_state.intrp_level = 0;
+    cpu_state.intrpt_mask = 0;
     cpu_state.int_lvl = 0;
     cpu_state.susp_req_bits = 0;
     susp_stack_ptr = 0;
@@ -624,17 +593,17 @@ void inst_hist(uint32 c, uint32 pc, uint32 tp) {
     hst_p = (hst_p + 1);
     if (hst_p >= hst_lnt)
         hst_p = 0;
-    hst[hst_p].typ = tp | (cpu_state.reg_block[cpu_state.curr_bloc].OV << 4) | (cpu_state.cpu_mode << 5);
+    hst[hst_p].typ = tp | (cpu_state.OV << 4) | (cpu_state.cpu_mode << 5);
     hst[hst_p].P = pc;
-    hst[hst_p].A = cpu_state.reg_block[cpu_state.curr_bloc].A;
-    hst[hst_p].E = cpu_state.reg_block[cpu_state.curr_bloc].E;
-    hst[hst_p].X = cpu_state.reg_block[cpu_state.curr_bloc].X;
-    hst[hst_p].L = cpu_state.reg_block[cpu_state.curr_bloc].L;
-    hst[hst_p].G = cpu_state.reg_block[cpu_state.curr_bloc].G;
+    hst[hst_p].A = cpu_state.reg_A;
+    hst[hst_p].E = cpu_state.reg_E;
+    hst[hst_p].X = cpu_state.reg_X;
+    hst[hst_p].L = cpu_state.reg_L;
+    hst[hst_p].G = cpu_state.reg_G;
     hst[hst_p].S = cpu_state.S;
     hst[hst_p].U = cpu_state.U;
-    hst[hst_p].V = cpu_state.reg_block[cpu_state.curr_bloc].V;
-    hst[hst_p].W = cpu_state.reg_block[cpu_state.curr_bloc].W;
+    hst[hst_p].V = cpu_state.reg_V;
+    hst[hst_p].W = cpu_state.reg_W;
     hst[hst_p].MREG = cpu_state.MREG;
     hst[hst_p].ea = HIST_NOEA;
 }
@@ -760,8 +729,8 @@ void mitra_log_regs(const char *label) {
         return;
     mitra_log("    [%-9s] blk=%d P=%05o L=%05o G=%05o A=%06o E=%06o X=%06o C=%d O=%d cpu_state.MS=%d cpu_state.PR=%d cpu_state.MA=%d\n",
         label, cpu_state.curr_bloc,
-        cpu_state.reg_block[cpu_state.curr_bloc].P, cpu_state.reg_block[cpu_state.curr_bloc].L, cpu_state.reg_block[cpu_state.curr_bloc].G,
-        cpu_state.reg_block[cpu_state.curr_bloc].A, cpu_state.reg_block[cpu_state.curr_bloc].E, cpu_state.reg_block[cpu_state.curr_bloc].X,
-        cpu_state.reg_block[cpu_state.curr_bloc].C, cpu_state.reg_block[cpu_state.curr_bloc].OV, cpu_state.MS, cpu_state.PR, cpu_state.MA);
+        cpu_state.reg_P, cpu_state.reg_L, cpu_state.reg_G,
+        cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
+        cpu_state.C, cpu_state.OV, cpu_state.MS, cpu_state.PR, cpu_state.MA);
 }
 

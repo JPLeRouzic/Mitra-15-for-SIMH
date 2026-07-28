@@ -149,7 +149,7 @@ All devices will follow the same integration pattern, they provide:
 #define SAGEM_WORDS_PER_SECTOR (SAGEM_SECTOR_SIZE / 2)
 #define SAGEM_NUM_UNITS        2
 
-extern uint32 intrp_level;  /* interrupt request bits */
+extern uint32 intrpt_mask;  /* interrupt request bits */
 
 /* Declared in sim_disk.h; forward-declared here to avoid include-path issues */
 extern t_stat sim_disk_set_fmt(UNIT *uptr, int32 val, const char *cptr, void *desc);

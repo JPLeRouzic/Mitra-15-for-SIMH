@@ -109,7 +109,7 @@ All devices will follow the same integration pattern, they provide:
 #define ASR_CMD_LEC_SANS_IMP 0x09
 #define ASR_CMD_PERF_SANS_IMP 0x0A
 
-extern uint32 intrp_level;  /* interrupt request bits */
+extern uint32 intrpt_mask;  /* interrupt request bits */
 
 /* Memory Access Functions (defined in mitra_cpu.h) */
 extern t_value read_word(t_addr va);

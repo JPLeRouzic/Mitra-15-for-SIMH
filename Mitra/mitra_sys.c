@@ -73,7 +73,7 @@ extern t_value M[MAX_MEM_WORDS];
 
 char sim_name[] = "Mitra 15/30";
 
-REG *sim_PC = &cpu_reg[0];
+REG *sim_PC = &cpu_reg[0]; // In struct REG, P is the first element
 
 int32 sim_emax = 1;
 

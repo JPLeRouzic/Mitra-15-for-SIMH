@@ -74,10 +74,10 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc) {
      * Save faulting context in words 2, 3, 4 
      * "bytes 4-9" = word addresses 2, 3, 4 (2 bytes per word) */
     write_word(2, (pc - GPRIME) & 0x7FFF);
-    write_word(3, (cpu_state.reg_block[cpu_state.curr_bloc].L - GPRIME) & 0x7FFF);
+    write_word(3, (cpu_state.reg_L - GPRIME) & 0x7FFF);
     /* Indicators word: cpu_state.PR, cpu_state.MA, cpu_state.MS, OV, C */
     ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
-        ((cpu_state.MS & 1) << 13) | ((cpu_state.reg_block[cpu_state.curr_bloc].OV & 1) << 12) | ((cpu_state.reg_block[cpu_state.curr_bloc].C &
+        ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) | ((cpu_state.C &
             1) << 11);
     write_word(4, ind_word);
 
@@ -103,15 +103,15 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc) {
     cpu_state.PR = 1;
     cpu_state.MA = 1;
     
-    cpu_state.reg_block[cpu_state.curr_bloc].L = (sect0_Lbase + cpu_state.reg_block[cpu_state.curr_bloc].G) & 0x7FFF;
-    cpu_state.reg_block[cpu_state.curr_bloc].P = (sect0_Pbase + cpu_state.reg_block[cpu_state.curr_bloc].G) & 0x7FFF;
+    cpu_state.reg_L = (sect0_Lbase + cpu_state.reg_G) & 0x7FFF;
+    cpu_state.reg_P = (sect0_Pbase + cpu_state.reg_G) & 0x7FFF;
     
     *trappc = pc;
     cpu_state.trap_pending = FALSE;
     cpu_state.trp_req_bits = 0;
 
     MLOG("[TRAP] -> launching supervisor section 0: PRTS=%05o Pbase=%05o Lbase=%05o  new P=%05o new L=%05o (forced cpu_state.MS=1 cpu_state.PR=1 cpu_state.MA=1)\n",
-             prts_ptr, sect0_Pbase, sect0_Lbase, cpu_state.reg_block[cpu_state.curr_bloc].P, cpu_state.reg_block[cpu_state.curr_bloc].L);
+             prts_ptr, sect0_Pbase, sect0_Lbase, cpu_state.reg_P, cpu_state.reg_L);
     mitra_log_regs("trap-out");
     
     return SCPE_OK;
@@ -121,7 +121,7 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc) {
 /*
  * Suspension system interrupts micro-program to handle urgent I/O.
  * Stack depth: 4 levels
- * Saves: cpu_state.U, J, T registers and B, Tz, To, Ao indicators
+ * Saves: U, J, T registers and B, Tz, To, Ao indicators
  */
 t_stat mitra_suspension_request(uint16 susp_level) {
     if (susp_level >= 32) {
@@ -225,16 +225,56 @@ void io_suspension_dispatch(uint16 susp_level) {
 
 /* ========== Interrupt System (Section II-8.1) ========== */
 /*
- * Normal interrupt acceptance:
- * 1. Save context at address from CPT[int_level]
- * 2. Load new context from CPT[int_level]
- * 3. Update R8 (current level register)
- *
- * High-speed interrupt:
- * 1. Save indicators in block 0, register 6
- * 2. Switch to reserved block
- * 3. Load indicators from reserved block
- */
+The Mitra-15 does not simply save a few registers on the stack when an interrupt occurs as most microprocessors do.
+Instead, every interrupt level owns one or more complete execution contexts.
+Each program must reserve a memory area where are stored contexts for each interrupt.
+Register 8 contains the priority level of the running task.
+Interrupts are not processed immediately when a peripheral raised them.
+It's only when the CPU reaches a special microinstruction that the interrupt maybe accepted.
+It depends:
+	- is an interrupt pending?
+	- are interrupts enabled?
+	- is the new interrupt priority higher than the current level?
+* If yes, the interrupt is accepted.
+* If the interrupt level is lower than that of the current program the interrupt is placed in waiting state until the upper level is deactivated.
+The acceptance of an interrupt causes a branch to the corresponding subroutine.
+Each interrupt level is associated to a memory address containing the context pointer.
+The CPU loads the new context of the task associated with this interrupt level.
+=> The interrupt handler is not merely a function, it is a complete task.
+It has its own registers, program counter, variables.
+At the end of the interupting task, The OIT instruction acknowledges the interrupt, saves its context and selects another runnable task.
+one interrupt level can contain several tasks. OIT rotates between them.
+
+/* High-speed interrupts *
+Normally the CPU store registers in memory, then loads the new context from memory, which costs time.
+Instead, the optional high-speed interrupt uses another hardware register block.
+When this "high-speed task" is acknowledged, the control is returned to the interrupted task through a special OITR instruction by-passing the usual context swapping in
+block O.
+
+Comparative analysis of normal and high-speed interrupt
+• Acceptance of a normal interrupt includes the following operati ons :
+- Context of currently executed level (specified by R8) is saved in core memory.
+- Calling level (Na) is accepted and R8 is updated.
+- Context elements corresponding to Na are loaded in the registers.
+• Acknowledgment of a normal interrupt is performed by the final DIT instruction of the interrupt subroutine
+and includes the following operations:
+- Context of currently processed interrupt is saved in core memory.
+- Corresponding level is de-activated.
+- Waiting level is accepted and R8 is updated.
+- Context elements corresponding to the new level are loaded in the registers.
+
+• Acceptance of the high-speed interrupt includes the following operations:
+- Normal interrupts are placed in waiting status until acknowledgment of the high-speed interrupt.
+- Current indicators are saved in register 6 of block O.
+- R12 is loaded with the number of the block which is reserved for high-speed interrupt processing.
+- Indicators are loaded with the contents of register 6 in the reserved block.
+• Acknowledgment of the high-speed interrupt is performed by the final DITR instruction of the interrupt
+subroutine and includes the following operations:
+- Indicators are saved in register 6 of the reserved block.
+- R12 is cleared (return to block 0).
+- High-speed level is de-activated (normal interrupts are enabled).
+- Previous indicators saved in register 6 of block 0 a restored. 
+*/
 t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
     if (int_level >= 32) {
         MLOG("[INT] accept level=%d ** REJECTED (out of 0..31 range) **\n", int_level);
@@ -265,8 +305,8 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         cpu_state.PR = (ind_word >> 15) & 1;
         cpu_state.MA = (ind_word >> 14) & 1;
         cpu_state.MS = (ind_word >> 13) & 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = (ind_word >> 12) & 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].C = (ind_word >> 11) & 1;
+        cpu_state.OV = (ind_word >> 12) & 1;
+        cpu_state.C = (ind_word >> 11) & 1;
         mitra_log_regs("int-fast-out");
         
     } else {
@@ -289,16 +329,16 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         
         /* Save current context */
         uint16 ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
-                         ((cpu_state.MS & 1) << 13) | ((cpu_state.reg_block[cpu_state.curr_bloc].OV & 1) << 12) |
-                         ((cpu_state.reg_block[cpu_state.curr_bloc].C & 1) << 11);
+                         ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
+                         ((cpu_state.C & 1) << 11);
         
         write_word(ctx_ptr, ind_word);
-        write_word(ctx_ptr + 1, cpu_state.reg_block[cpu_state.curr_bloc].X);
-        write_word(ctx_ptr + 2, cpu_state.reg_block[cpu_state.curr_bloc].E);
-        write_word(ctx_ptr + 3, cpu_state.reg_block[cpu_state.curr_bloc].A);
-        write_word(ctx_ptr + 4, cpu_state.reg_block[cpu_state.curr_bloc].G);
-        write_word(ctx_ptr + 5, cpu_state.reg_block[cpu_state.curr_bloc].L);
-        write_word(ctx_ptr + 6, cpu_state.reg_block[cpu_state.curr_bloc].P);
+        write_word(ctx_ptr + 1, cpu_state.reg_X);
+        write_word(ctx_ptr + 2, cpu_state.reg_E);
+        write_word(ctx_ptr + 3, cpu_state.reg_A);
+        write_word(ctx_ptr + 4, cpu_state.reg_G);
+        write_word(ctx_ptr + 5, cpu_state.reg_L);
+        write_word(ctx_ptr + 6, cpu_state.reg_P);
         
         /* Switch to new level */
         MLOG("[INT] switching current level %d -> %d\n", cpu_state.int_lvl, int_level);
@@ -309,22 +349,22 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         cpu_state.PR = (ind_word >> 15) & 1;
         cpu_state.MA = (ind_word >> 14) & 1;
         cpu_state.MS = (ind_word >> 13) & 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = (ind_word >> 12) & 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].C = (ind_word >> 11) & 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].X = read_word(ctx_ptr + 1);
-        cpu_state.reg_block[cpu_state.curr_bloc].E = read_word(ctx_ptr + 2);
-        cpu_state.reg_block[cpu_state.curr_bloc].A = read_word(ctx_ptr + 3);
-        cpu_state.reg_block[cpu_state.curr_bloc].G = read_word(ctx_ptr + 4);
-        cpu_state.reg_block[cpu_state.curr_bloc].L = read_word(ctx_ptr + 5);
-        cpu_state.reg_block[cpu_state.curr_bloc].P = read_word(ctx_ptr + 6);
+        cpu_state.OV = (ind_word >> 12) & 1;
+        cpu_state.C = (ind_word >> 11) & 1;
+        cpu_state.reg_X = read_word(ctx_ptr + 1);
+        cpu_state.reg_E = read_word(ctx_ptr + 2);
+        cpu_state.reg_A = read_word(ctx_ptr + 3);
+        cpu_state.reg_G = read_word(ctx_ptr + 4);
+        cpu_state.reg_L = read_word(ctx_ptr + 5);
+        cpu_state.reg_P = read_word(ctx_ptr + 6);
         MLOG("[INT] program launched at level %d: P=%05o L=%05o (from CPT[%d]=%05o)\n",
-                 int_level, cpu_state.reg_block[cpu_state.curr_bloc].P, cpu_state.reg_block[cpu_state.curr_bloc].L, int_level, ctx_ptr);
+                 int_level, cpu_state.reg_P, cpu_state.reg_L, int_level, ctx_ptr);
         mitra_log_regs("int-out");
     }
     
     /* Clear interrupt request */
-    cpu_state.intrp_level &= ~(1u << int_level);
-    MLOG("[INT] cleared request bit for level=%d, remaining pending mask=%08X\n", int_level, cpu_state.intrp_level);
+    cpu_state.intrpt_mask &= ~(1u << int_level);
+    MLOG("[INT] cleared request bit for level=%d, remaining pending mask=%08X\n", int_level, cpu_state.intrpt_mask);
     
     return SCPE_OK;
 }
@@ -340,9 +380,9 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         /* DITR - Return from high-speed interrupt */
         /* Save indicators in reserved block */
         uint16 ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
-                         ((cpu_state.MS & 1) << 13) | ((cpu_state.reg_block[cpu_state.curr_bloc].OV & 1) << 12) |
-                         ((cpu_state.reg_block[cpu_state.curr_bloc].C & 1) << 11);
-        cpu_state.reg_block[cpu_state.curr_bloc].V = ind_word;
+                         ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
+                         ((cpu_state.C & 1) << 11);
+        cpu_state.reg_V = ind_word;
         
         /* Return to block 0 */
         cpu_state.curr_bloc = 0;
@@ -352,8 +392,8 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         cpu_state.PR = (ind_word >> 15) & 1;
         cpu_state.MA = (ind_word >> 14) & 1;
         cpu_state.MS = (ind_word >> 13) & 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].OV = (ind_word >> 12) & 1;
-        cpu_state.reg_block[cpu_state.curr_bloc].C = (ind_word >> 11) & 1;
+        cpu_state.OV = (ind_word >> 12) & 1;
+        cpu_state.C = (ind_word >> 11) & 1;
         MLOG("[INT-RET] DITR complete, register block switched back to 0\n");
         mitra_log_regs("ditret-fast-out");
         
@@ -374,21 +414,21 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         
         /* Save current context */
         uint16 ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
-                         ((cpu_state.MS & 1) << 13) | ((cpu_state.reg_block[cpu_state.curr_bloc].OV & 1) << 12) |
-                         ((cpu_state.reg_block[cpu_state.curr_bloc].C & 1) << 11);
+                         ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
+                         ((cpu_state.C & 1) << 11);
         
         write_word(ctx_ptr, ind_word);
-        write_word(ctx_ptr + 1, cpu_state.reg_block[cpu_state.curr_bloc].X);
-        write_word(ctx_ptr + 2, cpu_state.reg_block[cpu_state.curr_bloc].E);
-        write_word(ctx_ptr + 3, cpu_state.reg_block[cpu_state.curr_bloc].A);
-        write_word(ctx_ptr + 4, cpu_state.reg_block[cpu_state.curr_bloc].G);
-        write_word(ctx_ptr + 5, cpu_state.reg_block[cpu_state.curr_bloc].L);
-        write_word(ctx_ptr + 6, cpu_state.reg_block[cpu_state.curr_bloc].P);
+        write_word(ctx_ptr + 1, cpu_state.reg_X);
+        write_word(ctx_ptr + 2, cpu_state.reg_E);
+        write_word(ctx_ptr + 3, cpu_state.reg_A);
+        write_word(ctx_ptr + 4, cpu_state.reg_G);
+        write_word(ctx_ptr + 5, cpu_state.reg_L);
+        write_word(ctx_ptr + 6, cpu_state.reg_P);
         
         /* Find next highest pending interrupt */
         int next_lvl = -1;
         for (int i = 31; i >= 0; i--) {
-            if (cpu_state.intrp_level & (1u << i)) {
+            if (cpu_state.intrpt_mask & (1u << i)) {
                 next_lvl = i;
                 break;
             }
@@ -404,16 +444,16 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
             cpu_state.PR = (ind_word >> 15) & 1;
             cpu_state.MA = (ind_word >> 14) & 1;
             cpu_state.MS = (ind_word >> 13) & 1;
-            cpu_state.reg_block[cpu_state.curr_bloc].OV = (ind_word >> 12) & 1;
-            cpu_state.reg_block[cpu_state.curr_bloc].C = (ind_word >> 11) & 1;
-            cpu_state.reg_block[cpu_state.curr_bloc].X = read_word(ctx_ptr + 1);
-            cpu_state.reg_block[cpu_state.curr_bloc].E = read_word(ctx_ptr + 2);
-            cpu_state.reg_block[cpu_state.curr_bloc].A = read_word(ctx_ptr + 3);
-            cpu_state.reg_block[cpu_state.curr_bloc].G = read_word(ctx_ptr + 4);
-            cpu_state.reg_block[cpu_state.curr_bloc].L = read_word(ctx_ptr + 5);
-            cpu_state.reg_block[cpu_state.curr_bloc].P = read_word(ctx_ptr + 6);
+            cpu_state.OV = (ind_word >> 12) & 1;
+            cpu_state.C = (ind_word >> 11) & 1;
+            cpu_state.reg_X = read_word(ctx_ptr + 1);
+            cpu_state.reg_E = read_word(ctx_ptr + 2);
+            cpu_state.reg_A = read_word(ctx_ptr + 3);
+            cpu_state.reg_G = read_word(ctx_ptr + 4);
+            cpu_state.reg_L = read_word(ctx_ptr + 5);
+            cpu_state.reg_P = read_word(ctx_ptr + 6);
             MLOG("[INT-RET] program resumed at level %d: P=%05o L=%05o\n",
-                     next_lvl, cpu_state.reg_block[cpu_state.curr_bloc].P, cpu_state.reg_block[cpu_state.curr_bloc].L);
+                     next_lvl, cpu_state.reg_P, cpu_state.reg_L);
         } else {
             /* Return to level 0 */
             MLOG("[INT-RET] no more interrupts pending, returning to level 0\n");

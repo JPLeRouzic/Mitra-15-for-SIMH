@@ -57,7 +57,7 @@
 #define I_DISP_MASK     0x00FF
 
 /* Fixed GPRIME macro to correctly reference the G register in the current block */
-#define GPRIME ((cpu_state.MS) ? cpu_state.reg_block[cpu_state.curr_bloc].G : 0)
+#define GPRIME ((cpu_state.MS) ? cpu_state.reg_G : 0)
 
 #define VA_TO_PA(va) ((va) & 0x7FFF)
 
@@ -101,8 +101,15 @@ typedef struct {
  * CPU registers 
  * Each register has a unique address form 0 to 63 (or 127)
  * A high-speed interrupt causes an automatic switching of the register block. 
- * In the new block, the registers have then the same assignment as in block 0, but for other programs
+ * In the new block, the registers have then the same assignment as in block 0, but for other programs.
+ * A complex semantic was tried (cpu_state.reg_block[cpu_state.curr_bloc].A) but it didn't compiled correctly with REG cpu_reg[] structure.
+ * So now operation in the simulator occurs on a set of shim registers that are made pointing to the correct block.
+ * V and W are used by micro-programs.
  */
+    uint16 reg_A, reg_E, reg_X, reg_P, reg_L, reg_G, reg_V, reg_W;
+    uint8 C, OV;
+    uint16 reg_6, reg_8, reg_12;
+        
     struct {
         uint16 A, E, X, P, L, G, V, W;
         uint8 C, OV;
@@ -111,8 +118,11 @@ typedef struct {
     uint8 curr_bloc; // A pointer to the currect bloc of eight registers A, E, X, P, L, G, V, W
     
     /* System registers */
-    uint16 S, U, MREG;
-    
+    uint16 S ; // Memory address registers, bit 15 is always set to '0'
+    uint16 M ; // Receives the transferred memory word
+    uint16 U; //  not used by instruction set
+    uint16 MREG;
+   
     /*
     * Normal or "slave" mode, Priviledged or "master" mode
     * In normal mode (MS = 0), priviledged instructions cannot be executed and any attempt to execute such an instruction causes: A "mode violation" trap. 
@@ -121,12 +131,12 @@ typedef struct {
     * The various OSes are examples of programs which must be executed in master mode. (See CSV and RSV instructions).
     * It should be noted that addressing modes are different in master and slave modes (see Chapter V "Addressing modes") to provide absolute addressing capability.
     */
-    uint8 MS;
+    uint8 MS; // Master/slave
     uint8 MA; // Interrupt mask
     uint8 PR; // Access to protected areas
     
     /* Interrupt/High speed Interrupt/Suspension/Trap state */
-    uint32 intrp_level;  /* 32-bit bitmask of pending interrupts */
+    uint32 intrpt_mask;  /* 32-bit bitmask of pending interrupts */
     uint16 int_lvl;     /* Current interrupt level */
     t_bool high_speed;  /* TRUE if high-speed interrupt */
     uint32 int_reqhi;         /* Highest pending interrupt level */
@@ -143,7 +153,7 @@ typedef struct {
     uint16 trap_P;  /* Saved PC for trap */
     
     /* Front panel / CPU control state */
-    uint8 cpu_mode;
+    uint8 cpu_mode; // The MITRA 15/20 can have an optional instruction set MC2, MITRA 15/30 may also have MC3 (Minibus/IOP)
     int cpu_running; /* 1 = running, 0 = stopped */
     int interrupts_enabled;
     int routing_enabled;

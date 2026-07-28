@@ -179,7 +179,7 @@ extern void write_word(t_addr va, t_value val);
 extern uint8 read_byte(t_addr va);
 extern void write_byte(t_addr va, uint8 val);
 
-extern uint32 intrp_level;  /* interrupt request bits */
+extern uint32 intrpt_mask;  /* interrupt request bits */
 
 typedef struct {
     FILE *image;

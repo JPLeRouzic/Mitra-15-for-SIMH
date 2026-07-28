@@ -162,7 +162,7 @@ t_stat read_byte_io(uint32 addr, uint8 *val, int zio) {
    signature, adjust this definition to match it. */
 void io_interrupt_dispatch(uint32 int_req, t_bool high_speed) {
     MLOG_INT("  [IO-INT] io_interrupt_dispatch int_req=%08x high_speed=%d\n", int_req, (int)high_speed);
-    cpu_state.intrp_level |= int_req;
+    cpu_state.intrpt_mask |= int_req;
     if (high_speed) cpu_state.high_speed = TRUE;
 }
 
