@@ -253,7 +253,6 @@ uint16 susp_req;		// suspension requests
 uint16 susp_lvl;		// suspension trap level
 uint32 susp_reqhi = 0; 		// Highest suspension request
 
-SuspContext susp_stack[SUSP_STACK_DEPTH];
 int susp_stack_ptr = 0;
 
 /* De-activation Word Table (DVT) - Section III-5 */
@@ -421,7 +420,7 @@ void write_byte(t_addr va, uint8 val) {
 /* ========== CPU Reset and Management ========== */
 t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.reg_A = cpu_state.reg_E = cpu_state.reg_X = cpu_state.reg_L = cpu_state.reg_G = cpu_state.reg_P = cpu_state.S = 0;
-    cpu_state.curr_bloc = 0;
+    cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 0;
     cpu_state.MREG = cpu_state.reg_V = cpu_state.reg_W = cpu_state.U = 0;
     cpu_state.C = cpu_state.OV = cpu_state.MS = 0;
     cpu_state.MA = cpu_state.PR = 0;
@@ -728,7 +727,7 @@ void mitra_log_regs(const char *label) {
     if (!(mitra_log_enable && mitra_log_int))
         return;
     mitra_log("    [%-9s] blk=%d P=%05o L=%05o G=%05o A=%06o E=%06o X=%06o C=%d O=%d cpu_state.MS=%d cpu_state.PR=%d cpu_state.MA=%d\n",
-        label, cpu_state.curr_bloc,
+        label, cpu_state.SuspensionStack[susp_stack_ptr].J_reg,
         cpu_state.reg_P, cpu_state.reg_L, cpu_state.reg_G,
         cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
         cpu_state.C, cpu_state.OV, cpu_state.MS, cpu_state.PR, cpu_state.MA);

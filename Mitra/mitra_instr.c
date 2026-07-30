@@ -28,6 +28,7 @@ uint16 group_3_PX(uint16 inst, uint32 mode);
 uint16 group_3_P(uint16 inst, uint32 mode);
 
 extern UNIT cpu_unit ;
+extern int susp_stack_ptr;
 
 /* ========== Effective Address Calculation ========== 
 The manual defines three instruction classes and addressing modes:
@@ -409,7 +410,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
     overflow = 0;
 
     MLOG_INST("[INST] P=%05o inst=%06o (opcode=%02o disp=%03o hexcode=%04X) mode=%s blk=%d\n",
-              pc, inst, opcode, disp, inst & 0xF000, mode ? "MASTER" : "SLAVE", cpu_state.curr_bloc);
+              pc, inst, opcode, disp, inst & 0xF000, mode ? "MASTER" : "SLAVE", cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
     MLOG_INST("  regs-before: A=%06o E=%06o X=%06o C=%d O=%d L=%05o G=%05o\n",
               cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
               cpu_state.C, cpu_state.OV,

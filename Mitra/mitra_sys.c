@@ -60,6 +60,7 @@ extern UNIT cpu_unit;
 extern REG cpu_reg[];
 extern uint32 cpu_mode;
 extern t_value M[MAX_MEM_WORDS];
+extern int susp_stack_ptr;
 
 /* SCP data structures and interface routines
 
@@ -86,8 +87,6 @@ DEVICE *sim_devices[] = {
     &sagem_dev,
     &ptr_dev,
     &ptp_dev,
-//    &tti_dev,
-//    &tto_dev,
     &asr_dev,
 //    &lpt_dev,
     &lp_dev,
@@ -148,7 +147,7 @@ t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag)
     
     /* Set PC to start address (usually address 2 contains bootstrap) */
     if (MAXMEMSIZE > 2) 
-    	cpu_state.reg_block[cpu_state.curr_bloc].P = M[2];
+    	cpu_state.reg_block[cpu_state.SuspensionStack[susp_stack_ptr].J_reg].P = M[2];
     
     return SCPE_OK;
 }

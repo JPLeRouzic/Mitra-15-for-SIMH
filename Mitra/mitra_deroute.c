@@ -4,10 +4,10 @@
 #include "mitra_cpu.h"
 
 extern int susp_stack_ptr;
-extern SuspContext susp_stack[];
 extern UNIT cpu_unit ;
 extern t_addr cpt_base;
 extern t_value M[];
+extern int susp_stack_ptr;
 
 static int get_highest_interrupt(void);
 
@@ -157,15 +157,15 @@ t_stat mitra_suspension_process(void) {
              cpu_state.susp_active_level, cpu_state.susp_req_bits, susp_stack_ptr);
     
     /* Save current micro-processor state to suspension stack */
-    SuspContext *ctx = &susp_stack[susp_stack_ptr++];
-    ctx->U_reg = cpu_state.U;
-    ctx->J_reg = cpu_state.curr_bloc;  /* J register selects block */
-    ctx->T_reg = 0;          /* T register (micro-PC) - simulated */
-    ctx->B_ind = 0;          /* Micro-processor indicators */
-    ctx->Tz_ind = 0;
-    ctx->To_ind = 0;
-    ctx->Ao_ind = 0;
-    ctx->saved_bloc = cpu_state.curr_bloc;
+    cpu_state.SuspensionStack[susp_stack_ptr].U_reg = cpu_state.U;
+    cpu_state.SuspensionStack[susp_stack_ptr].J_reg = cpu_state.J_reg;  /* J register selects block */
+    cpu_state.SuspensionStack[susp_stack_ptr].T_reg = 0;          /* T register (micro-PC) - simulated */
+    cpu_state.SuspensionStack[susp_stack_ptr].B_ind = 0;          /* Micro-processor indicators */
+    cpu_state.SuspensionStack[susp_stack_ptr].Tz_ind = 0;
+    cpu_state.SuspensionStack[susp_stack_ptr].To_ind = 0;
+    cpu_state.SuspensionStack[susp_stack_ptr].Ao_ind = 0;
+    cpu_state.SuspensionStack[susp_stack_ptr].saved_bloc = cpu_state.SuspensionStack[susp_stack_ptr].J_reg;
+    susp_stack_ptr++;
     
     /* Clear the request bit */
     cpu_state.susp_req_bits &= ~(1u << cpu_state.susp_active_level);
@@ -173,17 +173,17 @@ t_stat mitra_suspension_process(void) {
     /* Execute suspension micro-program (device-specific handler) */
     /* This would call the appropriate device suspension handler */
     MLOG("[SUSP] dispatching to device handler io_suspension_dispatch(level=%d), saved cpu_state.U=%06o block=%d\n",
-             cpu_state.susp_active_level, ctx->U_reg, ctx->J_reg);
+             cpu_state.susp_active_level, cpu_state.SuspensionStack[susp_stack_ptr].U_reg, cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
     io_suspension_dispatch(cpu_state.susp_active_level);
     MLOG("[SUSP] returned from io_suspension_dispatch(level=%d)\n", cpu_state.susp_active_level);
     
     /* Restore micro-processor state */
     if (susp_stack_ptr > 0) {
-        SuspContext *rctx = &susp_stack[--susp_stack_ptr];
-        cpu_state.U = rctx->U_reg;
-        cpu_state.curr_bloc = rctx->saved_bloc;
+        --susp_stack_ptr;
+        cpu_state.U = cpu_state.SuspensionStack[susp_stack_ptr].U_reg;
+        cpu_state.SuspensionStack[susp_stack_ptr].J_reg = cpu_state.SuspensionStack[susp_stack_ptr].saved_bloc;
         MLOG("[SUSP] restored cpu_state.U=%06o block=%d, stack depth now=%d, remaining pending mask=%08X\n",
-                 cpu_state.U, cpu_state.curr_bloc, susp_stack_ptr, cpu_state.susp_req_bits);
+                 cpu_state.U, cpu_state.SuspensionStack[susp_stack_ptr].J_reg, susp_stack_ptr, cpu_state.susp_req_bits);
     }
     
     /* Check if more suspensions pending */
@@ -288,7 +288,7 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
     
     if (cpu_state.high_speed && (cpu_unit.flags & UNIT_HSINT)) {
         /* High-speed interrupt (5μs) */
-        MLOG("[INT] taking FAST/high-speed path: register-block switch %d -> 6\n", cpu_state.curr_bloc);
+        MLOG("[INT] taking FAST/high-speed path: register-block switch %d -> 6\n", cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
         /* Save current indicators in block 0, register 6 */
         uint16 ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
                          ((cpu_state.MS & 1) << 13) | ((cpu_state.reg_block[0].OV & 1) << 12) |
@@ -298,7 +298,7 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         cpu_state.reg_block[6].V = ind_word;  /* Use V register for indicator save */
         
         /* Switch to reserved block */
-        cpu_state.curr_bloc = 6;
+        cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 6;
         
         /* Load indicators from reserved block */
         ind_word = cpu_state.reg_block[6].V;
@@ -385,7 +385,7 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         cpu_state.reg_V = ind_word;
         
         /* Return to block 0 */
-        cpu_state.curr_bloc = 0;
+        cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 0;
         
         /* Restore indicators from block 0, register 6 */
         ind_word = cpu_state.reg_block[6].V;

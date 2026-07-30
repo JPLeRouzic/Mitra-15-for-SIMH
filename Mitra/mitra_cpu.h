@@ -91,6 +91,17 @@ static const uint32 int_vec[32] = {
 };
 
 /* ========== Type Definitions ========== */
+typedef struct {
+	    uint16 U_reg;     /* Universal register */
+	    uint8 J_reg;     /* J register (bits 0-4 block selector: bits 5 to 7 register, MITRA 15S_15M/15 Manuel de microprogrammation) */
+	    uint16 T_reg;     /* T register (micro-PC) */
+	    uint8  B_ind;     /* B indicator */
+	    uint8  Tz_ind;    /* Tz indicator */
+	    uint8  To_ind;    /* To indicator */
+	    uint8  Ao_ind;    /* Ao indicator */
+	    uint16 saved_bloc; /* Saved register block */
+	} SuspContext;
+
 /* Memory - word addressable */
 extern t_value M[MAX_MEM_WORDS]; // SIMH uses t_addr for addresses and t_value for values.
 
@@ -115,8 +126,8 @@ typedef struct {
         uint8 C, OV;
     } reg_block[REG_BLOCS];
     
-    uint8 curr_bloc; // A pointer to the currect bloc of eight registers A, E, X, P, L, G, V, W
-    
+    uint8 J_reg;     /* J register (bits 0-4 block selector: bits 5 to 7 register, MITRA 15S_15M/15 Manuel de microprogrammation) */
+
     /* System registers */
     uint16 S ; // Memory address registers, bit 15 is always set to '0'
     uint16 M ; // Receives the transferred memory word
@@ -159,22 +170,13 @@ typedef struct {
     int routing_enabled;
 	uint16 panel_addr_lights;
 	uint16 panel_data_lights;
+    /* Suspension stack - 4 levels deep */
+    SuspContext SuspensionStack[SUSP_STACK_DEPTH];
 } CPU_STATE;
 
 /* Global CPU state instance */
 extern CPU_STATE cpu_state;
 
-/* Suspension stack - 4 levels deep */
-typedef struct {
-    uint16 U_reg;     /* Universal register */
-    uint16 J_reg;     /* J register (block selector) */
-    uint16 T_reg;     /* T register (micro-PC) */
-    uint8  B_ind;     /* B indicator */
-    uint8  Tz_ind;    /* Tz indicator */
-    uint8  To_ind;    /* To indicator */
-    uint8  Ao_ind;    /* Ao indicator */
-    uint16 saved_bloc; /* Saved register block */
-} SuspContext;
 
 /* ========== Diagnostic Trace Logging ==========
  * Added to help debug segfaults / bad-EA / interrupt-priority bugs.
