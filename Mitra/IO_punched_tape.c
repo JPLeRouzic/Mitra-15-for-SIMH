@@ -166,9 +166,21 @@ static PTP_DEV ptp = {0};
 /* ----- Reader functions ----- */
 t_stat ptr_attach(UNIT *unit, const char *filename)
 {
-    if (ptr.image) fclose(ptr.image);
-    ptr.image = fopen(filename, "rb");
-    if (!ptr.image) return SCPE_IOERR;
+    if (ptr.image) 
+    	fclose(ptr.image);
+    	
+    t_stat r;
+    char *saved_filename = unit->filename;
+
+    /* Let the standard SIMH helper open the file and set UNIT_ATT,
+       fileref, filename, etc. */
+    unit->filename = NULL;
+    r = attach_unit(unit, filename);
+    if (r != SCPE_OK) {
+        unit->filename = saved_filename;
+        return r;
+    }
+
     ptr.pos = 0;
     ptr.nzc = 0;
     ptr.last_char = 0;
@@ -178,9 +190,9 @@ t_stat ptr_attach(UNIT *unit, const char *filename)
 
 t_stat ptr_detach(UNIT *unit)
 {
-    if (ptr.image) fclose(ptr.image);
     ptr.image = NULL;
     ptr.active = 0;
+    detach_unit(unit);
     return SCPE_OK;
 }
 
@@ -259,9 +271,21 @@ t_stat ptr_rd(uint16 e_reg, uint16 *result)
 /* ----- Punch functions ----- */
 t_stat ptp_attach(UNIT *unit, const char *filename)
 {
-    if (ptp.image) fclose(ptp.image);
-    ptp.image = fopen(filename, "wb");
-    if (!ptp.image) return SCPE_IOERR;
+    t_stat r;
+    char *saved_filename = unit->filename;
+
+    if (ptp.image) 
+    	fclose(ptp.image);
+
+    /* Let the standard SIMH helper open the file and set UNIT_ATT,
+       fileref, filename, etc. */
+    unit->filename = NULL;
+    r = attach_unit(unit, filename);
+    if (r != SCPE_OK) {
+        unit->filename = saved_filename;
+        return r;
+    }
+
     ptp.pos = 0;
     ptp.status = 0;
     return SCPE_OK;
@@ -269,9 +293,9 @@ t_stat ptp_attach(UNIT *unit, const char *filename)
 
 t_stat ptp_detach(UNIT *unit)
 {
-    if (ptp.image) fclose(ptp.image);
     ptp.image = NULL;
     ptp.active = 0;
+    detach_unit(unit);
     return SCPE_OK;
 }
 
@@ -391,8 +415,6 @@ REG ptr_reg[] = {
 
 /* PTR modifier table */
 MTAB ptr_mod[] = {
-    { MTAB_XTD|MTAB_VDV, 0, "CHANNEL", "CHANNEL",
-      &set_chan, &show_chan, NULL },
     { 0 }
     };
 
@@ -454,8 +476,6 @@ REG ptp_reg[] = {
     };
 
 MTAB ptp_mod[] = {
-    { MTAB_XTD|MTAB_VDV, 0, "CHANNEL", "CHANNEL",
-      &set_chan, &show_chan, NULL },
     { 0 }
     };
 

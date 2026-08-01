@@ -180,6 +180,7 @@ extern uint8 read_byte(t_addr va);
 extern void write_byte(t_addr va, uint8 val);
 
 extern uint32 intrpt_mask;  /* interrupt request bits */
+UNIT dri_unit[DRI_NUM_UNITS];
 
 typedef struct {
     FILE *image;
@@ -309,33 +310,59 @@ int dri_poll(int unit)
 }
 
 /* Attach a disk image file for a given unit */
-t_stat dri_attach(UNIT *unit, const char *filename)
+/* Derive unit index from the UNIT pointer that SIMH passes */
+static int dri_unit_index(UNIT *uptr)
 {
-	uint8 unitnb = 1; // FIXME
-	
-    if (unitnb < 0 || unitnb >= 2) return SCPE_IERR;
-    if (dri_state[unitnb].image) fclose(dri_state[unitnb].image);
-    dri_state[unitnb].image = fopen(filename, "rb+");
-    if (!dri_state[unitnb].image) dri_state[unitnb].image = fopen(filename, "wb+");
-    if (!dri_state[unitnb].image) return SCPE_IOERR;
-    fseek(dri_state[unitnb].image, 0, SEEK_END);
-    long size = ftell(dri_state[unitnb].image);
-    dri_state[unitnb].total_sectors = size / DRI_SECTOR_SIZE;
+    int idx = (int)(uptr - dri_unit);
+    if (idx < 0 || idx >= DRI_NUM_UNITS)
+        return -1;
+    return idx;
+}
+
+/* Attach a disk image file for a given unit */
+t_stat dri_attach(UNIT *uptr, const char *cptr)
+{
+    t_stat r;
+    int unitnb = dri_unit_index(uptr);
+    char *saved_filename;
+
+    if (unitnb < 0)
+        return SCPE_IERR;
+
+    saved_filename = uptr->filename;
+    uptr->filename = NULL;
+    r = attach_unit(uptr, cptr);
+    if (r != SCPE_OK) {
+        uptr->filename = saved_filename;
+        return r;
+    }
+
+    /* Remember the file handle opened by the standard helper */
+    dri_state[unitnb].image = uptr->fileref;
+
+    long size = sim_fsize(uptr->fileref);
+    if (size < 0)
+        size = 0;
+    dri_state[unitnb].total_sectors = (uint32)(size / DRI_SECTOR_SIZE);
     if (dri_state[unitnb].total_sectors == 0)
-        dri_state[unitnb].total_sectors = DRI_CYLINDERS * DRI_TRACKS_PER_CYL * DRI_SECTORS_PER_TRACK;
-    fseek(dri_state[unitnb].image, 0, SEEK_SET);
+        dri_state[unitnb].total_sectors =
+            DRI_CYLINDERS * DRI_TRACKS_PER_CYL * DRI_SECTORS_PER_TRACK;
+    uptr->capac = dri_state[unitnb].total_sectors * DRI_SECTOR_SIZE;
+
     dri_state[unitnb].status = 0;
+    dri_state[unitnb].active = 0;
     return SCPE_OK;
 }
 
-t_stat dri_detach(UNIT *unit)
+t_stat dri_detach(UNIT *uptr)
 {
-	uint8 unitnb = 1; // FIXME
-	
-    if (dri_state[unitnb].image) fclose(dri_state[unitnb].image);
-    dri_state[unitnb].image = NULL;
+    int unitnb = dri_unit_index(uptr);
+    if (unitnb < 0)
+        return SCPE_IERR;
+
+    dri_state[unitnb].image  = NULL;
     dri_state[unitnb].active = 0;
-    return SCPE_OK;
+    return detach_unit(uptr);
 }
 
 /* WD handler */
@@ -406,9 +433,11 @@ void dri_poll_devices(void)
 }
 
 /* ========== UNIT Definition ========== */
+#define DRI_CAPACITY (DRI_CYLINDERS * DRI_TRACKS_PER_CYL * DRI_SECTORS_PER_TRACK * DRI_SECTOR_SIZE) /* bytes */
+
 UNIT dri_unit[DRI_NUM_UNITS] = {
-    { UDATA(NULL, UNIT_FIX | UNIT_ATTABLE | UNIT_DISABLE, 0) },
-    { UDATA(NULL, UNIT_FIX | UNIT_ATTABLE | UNIT_DISABLE, 0) }
+    { UDATA(NULL, UNIT_FIX | UNIT_ATTABLE | UNIT_DISABLE, DRI_CAPACITY) },
+    { UDATA(NULL, UNIT_FIX | UNIT_ATTABLE | UNIT_DISABLE, DRI_CAPACITY) }
 };
 
 /* ========== MTAB for SET/SHOW ========== */

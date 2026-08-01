@@ -131,20 +131,27 @@ typedef struct {
 
 static ASR33_DEV asr_state = {0};
 
-/*
- * The ASR33 is the system console; it has no image file to attach.
- * asr33_attach / asr33_detach are kept as no-ops so mitra_sys.c can
- * reference them without errors.
- */
 t_stat asr33_attach(UNIT *unit, const char *filename)
 {
-    (void)filename;   /* console — nothing to attach */
+    t_stat r;
+    char *saved_filename = unit->filename;
+
+    /* Let the standard SIMH helper open the file and set UNIT_ATT,
+       fileref, filename, etc. */
+    unit->filename = NULL;
+    r = attach_unit(unit, filename);
+    if (r != SCPE_OK) {
+        unit->filename = saved_filename;
+        return r;
+    }
+
     return SCPE_OK;
 }
 
-void asr33_detach(void)
+t_stat asr33_detach(UNIT *unit)
 {
     asr_state.active = 0;
+    return detach_unit(unit);
 }
 
 static void asr_interrupt(void)
@@ -322,8 +329,8 @@ t_stat asr_reset(DEVICE *dptr)
 }
 
 /* Unit definition */
-UNIT asr_unit = { 
-    UDATA(&asr_svc, 0, 0) 
+UNIT asr_unit = {
+    UDATA(&asr_svc, UNIT_ATTABLE | UNIT_RO, 0)
 };
 
 /* Register definitions - using asr_state variables */
@@ -343,7 +350,7 @@ MTAB asr_mod[] = {
 
 /* Device definition */
 DEVICE asr_dev = {
-    "TTI",              /* name */
+    "ASR33",            /* name */
     &asr_unit,          /* units */
     asr_reg,            /* registers */
     asr_mod,            /* modifiers */
@@ -357,8 +364,8 @@ DEVICE asr_dev = {
     NULL,               /* deposit */
     &asr_reset,         /* reset */
     NULL,               /* boot */
-    NULL,               /* attach */
-    NULL,               /* detach */
+    &asr33_attach,        /* attach */
+    &asr33_detach,        /* detach */
     NULL,               /* ctxt */
     0,                  /* flags */
     0,                  /* dctrl */

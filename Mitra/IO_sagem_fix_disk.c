@@ -150,6 +150,7 @@ All devices will follow the same integration pattern, they provide:
 #define SAGEM_NUM_UNITS        2
 
 extern uint32 intrpt_mask;  /* interrupt request bits */
+UNIT sagem_unit[SAGEM_NUM_UNITS];
 
 /* Declared in sim_disk.h; forward-declared here to avoid include-path issues */
 extern t_stat sim_disk_set_fmt(UNIT *uptr, int32 val, const char *cptr, void *desc);
@@ -299,42 +300,59 @@ int sagem_poll(void)
 } */
 
 /* Attach disk image */
-t_stat sagem_attach(UNIT *unit, const char *filename)
+/* Derive unit index from the UNIT pointer that SIMH passes */
+static int sagem_unit_index(UNIT *uptr)
 {
-    uint8 unitnb = 0; // FIXME
-	
-    if (unitnb < 0 || unitnb >= 2) 
-    	return SCPE_IERR;
-    if (sagem_state[unitnb].image) 
-    	fclose(sagem_state[unitnb].image);
-    sagem_state[unitnb].image = fopen(filename, "rb+");
-    if (!sagem_state[unitnb].image) 
-    	sagem_state[unitnb].image = fopen(filename, "wb+");
-    if (!sagem_state[unitnb].image) 
-    	return SCPE_IOERR;
-    
-    fseek(sagem_state[unitnb].image, 0, SEEK_END);
-    long size = ftell(sagem_state[unitnb].image);
-    sagem_state[unitnb].total_sectors = size / SAGEM_SECTOR_SIZE;
+    int idx = (int)(uptr - sagem_unit);
+    if (idx < 0 || idx >= SAGEM_NUM_UNITS)
+        return -1;
+    return idx;
+}
+
+/* Attach disk image */
+t_stat sagem_attach(UNIT *uptr, const char *cptr)
+{
+    t_stat r;
+    int unitnb = sagem_unit_index(uptr);
+    char *saved_filename;
+
+    if (unitnb < 0)
+        return SCPE_IERR;
+
+    saved_filename = uptr->filename;
+    uptr->filename = NULL;
+    r = attach_unit(uptr, cptr);
+    if (r != SCPE_OK) {
+        uptr->filename = saved_filename;
+        return r;
+    }
+
+    /* Now that the standard helper has opened the file, remember it */
+    sagem_state[unitnb].image = uptr->fileref;
+
+    long size = sim_fsize(uptr->fileref);
+    if (size < 0)
+        size = 0;
+    sagem_state[unitnb].total_sectors = (uint32)(size / SAGEM_SECTOR_SIZE);
     if (sagem_state[unitnb].total_sectors == 0)
         sagem_state[unitnb].total_sectors = SAGEM_TRACKS * SAGEM_SECTORS_PER_TRACK;
-    unit->capac = sagem_state[unitnb].total_sectors * SAGEM_SECTOR_SIZE;
-    fseek(sagem_state[unitnb].image, 0, SEEK_SET);
-    sagem_state[unitnb].me = 0;
+    uptr->capac = sagem_state[unitnb].total_sectors * SAGEM_SECTOR_SIZE;
+
+    sagem_state[unitnb].me     = 0;
     sagem_state[unitnb].status = 0;
+    sagem_state[unitnb].active = 0;
     return SCPE_OK;
 }
 
-t_stat sagem_detach(UNIT *unit)
+t_stat sagem_detach(UNIT *uptr)
 {
-    uint8 unitnb = 0; // FIXME
-	
-    if (unitnb < 0 || unitnb >= 2) 
-    	return SCPE_IERR;
-    if (sagem_state[unitnb].image) fclose(sagem_state[unitnb].image);
-    sagem_state[unitnb].image = NULL;
+    int unitnb = sagem_unit_index(uptr);
+    if (unitnb < 0)
+        return SCPE_IERR;
+
+    sagem_state[unitnb].image  = NULL;
     sagem_state[unitnb].active = 0;
-    return SCPE_OK;
+    return detach_unit(uptr);
 }
 
 /* WD handler (E=5) - Write AP to &3D */

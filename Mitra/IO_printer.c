@@ -271,22 +271,27 @@ t_stat printer_rd(uint16 e_reg, uint16 *result)
 /* Attach printer_dev output to a file (or NULL for console) */
 t_stat printer_attach(UNIT *unit, const char *filename)
 {
+    t_stat r;
+    char *saved_filename = unit->filename;
+
     if (printer_dev.output) 
     	fclose(printer_dev.output);
-    if (filename && filename[0]) {
-        printer_dev.output = fopen(filename, "w");
-        if (!printer_dev.output) return SCPE_IOERR;
-    } else {
-        printer_dev.output = NULL;   /* use console */
+    /* Let the standard SIMH helper open the file and set UNIT_ATT, fileref, filename, etc. */
+    unit->filename = NULL;
+    r = attach_unit(unit, filename);
+    if (r != SCPE_OK) {
+        unit->filename = saved_filename;
+        return r;
     }
+
     return SCPE_OK;
 }
 
-void printer_detach(void)
+void printer_detach(UNIT *unit)
 {
-    if (printer_dev.output) fclose(printer_dev.output);
     printer_dev.output = NULL;
     printer_dev.active = 0;
+    detach_unit(unit);
 }
 
 void printer_reset(void)
@@ -321,7 +326,7 @@ t_stat lpt_attach(UNIT *uptr, const char *cptr)
 /* Device detach routine - must match t_stat (*)(UNIT *) */
 t_stat lpt_detach(UNIT *uptr)
 {
-    printer_detach();
+    printer_detach(uptr);
     return SCPE_OK;
 }
 

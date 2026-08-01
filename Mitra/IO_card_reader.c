@@ -1,96 +1,40 @@
-/* 
-CONTROL DATA 9220 CARD READER
-
-Channel Registers &1C to 28
-
-Read WD E 7
-
-         0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
-       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-  A    | err |                not used                 |
-       +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-
-err:
-
-	00 Binary read.
-	10 EBCDIC read.
-	11 Reader idle.
-
-Read Status RD
-	E: 17
-	Result in A
-
-	0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
-	+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-	A | | Error |
-	+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-
-Error:
-	Empty Magazine &40
-	Cell Errors &80
-	Torn Cards, Jam Under Cells &C0
-	Input Magazine Jam &A0
-	Cards Read Wrong &10
-	Transfer Failed &08
-	Stop &04
-	Not Operational &02
-	EBCDIC Error &O1
- 
-Channel programming is handled by the Mitra-15 I/O system.
-This file provides the device-specific logic for RD/WD commands.
-
-WD (E=7):
-   A bits 0-1: err
-       00 -> binary read
-       10 -> EBCDIC read
-       11 -> reader idle
-
-RD (E=17):
-   Returns status word in A:
-     bits: 0-15
-       6 (0x40) -> empty magazine
-       7 (0x80) -> cell errors
-       8-9 (0xC0) -> torn cards, jam under cells
-       5 (0xA0) -> input magazine jam
-       4 (0x10) -> cards read wrong
-       3 (0x08) -> transfer failed
-       2 (0x04) -> stop
-       1 (0x02) -> not operational
-       0 (0x01) -> EBCDIC error
-       
-All devices will follow the same integration pattern, they provide:
-	 _wd and _rd handlers, 
-	 a _poll function for asynchronous transfers, 
-	 interrupt generation via int_req, 
-	 and use the memory access helpers (read_byte_io, write_byte_io, read_word, write_word). 
-	 The device state is stored in static structures, 
-	 and attach/detach functions are provided for file‑based devices.
-*/
-
 /*
  * CONTROL DATA 9220 CARD READER (MITRA-15)
  *
- * WD (E=7): A bits 0-1 = mode
- *   00 – binary read
- *   10 – EBCDIC read
- *   11 – reader idle
+ * Device-specific logic for RD / WD instructions.
+ * Channel / DMA programming is the responsibility of the Mitra-15 I/O system;
+ * this module only implements the card-reader behaviour.
  *
- * RD (E=17): returns status word
- *   bit 6 (0x40) – empty magazine
- *   bit 7 (0x80) – cell errors
- *   bits 8-9 (0xC0) – torn cards / jam under cells
- *   bit 5 (0xA0) – input magazine jam
- *   bit 4 (0x10) – cards read wrong
- *   bit 3 (0x08) – transfer failed
- *   bit 2 (0x04) – stop
- *   bit 1 (0x02) – not operational
- *   bit 0 (0x01) – EBCDIC error
+ * WD (E = 7)
+ *   A bits 0-1 select mode:
+ *     00 – binary read
+ *     10 – EBCDIC read
+ *     11 – reader idle / stop
+ *   Before a non-idle WD the I/O system must have placed the target
+ *   memory address in cdr_state.mem_addr and the byte count in
+ *   cdr_state.bytes_left (and optionally the ZIO flag).
  *
- * Card image file: each card is 120 bytes (3 bytes per column × 80 columns).
- * The format matches the original cr_readrec packing:
- *   column 0: (byte0<<4)|(byte1>>4)
- *   column 1: ((byte1&0x0F)<<8)|byte2
- *   then next 3 bytes for columns 2&3, etc.
+ * RD (E = 17)
+ *   Returns the current status word in *result and clears it.
+ *   Status bits (same encoding as the original hardware):
+ *     0x40  empty magazine
+ *     0x80  cell errors
+ *     0xC0  torn cards / jam under cells
+ *     0xA0  input magazine jam
+ *     0x10  cards read wrong
+ *     0x08  transfer failed
+ *     0x04  stop
+ *     0x02  not operational
+ *     0x01  EBCDIC error
+ *
+ * Card image file format (identical to sigma_cr.c / original cr_readrec):
+ *   120-byte records, no headers.
+ *   Two 12-bit columns are packed into three consecutive bytes:
+ *     col 2k   = (b0 << 4) | (b1 >> 4)
+ *     col 2k+1 = ((b1 & 0x0F) << 8) | b2
+ *
+ * Transfer is driven by cdr_poll(), which is called from the common
+ * I/O poll loop.  Completion (or error) raises an interrupt.
  */
 
 #include "mitra_defs.h"
@@ -101,34 +45,32 @@ All devices will follow the same integration pattern, they provide:
 #include <string.h>
 #include <stdbool.h>
 
-#define CDR_COLUMNS      80
+#define CDR_COLUMNS        80
 #define CDR_BYTES_PER_CARD 120
 
-extern uint32 intrp_level;  /* interrupt request bits */
-
-/* Memory Access Functions (defined in mitra_cpu.h) */
+/* Memory-access helpers (declared in mitra_cpu.h / mitra_io.h) */
 extern t_value read_word(t_addr va);
-extern void write_word(t_addr va, t_value val);
-extern uint8 read_byte(t_addr va);
-extern void write_byte(t_addr va, uint8 val);
+extern void    write_word(t_addr va, t_value val);
+extern uint8   read_byte(t_addr va);
+extern void    write_byte(t_addr va, uint8 val);
+extern void    write_byte_io(t_addr va, uint8 val, int zio);
+extern void io_interrupt_dispatch(uint32 intr_lvl, t_bool hgh_spd);
 
 typedef struct {
-    FILE *image;           /* card deck file */
-    uint32 hopper;         /* cards left in hopper */
-    uint32 stacker[3];     /* 0=normal, 1=alt1, 2=alt2 */
-    uint32 stacker_sel;    /* selected stacker for current transfer */
-    uint16 status;         /* last RD status */
-    int    mode;           /* 0=binary, 1=ebcdic, 2=idle */
-    int    active;         /* transfer in progress */
-    uint32 buffer[CDR_COLUMNS]; /* 12‑bit column values */
-    uint32 col;            /* current column (0-79) */
-    uint32 bptr;           /* byte pointer for binary packing */
-    uint32 blnt;           /* buffer length (0 or CDR_COLUMNS) */
-    uint32 mem_addr;       /* current memory address */
-    uint32 bytes_left;     /* bytes remaining */
-    int    zio;            /* ZIO flag (shared memory) */
-    uint32 cb_addr;        /* control block address for interrupt */
-    int    waiting;        /* program waiting for completion */
+    FILE   *image;              /* open card-deck file */
+    uint32  hopper;             /* cards remaining in hopper */
+    uint32  stacker[3];         /* 0 = normal, 1 = alt1, 2 = alt2 */
+    uint32  stacker_sel;        /* selected stacker for current card */
+    uint16  status;             /* last status word (cleared by RD) */
+    int     mode;               /* 0 = binary, 1 = EBCDIC, 2 = idle */
+    int     active;             /* non-zero while a transfer is in progress */
+    uint32  buffer[CDR_COLUMNS];/* 12-bit column images */
+    uint32  col;                /* column index used by binary packing */
+    uint32  bptr;               /* next column to emit */
+    uint32  blnt;               /* columns currently held in buffer */
+    uint32  mem_addr;           /* next memory address to write */
+    uint32  bytes_left;         /* remaining byte count */
+    int     zio;                /* ZIO / shared-memory flag */
 } CDR_DEV;
 
 static CDR_DEV cdr_state = {0};
@@ -136,101 +78,123 @@ static CDR_DEV cdr_state = {0};
 /* Forward declarations */
 static void cdr_interrupt(void);
 static int  cdr_read_card(void);
-static void cdr_start_transfer(uint32 cmd, uint32 mem_addr, uint32 count, int zio);
+static void cdr_start_transfer(uint32 cmd);
 
-/* Attach a card deck file */
-t_stat cdr_attach(UNIT *unit, const char *filename)
+/* ------------------------------------------------------------------ */
+/* Attach / detach                                                    */
+/* ------------------------------------------------------------------ */
+
+t_stat cdr_attach(UNIT *uptr, const char *cptr)
 {
-    if (cdr_state.image) fclose(cdr_state.image);
-    cdr_state.image = fopen(filename, "rb");
-    if (!cdr_state.image) return SCPE_IOERR;
+    t_stat r;
+    char *saved_filename = uptr->filename;
 
-    fseek(cdr_state.image, 0, SEEK_END);
-    long size = ftell(cdr_state.image);
-    fseek(cdr_state.image, 0, SEEK_SET);
+    /* Let the standard SIMH helper open the file and set UNIT_ATT,
+       fileref, filename, etc. */
+    uptr->filename = NULL;
+    r = attach_unit(uptr, cptr);
+    if (r != SCPE_OK) {
+        uptr->filename = saved_filename;
+        return r;
+    }
 
-    if (size % CDR_BYTES_PER_CARD != 0) {
-        fclose(cdr_state.image);
-        cdr_state.image = NULL;
+    /* Card image must be an exact multiple of 120-byte records */
+    long size = sim_fsize(uptr->fileref);
+    if (size < 0 || (size % CDR_BYTES_PER_CARD) != 0) {
+        detach_unit(uptr);
         return SCPE_IOERR;
     }
-    cdr_state.hopper = size / CDR_BYTES_PER_CARD;
+
+    cdr_state.image  = uptr->fileref;   /* keep a convenient alias */
+    cdr_state.hopper = (uint32)(size / CDR_BYTES_PER_CARD);
     cdr_state.status = 0;
+    cdr_state.active = 0;
     return SCPE_OK;
 }
 
-void cdr_detach(void)
+t_stat cdr_detach(UNIT *uptr)
 {
-    if (cdr_state.image) {
-        fclose(cdr_state.image);
-        cdr_state.image = NULL;
-    }
+    cdr_state.image  = NULL;
     cdr_state.hopper = 0;
     cdr_state.active = 0;
+    return detach_unit(uptr);
 }
 
-/* Read one card from file into cdr_state.buffer[]. Returns 1 on success, 0 on EOF/error. */
+/* ------------------------------------------------------------------ */
+/* Card image reading (identical packing to sigma_cr.c)               */
+/* ------------------------------------------------------------------ */
+
 static int cdr_read_card(void)
 {
     uint8 data[CDR_BYTES_PER_CARD];
     if (fread(data, 1, CDR_BYTES_PER_CARD, cdr_state.image) != CDR_BYTES_PER_CARD)
         return 0;
 
-    /* Pack two columns per three bytes as in original cr_readrec */
+    /* Pack two 12-bit columns from every three bytes */
     for (int col = 0; col < CDR_COLUMNS; ) {
-        uint8 c1 = data[col/2 * 3];
-        uint8 c2 = data[col/2 * 3 + 1];
-        uint8 c3 = data[col/2 * 3 + 2];
+        uint8 c1 = data[col / 2 * 3];
+        uint8 c2 = data[col / 2 * 3 + 1];
+        uint8 c3 = data[col / 2 * 3 + 2];
         cdr_state.buffer[col++] = ((c1 << 4) | (c2 >> 4)) & 0xFFF;
         cdr_state.buffer[col++] = (((c2 & 0x0F) << 8) | c3) & 0xFFF;
     }
     return 1;
 }
 
-/* Start a new transfer (called from WD) */
-static void cdr_start_transfer(uint32 cmd, uint32 mem_addr, uint32 count, int zio)
-{
-    if (cdr_state.active) return;          /* already busy */
+/* ------------------------------------------------------------------ */
+/* Start a transfer (called from WD after mode decode)                */
+/* ------------------------------------------------------------------ */
 
-    cdr_state.mode = (cmd & 0x03) == 0x02 ? 2 : ((cmd & 0x03) == 0x01 ? 1 : 0);
-    if (cdr_state.mode == 2) {             /* idle command – do nothing */
-        cdr_state.status = 0x04;           /* stop */
+static void cdr_start_transfer(uint32 cmd)
+{
+    if (cdr_state.active)
+        return;                                 /* already busy */
+
+    /* Mode bits 0-1 of the WD data word */
+    cdr_state.mode = ((cmd & 0x03) == 0x02) ? 2 :
+                     ((cmd & 0x03) == 0x01) ? 1 : 0;
+
+    if (cdr_state.mode == 2) {                  /* idle / stop */
+        cdr_state.status = 0x04;
         cdr_interrupt();
         return;
     }
 
     if (cdr_state.hopper == 0) {
-        cdr_state.status = 0x40;           /* empty magazine */
+        cdr_state.status = 0x40;                /* empty magazine */
         cdr_interrupt();
         return;
     }
 
     if (!cdr_read_card()) {
-        cdr_state.status = 0x80;           /* cell error (EOF) */
+        cdr_state.status = 0x80;                /* cell error / unexpected EOF */
         cdr_interrupt();
         return;
     }
 
-    cdr_state.col = 0;
+    /* mem_addr / bytes_left / zio must already have been supplied by
+       the Mitra-15 I/O system before the WD that starts the transfer. */
+    cdr_state.col  = 0;
     cdr_state.bptr = 0;
     cdr_state.blnt = CDR_COLUMNS;
-    cdr_state.mem_addr = mem_addr;
-    cdr_state.bytes_left = count;
-    cdr_state.zio = zio;
     cdr_state.active = 1;
-    /* Transfer will be driven by cdr_poll() */
+    /* Transfer continues under cdr_poll() */
 }
 
-/* Poll routine – called from io_poll_devices() */
+/* ------------------------------------------------------------------ */
+/* Poll – called from the common I/O device poll loop                 */
+/* ------------------------------------------------------------------ */
+
 int cdr_poll(void)
 {
-    if (!cdr_state.active) return 0;
+    if (!cdr_state.active)
+        return 0;
 
     if (cdr_state.blnt == 0) {
-        /* No card in buffer – read next */
+        /* Need another card */
         if (!cdr_read_card()) {
             cdr_state.active = 0;
-            cdr_state.status = 0x80;       /* cell error */
+            cdr_state.status = 0x80;
             cdr_interrupt();
             return 1;
         }
@@ -239,34 +203,37 @@ int cdr_poll(void)
     }
 
     uint8 byte_out;
-    if (cdr_state.mode == 1) {             /* EBCDIC mode */
+
+    if (cdr_state.mode == 1) {                  /* EBCDIC (automatic) mode */
         uint16 row_bits = cdr_state.buffer[cdr_state.bptr++];
-        /* Count holes in rows 1-7 (bits 1-7) */
+        /* Count punches in rows 1-7 (bits 1-7 of the 12-bit column) */
         uint16 n = row_bits & 0x1FC;
         int bits = 0;
-        while (n) { n &= n-1; bits++; }
+        while (n) {
+            n &= n - 1;
+            bits++;
+        }
         if (bits > 1) {
             byte_out = 0x00;
-            cdr_state.status |= 0x01;      /* EBCDIC error */
+            cdr_state.status |= 0x01;           /* EBCDIC / data error */
         } else {
-            /* Simplified Hollerith → EBCDIC mapping.
-               A real implementation would use a 4096‑entry table.
-               Here we return the low 8 bits as a placeholder. */
+            /* Placeholder – a full implementation uses a 4096-entry
+               Hollerith-to-EBCDIC table (see sigma_cr.c). */
             byte_out = (uint8)(row_bits & 0xFF);
         }
-    } else {                         /* Binary mode – pack 12 bits into two bytes */
+    } else {                                    /* binary mode – 3 bytes / 2 columns */
         switch (cdr_state.col % 3) {
-            case 0:
-                byte_out = (cdr_state.buffer[cdr_state.bptr] >> 4) & 0xFF;
-                break;
-            case 1:
-                byte_out = ((cdr_state.buffer[cdr_state.bptr] & 0x0F) << 4);
-                cdr_state.bptr++;
-                byte_out |= ((cdr_state.buffer[cdr_state.bptr] & 0xF00) >> 8);
-                break;
-            case 2:
-                byte_out = cdr_state.buffer[cdr_state.bptr++] & 0xFF;
-                break;
+        case 0:
+            byte_out = (cdr_state.buffer[cdr_state.bptr] >> 4) & 0xFF;
+            break;
+        case 1:
+            byte_out  = (cdr_state.buffer[cdr_state.bptr] & 0x0F) << 4;
+            cdr_state.bptr++;
+            byte_out |= (cdr_state.buffer[cdr_state.bptr] & 0xF00) >> 8;
+            break;
+        case 2:
+            byte_out = cdr_state.buffer[cdr_state.bptr++] & 0xFF;
+            break;
         }
         cdr_state.col++;
     }
@@ -275,149 +242,137 @@ int cdr_poll(void)
     cdr_state.mem_addr++;
     cdr_state.bytes_left--;
 
-    /* End of card or requested length */
+    /* End of requested length or end of current card */
     if (cdr_state.bytes_left == 0 || cdr_state.bptr == cdr_state.blnt) {
         cdr_state.active = 0;
         cdr_state.hopper--;
         cdr_state.stacker[cdr_state.stacker_sel]++;
-        cdr_state.status = 0;              /* no error */
+        /* Preserve any EBCDIC error that occurred; otherwise clear */
+        if ((cdr_state.status & 0x01) == 0)
+            cdr_state.status = 0;
         cdr_interrupt();
     }
     return 1;
 }
 
-/* Generate interrupt (typical level 4 for card reader) */
+/* ------------------------------------------------------------------ */
+/* Interrupt (typical Mitra card-reader level = 4)                    */
+/* ------------------------------------------------------------------ */
+
 static void cdr_interrupt(void)
 {
-    uint32 int_req = (1 << 4);
+    uint32 int_req = (1u << 4);
     io_interrupt_dispatch(int_req, false);
 }
 
-/* WD handler (E=7) */
+/* ------------------------------------------------------------------ */
+/* WD handler (E = 7)                                                 */
+/* ------------------------------------------------------------------ */
+
 t_stat cdr_wd(uint16 e_reg, uint16 a_val)
 {
-    if (e_reg != 7) return SCPE_IOERR;
-    
-    /* Mode from A bits 0-1: 00=binary, 10=EBCDIC, 11=idle 
-       Channel registers: ADM at &1C (address -2), CM at &1D (word count) 
-    */
-    uint16 adm = read_word(0x1C);
-    uint16 cm  = read_word(0x1D);
-    uint32 mem_addr = adm + 2;
-    uint32 byte_count = cm * 2;  /* words → bytes */
-    cdr_start_transfer(a_val, mem_addr, byte_count, 0); /* ZIO not used for CR */
-    
-    cdr_state.zio = 0;
-    cdr_state.active = 1;
+    if (e_reg != 7)
+        return SCPE_IOERR;
 
+    /* The Mitra-15 I/O system is responsible for having already
+       written the transfer address into cdr_state.mem_addr and the
+       byte count into cdr_state.bytes_left (and optionally the ZIO
+       flag).  This handler only decodes the mode bits and starts
+       (or stops) the reader. */
+    cdr_start_transfer(a_val);
     return SCPE_OK;
 }
 
-/* RD handler (E=17) */
+/* ------------------------------------------------------------------ */
+/* RD handler (E = 17)                                                */
+/* ------------------------------------------------------------------ */
+
 t_stat cdr_rd(uint16 e_reg, uint16 *result)
 {
-    if (e_reg != 17) return SCPE_IOERR;
+    if (e_reg != 17)
+        return SCPE_IOERR;
+
     *result = cdr_state.status;
-    cdr_state.status = 0;                  /* clear on read */
+    cdr_state.status = 0;                       /* clear on read */
     return SCPE_OK;
 }
 
-/* Show status (for SHOW command) */
+/* ------------------------------------------------------------------ */
+/* SHOW / RESET helpers                                               */
+/* ------------------------------------------------------------------ */
+
 t_stat cdr_show(FILE *st, UNIT *uptr, int32 val, const void *desc)
 {
     fprintf(st, "Card Reader: hopper=%u, stacker[normal]=%u, alt1=%u, alt2=%u\n",
-            cdr_state.hopper, cdr_state.stacker[0], cdr_state.stacker[1], cdr_state.stacker[2]);
+            cdr_state.hopper,
+            cdr_state.stacker[0],
+            cdr_state.stacker[1],
+            cdr_state.stacker[2]);
     return SCPE_OK;
 }
 
-/* Reset device */
 void cdr_reset(void)
 {
     cdr_state.active = 0;
     cdr_state.status = 0;
-    /* do not detach file */
+    /* file remains attached */
 }
 
-/* ========== SIMH STRUCTURES ========== */
+/* ------------------------------------------------------------------ */
+/* SIMH scaffolding                                                   */
+/* ------------------------------------------------------------------ */
 
-/* Unit service routine */
 t_stat cr_svc(UNIT *uptr)
 {
     return SCPE_OK;
 }
 
-/* Device reset routine */
 t_stat cr_reset(DEVICE *dptr)
 {
     cdr_reset();
     return SCPE_OK;
 }
 
-/* Device attach routine */
 t_stat cr_attach(UNIT *uptr, const char *cptr)
 {
     return cdr_attach(uptr, cptr);
 }
 
-/* Device detach routine */
 t_stat cr_detach(UNIT *uptr)
 {
-    cdr_detach();
-    return SCPE_OK;
+    return cdr_detach(uptr);
 }
 
-/* Device boot routine */
 t_stat cr_boot(int32 unit_num, DEVICE *dptr)
 {
-    /* Bootstrap loader would go here */
     return SCPE_OK;
 }
 
-/* Show capacity routine */
 t_stat cr_show_cap(FILE *st, UNIT *uptr, int32 val, const void *desc)
 {
     return cdr_show(st, uptr, val, desc);
 }
 
-/* Set channel routine */
-t_stat set_chan(UNIT *uptr, int32 val, const char *cptr, void *desc)
-{
-    return SCPE_OK;
-}
-
-/* Show channel routine */
-t_stat show_chan(FILE *st, UNIT *uptr, int32 val, const void *desc)
-{
-    fprintf(st, "Channel not implemented\n");
-    return SCPE_OK;
-}
-
-/* Unit definition */
 UNIT cr_unit = {
     UDATA(&cr_svc, UNIT_ATTABLE | UNIT_RO, 0)
 };
 
-/* Register definitions */
 REG cr_reg[] = {
-    { DRDATA("HOPPER", cdr_state.hopper, 18) },
+    { DRDATA("HOPPER",   cdr_state.hopper,     18) },
     { DRDATA("STACKER0", cdr_state.stacker[0], 18) },
     { DRDATA("STACKER1", cdr_state.stacker[1], 18) },
     { DRDATA("STACKER2", cdr_state.stacker[2], 18) },
-    { ORDATA("STATUS", cdr_state.status, 16) },
-    { FLDATA("ACTIVE", cdr_state.active, 0) },
+    { ORDATA("STATUS",   cdr_state.status,     16) },
+    { FLDATA("ACTIVE",   cdr_state.active,      0) },
     { NULL }
 };
 
-/* Modifier table */
 MTAB cr_mod[] = {
-    {MTAB_XTD | MTAB_VDV, 0, "CHANNEL", "CHANNEL",
-        &set_chan, &show_chan, NULL, "Device Channel"},
-    { MTAB_XTD|MTAB_VDV, 0, "CAPACITY", NULL,
-        NULL, &cr_show_cap, NULL, "Card Input Status" },
-    {0}
+    { MTAB_XTD | MTAB_VDV, 0, "CAPACITY", NULL,
+      NULL, &cr_show_cap, NULL, "Card hopper / stacker status" },
+    { 0 }
 };
 
-/* Device definition */
 DEVICE cdr_dev = {
     "CR",               /* name */
     &cr_unit,           /* units */
@@ -446,7 +401,3 @@ DEVICE cdr_dev = {
     NULL,               /* help_ctxt */
     NULL                /* description */
 };
-
-
-
-
