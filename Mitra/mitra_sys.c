@@ -122,7 +122,7 @@ t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag) {
     int nibble_count = 0;
     t_stat r;
     
-    printf("\n[LOAD] Loading binary file: %s\n", fnam ? fnam : "(unnamed)");
+    sim_printf("\n[LOAD] Loading binary file: %s\n", fnam ? fnam : "(unnamed)");
     
     /* Paper tape format: 4 6-bit bytes per word */
     while ((c = fgetc(fileref)) != EOF) {
@@ -134,10 +134,10 @@ t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag) {
         if (nibble_count == 4) {
             if (addr < MAX_MEM_WORDS) {
                 M[addr] = data & 0xFFFF;
-                printf("[LOAD] addr=%04o data=%06o\n", addr, data & 0xFFFF);
+                sim_printf("[LOAD] addr=%04o data=%06o\n", addr, data & 0xFFFF);
                 addr++;
             } else {
-                printf("[LOAD] Warning: address %04o exceeds memory limit\n", addr);
+                sim_printf("[LOAD] Warning: address %04o exceeds memory limit\n", addr);
             }
             data = 0;
             nibble_count = 0;
@@ -148,13 +148,13 @@ t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag) {
     /* In Mitra-15, address 2 contains the entry point for the loaded program */
     if (addr > 0) {
         cpu_state.reg_P = M[2] & 0x7FFF;
-        printf("[LOAD] Entry point set to P=%04o (from M[2]=%06o)\n", 
+        sim_printf("[LOAD] Entry point set to P=%04o (from M[2]=%06o)\n", 
                cpu_state.reg_P, M[2]);
     } else {
-        printf("[LOAD] Warning: No data loaded, P not set\n");
+        sim_printf("[LOAD] Warning: No data loaded, P not set\n");
     }
     
-    printf("[LOAD] Load complete: %d words loaded\n", addr);
+    sim_printf("[LOAD] Load complete: %d words loaded\n", addr);
     return SCPE_OK;
 }
 

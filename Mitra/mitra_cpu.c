@@ -142,14 +142,17 @@ UNIT cpu_unit = {
 *    DRDATA(name, var, width) - For display-only numeric values
 */
 REG cpu_reg[] = {
-    { ORDATA(P, cpu_state.reg_P, 16) }, // The order is important
-    { ORDATA(L, cpu_state.reg_L, 16) },
-    { ORDATA(G, cpu_state.reg_G, 16) },
-    { ORDATA(A, cpu_state.reg_A, 16) },
-    { ORDATA(E, cpu_state.reg_E, 16) },
-    { ORDATA(X, cpu_state.reg_X, 16) },
-    { ORDATA(V, cpu_state.reg_V, 16) },
-    { ORDATA(W, cpu_state.reg_W, 16) },
+    { HRDATA(P, cpu_state.reg_P, 16) }, // The order is important. HRDATA (not ORDATA): P must
+                                         // be entered/displayed in hex to match cpu_dev's aradix=16.
+                                         // ORDATA defaults to radix 8, so e.g. "RUN 100" was being
+                                         // parsed as octal 100 = 0x40 instead of hex 0x100.
+    { HRDATA(L, cpu_state.reg_L, 16) },
+    { HRDATA(G, cpu_state.reg_G, 16) },
+    { HRDATA(A, cpu_state.reg_A, 16) },
+    { HRDATA(E, cpu_state.reg_E, 16) },
+    { HRDATA(X, cpu_state.reg_X, 16) },
+    { HRDATA(V, cpu_state.reg_V, 16) },
+    { HRDATA(W, cpu_state.reg_W, 16) },
     { ORDATA(reg_8, cpu_state.reg_8, 16) },
     { FLDATA(C, cpu_state.C, 0) },
     { FLDATA(OV, cpu_state.OV, 0) },
@@ -286,7 +289,7 @@ t_stat sim_instr(void) {
     t_stat reason = 0;
     cpu_state.intrpt_mask = cpu_state.intrpt_mask & ~1;
     while (reason == 0) {
-    printf("\ncpu_state.reg_P: %#010x\n", cpu_state.reg_P);
+    sim_printf("\ncpu_state.reg_P: %#010x\n", cpu_state.reg_P);
         if (cpu_astop) {
             cpu_astop = 0;
             return SCPE_STOP;
@@ -339,7 +342,7 @@ t_stat sim_instr(void) {
         cpu_state.int_reqhi = get_highest_interrupt();
         
         if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > cpu_state.curr_int_lvl)) {
-puts("sim_instr(void) 17");
+sim_printf("sim_instr(void) 17\n");
             uint16 pa;
 	    reason = cpt_lookup((uint16)cpu_state.int_reqhi, &pa);
 	    if (reason != SCPE_OK)
@@ -350,9 +353,9 @@ puts("sim_instr(void) 17");
              * CPT[i] = word address of the context save area for level i.
              * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P 
              */
-puts("sim_instr(void) 20");
+sim_printf("sim_instr(void) 20\n");
             reason = mitra_interrupt_accept(cpu_state.int_reqhi, high_speed);
-puts("sim_instr(void) 11");
+sim_printf("sim_instr(void) 11\n");
             if (reason != SCPE_OK) break;
             
 /*            if (pa != VEC_RTCP && rtc_pie) {
@@ -393,11 +396,11 @@ puts("sim_instr(void) 11");
             inst = read_word(cpu_state.reg_P);
             cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             if (inst != 0) {
-                printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x, calling one_inst() ---", inst, save_P);
+                sim_printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x, calling one_inst() ---", inst, save_P);
                 reason = one_inst(inst, save_P, cpu_state.cpu_mode, & cpu_state.trap_P);
-                printf("\n--- sim_instr: one_inst() returned reason=%#010x (cpu_state.trap_P=%#010x) ---", reason, cpu_state.trap_P);
+                sim_printf("\n--- sim_instr: one_inst() returned reason=%#010x (cpu_state.trap_P=%#010x) ---", reason, cpu_state.trap_P);
                 if (reason > 0 && reason != STOP_HALT) {
-                    printf("\n    P restored to %#010x (was advanced to %#010x) due to reason=%#010x",
+                    sim_printf("\n    P restored to %#010x (was advanced to %#010x) due to reason=%#010x",
                               save_P, cpu_state.reg_P, reason);
                     cpu_state.reg_P = save_P;
                 }
@@ -416,7 +419,7 @@ int get_highest_interrupt(void) {
     int i;
     for (i = 31; i >= 0; i--) {
         if (cpu_state.intrpt_mask & (1u << i)) {
-            printf("[INT] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrpt_mask);
+            sim_printf("[INT] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrpt_mask);
             return i;
         }
     }
@@ -428,19 +431,19 @@ t_value read_word(t_addr va) {
     uint16 pa = VA_TO_PA(va);
     if (pa >= MAX_MEM_WORDS) {
         /* Trigger address invalid trap (TRAP_AI) */
-        printf("\n    [MEM] trap in read_word  va=%#010x pa=%#010x  ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
+        sim_printf("\n    [MEM] trap in read_word  va=%#010x pa=%#010x  ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
                  va, pa, MAX_MEM_WORDS);
         cpu_state.trp_req_bits |= (1 << TRAP_AI);
         cpu_state.trap_pending = TRUE;
         return 0;
     }
-    printf("\n    [MEM] read_word  va=%#010x, pa=%#010x, value: %#010x", va, pa, M[pa]);
+    sim_printf("\n    [MEM] read_word  va=%#010x, pa=%#010x, value: %#010x", va, pa, M[pa]);
     return M[pa];
 }
 void write_word(t_addr va, t_value val) {
     t_addr pa = VA_TO_PA(va);
     if (pa >= MAX_MEM_WORDS) {
-        printf("\n    [MEM] write_word va=%#010x pa=%d val=%#010x ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
+        sim_printf("\n    [MEM] write_word va=%#010x pa=%d val=%#010x ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
                  va, pa, val, MAX_MEM_WORDS);
         cpu_state.trp_req_bits |= (1 << TRAP_AI);
         cpu_state.trap_pending = TRUE;
@@ -448,20 +451,20 @@ void write_word(t_addr va, t_value val) {
     }
     /* Check memory protection */
     if (!cpu_state.PR && (M[pa] & 0x0001)) {  /* Protection bit set and cpu_state.PR=0 */
-        printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x ** PROTECTED ** (cpu_state.PR=0, prot bit set) -> TRAP_PM queued",
+        sim_printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x ** PROTECTED ** (cpu_state.PR=0, prot bit set) -> TRAP_PM queued",
                  va, pa, val);
         cpu_state.trp_req_bits |= (1 << TRAP_PM);
         cpu_state.trap_pending = TRUE;
         return;
     }
-    printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x (was %#010x)", va, pa, val, M[pa]);
+    sim_printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x (was %#010x)", va, pa, val, M[pa]);
     M[pa] = val;
 }
 uint8 read_byte(t_addr va) {
     uint16 word_addr = va >> 1;
     uint16 word = read_word(word_addr);
     uint8 b = (va & 1) ? (word & 0xFF) : ((word >> 8) & 0xFF);
-    printf("\n    [MEM] read_byte  va=%#010x (word %#010x, %#010x byte) -> %#010x",
+    sim_printf("\n    [MEM] read_byte  va=%#010x (word %#010x, %#010x byte) -> %#010x",
              va, word_addr, (va & 1) ? "low" : "high", b);
     return b;
 }
@@ -472,7 +475,7 @@ void write_byte(t_addr va, uint8 val) {
         word = (word & 0xFF00) | val;
     else
         word = (word & 0x00FF) | (val << 8);
-    printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
+    sim_printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
              va, word_addr, (va & 1) ? "low" : "high", val);
     write_word(word_addr, word);
 }
@@ -533,7 +536,7 @@ return SCPE_OK;
 
 t_stat cpu_dep(t_value val, t_addr addr, UNIT * uptr, int32 sw) {
     uint32 pa = addr & 0x7FFF;
-    printf("\npa: %#010x \n", pa);
+    sim_printf("\npa: %#010x", pa);
     if (pa >= MAX_MEM_WORDS)
         return SCPE_NXM;
     M[pa] = val & DMASK;

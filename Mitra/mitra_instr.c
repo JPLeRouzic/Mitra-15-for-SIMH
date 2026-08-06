@@ -398,16 +398,16 @@ Bits 0-2 do not completely specify the address mode:
 */
 t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
 
-printf("one_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, mode, *trappc);
+sim_printf("one_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, mode, *trappc);
 
     uint16 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
     uint16 disp = inst & I_DISP_MASK;
 
     * trappc = pc;
 
-    printf("[INST] P=%#010x inst=%#010x (opcode=%#010x disp=%#010x hexcode=%04X) mode=%s blk=%#010x\n",
+    sim_printf("[INST] P=%#010x inst=%#010x (opcode=%#010x disp=%#010x hexcode=%04X) mode=%s blk=%#010x\n",
               pc, inst, opcode, disp, inst & 0xF000, mode ? "MASTER" : "SLAVE", cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
-    printf("  regs-before: A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x G=%#010x\n",
+    sim_printf("  regs-before: A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x G=%#010x\n",
               cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
               cpu_state.C, cpu_state.OV,
               cpu_state.reg_L, cpu_state.reg_G);
@@ -425,11 +425,11 @@ printf("one_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", 
             if (opcode == 0x04) {  /* SYS */
                 if (disp == 0x01 || disp == 0x03 || disp == 0x08 || disp == 0x0C || disp == 0x20) {
                     /* DIT, WD, STM, CLM, DITR are privileged */
-                    printf("  ** privileged SYS function (disp=%#010x) attempted in SLAVE mode -> TRAP_VM **\n", disp);
+                    sim_printf("  ** privileged SYS function (disp=%#010x) attempted in SLAVE mode -> TRAP_VM **\n", disp);
                     return mitra_trap(TRAP_VM, pc, trappc);
                 }
             } else {
-                printf("  ** privileged instruction (opcode=%#010x) attempted in SLAVE mode -> TRAP_VM **\n", opcode);
+                sim_printf("  ** privileged instruction (opcode=%#010x) attempted in SLAVE mode -> TRAP_VM **\n", opcode);
                 return mitra_trap(TRAP_VM, pc, trappc);
             }
         }
@@ -507,7 +507,7 @@ printf("one_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", 
             break;
     }
     
-    printf("  regs-after : P=%#010x A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x G=%#010x\n",
+    sim_printf("  regs-after : P=%#010x A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x G=%#010x\n",
               cpu_state.reg_P, cpu_state.reg_A, cpu_state.reg_E,
               cpu_state.reg_X, cpu_state.C, cpu_state.OV,
               cpu_state.reg_L, cpu_state.reg_G);
@@ -517,11 +517,11 @@ printf("one_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", 
 	    int cause = mitra_resolve_trap_cause(cpu_state.trp_req_bits);
 	    if (cause < 0) {
 		/* Defensive: flag was set but no cause bit is actually present. */
-		printf("  -> trap_pending set but trp_req_bits=0, clearing spurious trap\n");
+		sim_printf("  -> trap_pending set but trp_req_bits=0, clearing spurious trap\n");
 		cpu_state.trap_pending = FALSE;
 	    } else {
 		cpu_state.trap_cause = cause;
-		printf("  -> trap pending (cause=%d %s) after execution, dispatching mitra_trap()\n",
+		sim_printf("  -> trap pending (cause=%d %s) after execution, dispatching mitra_trap()\n",
 		         cause, mitra_trap_name(cause));
 		return mitra_trap(cause, pc, trappc);
 	    }
