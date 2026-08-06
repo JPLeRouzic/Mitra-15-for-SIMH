@@ -76,15 +76,11 @@ uint8 chan_cpw[NUM_CHAN];                               /* char per word */
 uint8 chan_cnt[NUM_CHAN];                               /* char count */
 uint16 chan_mode[NUM_CHAN];                             /* mode */
 uint16 chan_flag[NUM_CHAN];                             /* flags */
-static const char *chname[NUM_CHAN] = {
-    "W", "Y", "C", "D", "E", "F", "G", "H"
-    };
 
 extern t_value M[MAX_MEM_WORDS];                            /* memory */
 extern uint32 int_req;                                  /* int req */
 extern uint32 xfr_req;                                  /* xfer req */
 extern uint32 alert;                                    /* pin/pot alert */
-extern uint32 X, EM2, EM3, ion, bpt;
 extern uint32 cpu_mode;
 extern int32 rtc_pie;
 extern int32 stop_invins, stop_invdev, stop_inviop;
@@ -128,7 +124,7 @@ struct aldisp {
 
 /* ========== System Initialization ========== */
 void io_init_system(void) {
-    MLOG("[IO-INIT] resetting all devices: DRI, SAGEM, CDR, ASR33, PANEL, PTR, PTP, PRINTER\n");
+    printf("\n[IO-INIT] resetting all devices: DRI, SAGEM, CDR, ASR33, PANEL, PTR, PTP, PRINTER\n");
     dri_reset();
     sagem_reset();
     cdr_reset();
@@ -137,7 +133,7 @@ void io_init_system(void) {
     ptr_reset();
     ptp_reset();
     printer_reset();
-    MLOG("[IO-INIT] all devices reset\n");
+    printf("\n[IO-INIT] all devices reset\n");
 }
 
 t_bool io_init(void) {
@@ -146,13 +142,13 @@ t_bool io_init(void) {
 }
 
 void write_byte_io(uint32 addr, uint8 val, int zio) {
-    MLOG("  [IO-MEM] write_byte_io addr=%05o zio=%d val=%03o\n", addr, zio, val);
+    printf("\n  [IO-MEM] write_byte_io addr=%05o zio=%d val=%03o\n", addr, zio, val);
     write_byte((uint16)addr, val);
 }
 
 t_stat read_byte_io(uint32 addr, uint8 *val, int zio) {
     *val = read_byte((uint16)addr);
-    MLOG("  [IO-MEM] read_byte_io  addr=%05o zio=%d val=%03o\n", addr, zio, *val);
+    printf("\n  [IO-MEM] read_byte_io  addr=%05o zio=%d val=%03o\n", addr, zio, *val);
     return SCPE_OK;
 }
 
@@ -161,7 +157,7 @@ t_stat read_byte_io(uint32 addr, uint8 *val, int zio) {
    with int_req already built as (1 << level). If mitra_io.h declares a different
    signature, adjust this definition to match it. */
 void io_interrupt_dispatch(uint32 int_req, t_bool high_speed) {
-    MLOG_INT("  [IO-INT] io_interrupt_dispatch int_req=%08x high_speed=%d\n", int_req, (int)high_speed);
+    printf("\n  [IO-INT] io_interrupt_dispatch int_req=%08x high_speed=%d\n", int_req, (int)high_speed);
     cpu_state.intrpt_mask |= int_req;
     if (high_speed) cpu_state.high_speed = TRUE;
 }

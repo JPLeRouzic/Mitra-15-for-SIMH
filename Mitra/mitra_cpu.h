@@ -78,18 +78,6 @@
 #define SUSP_INTERNAL_PANEL 2
 #define SUSP_INTERNAL_PWR   3
 
-/* Interrupt vectors */
-static const uint32 int_vec[32] = {
-    0, 0, 0, 0,
-    VEC_FORK, VEC_DRM, VEC_MUXCF, VEC_MUXCO,
-    VEC_MUXT, VEC_MUXR, VEC_HEOR, VEC_HZWC,
-    VEC_GEOR, VEC_GZWC, VEC_FEOR, VEC_FZWC,
-    VEC_EEOR, VEC_EZWC, VEC_DEOR, VEC_DZWC,
-    VEC_CEOR, VEC_CZWC, VEC_WEOR, VEC_YEOR,
-    VEC_WZWC, VEC_RTCP, VEC_RTCS, VEC_IPAR,
-    VEC_CPAR, VEC_PWRF, VEC_PWRO, 0
-};
-
 /* ========== Type Definitions ========== */
 typedef struct {
 	    uint16 U_reg;     /* Universal register */
@@ -110,19 +98,19 @@ extern t_value M[MAX_MEM_WORDS]; // SIMH uses t_addr for addresses and t_value f
 typedef struct {
 /* 
  * CPU registers 
- * Each register has a unique address form 0 to 63 (or 127)
+ * Each register has a unique address from 0 to 63 (or 127)
  * A high-speed interrupt causes an automatic switching of the register block. 
  * In the new block, the registers have then the same assignment as in block 0, but for other programs.
- * A complex semantic was tried (cpu_state.reg_block[cpu_state.curr_bloc].A) but it didn't compiled correctly with REG cpu_reg[] structure.
+ * A complex semantic was tried (cpu_state.reg_block[cpu_state.curr_bloc].A) but it didn't compiled correctly by messing with with REG cpu_reg[] structure.
  * So now operation in the simulator occurs on a set of shim registers that are made pointing to the correct block.
  * V and W are used by micro-programs.
  */
     uint16 reg_A, reg_E, reg_X, reg_P, reg_L, reg_G, reg_V, reg_W;
     uint8 C, OV;
-    uint16 reg_6, reg_8, reg_12;
+    uint16 reg_8, reg_12;
         
     struct {
-        uint16 A, E, X, P, L, G, V, W;
+        uint16 A, E, X, P, L, G, Reg_6, Reg_unknown;
         uint8 C, OV;
     } reg_block[REG_BLOCS];
     
@@ -148,9 +136,9 @@ typedef struct {
     
     /* Interrupt/High speed Interrupt/Suspension/Trap state */
     uint32 intrpt_mask;  /* 32-bit bitmask of pending interrupts */
-    uint16 int_lvl;     /* Current interrupt level */
+    int16 curr_int_lvl;     /* Current interrupt level not unit16 */
     t_bool high_speed;  /* TRUE if high-speed interrupt */
-    uint32 int_reqhi;         /* Highest pending interrupt level */
+    int32 int_reqhi;         /* Highest pending interrupt level */
     
     /* Suspension request bits (32 levels, 8 per stack level) */
     uint32 susp_req_bits;
@@ -176,35 +164,6 @@ typedef struct {
 
 /* Global CPU state instance */
 extern CPU_STATE cpu_state;
-
-
-/* ========== Diagnostic Trace Logging ==========
- * Added to help debug segfaults / bad-EA / interrupt-priority bugs.
- * Everything is written to a plain text file, line-buffered and
- * fflush()'d after every line so that the trace survives a crash
- * (including SIGSEGV) instead of being lost in a stdio buffer.
- *
- * Runtime toggles (deposit into the CPU device registers, e.g.
- * from the SIMH console: "d cpu LOG_ENABLE 0" or "d cpu LOG_MEM 0")
- *   mitra_log_enable - master on/off switch (default: on)
- *   mitra_log_inst   - per-instruction decode/register trace
- *   mitra_log_mem    - every read_word/write_word/read_byte/write_byte
- *   mitra_log_int    - interrupts, fast interrupts, suspensions, traps
- */
-extern void mitra_log(const char *fmt, ...);
-extern int32 mitra_log_enable;   /* master enable                         */
-extern int32 mitra_log_inst;   /* instruction decode / register trace   */
-extern int32 mitra_log_mem;   /* memory access trace (address, value)  */
-extern int32 mitra_log_int;   /* interrupt/fast-int/suspension/trap    */
-extern int32 mitra_log_io;   /* device I/O: RD/WD, attach/detach, poll */
-
-static FILE *mitra_log_fp;
-static const char *MITRA_LOG_FILENAME = "mitra_trace.log";
-
-#define MLOG(...)      mitra_log(__VA_ARGS__)
-#define MLOG_INST(...) do { if (mitra_log_enable && mitra_log_inst) mitra_log(__VA_ARGS__); } while (0)
-#define MLOG_MEM(...)  do { if (mitra_log_enable && mitra_log_mem)  mitra_log(__VA_ARGS__); } while (0)
-#define MLOG_INT(...)  do { if (mitra_log_enable && mitra_log_int)  mitra_log(__VA_ARGS__); } while (0)
 
 typedef struct {
     uint32 typ;
@@ -242,6 +201,8 @@ static void mul32(uint16 a, uint16 b, uint16 * high, uint16 * low);
 static int div32(uint16 high, uint16 low, uint16 divisor, uint16 * quot, uint16 * rem);
 static void double_to_mitra(double v, uint16 * A, uint16 * E);
 static double mitra_to_double(uint16 A, uint16 E);
+const char *mitra_trap_name(int trap);
+int mitra_resolve_trap_cause(uint32 trp_req_bits);
 
 /* Enhanced trap and suspension functions */
 t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc);
@@ -249,6 +210,7 @@ t_stat mitra_suspension_request(uint16 susp_level);
 t_stat mitra_suspension_process(void);
 t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed);
 t_stat mitra_interrupt_return(t_bool high_speed);
+t_stat cpt_lookup(uint16 level, uint16 *ctx_ptr_out);
 
 t_stat set_cc(void);
 t_stat cpu_ex(t_value * vptr, t_addr addr, UNIT * uptr, int32 sw);

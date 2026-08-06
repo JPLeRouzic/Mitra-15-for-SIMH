@@ -5,7 +5,7 @@
 
 int get_highest_interrupt(void);
 
-uint16 group_1(uint16 target_address, uint16 inst);
+uint16 group_1(t_value mem_value, uint16 target_address, uint16 inst);
 uint16 group_2(uint16 inst, uint16 address, uint32 mode);
 
 uint16 group_1_DL(uint16 inst);
@@ -397,21 +397,17 @@ Bits 0-2 do not completely specify the address mode:
 7	111:	DG, IL, PX, P,
 */
 t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
-// t_stat one_inst (uint32 inst, uint32 pc, uint32 mode, uint32 *trappc)
+
+printf("one_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, mode, *trappc);
 
     uint16 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
     uint16 disp = inst & I_DISP_MASK;
-    uint16 ea, data, data2, result;
-    uint16 carry, overflow;
-    int i, count;
-    uint8 s_byte, d_byte;
-    * trappc = pc;
-    carry = 0;
-    overflow = 0;
 
-    MLOG_INST("[INST] P=%05o inst=%06o (opcode=%02o disp=%03o hexcode=%04X) mode=%s blk=%d\n",
+    * trappc = pc;
+
+    printf("[INST] P=%#010x inst=%#010x (opcode=%#010x disp=%#010x hexcode=%04X) mode=%s blk=%#010x\n",
               pc, inst, opcode, disp, inst & 0xF000, mode ? "MASTER" : "SLAVE", cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
-    MLOG_INST("  regs-before: A=%06o E=%06o X=%06o C=%d O=%d L=%05o G=%05o\n",
+    printf("  regs-before: A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x G=%#010x\n",
               cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
               cpu_state.C, cpu_state.OV,
               cpu_state.reg_L, cpu_state.reg_G);
@@ -429,11 +425,11 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
             if (opcode == 0x04) {  /* SYS */
                 if (disp == 0x01 || disp == 0x03 || disp == 0x08 || disp == 0x0C || disp == 0x20) {
                     /* DIT, WD, STM, CLM, DITR are privileged */
-                    MLOG_INST("  ** privileged SYS function (disp=%03o) attempted in SLAVE mode -> TRAP_VM **\n", disp);
+                    printf("  ** privileged SYS function (disp=%#010x) attempted in SLAVE mode -> TRAP_VM **\n", disp);
                     return mitra_trap(TRAP_VM, pc, trappc);
                 }
             } else {
-                MLOG_INST("  ** privileged instruction (opcode=%02o) attempted in SLAVE mode -> TRAP_VM **\n", opcode);
+                printf("  ** privileged instruction (opcode=%#010x) attempted in SLAVE mode -> TRAP_VM **\n", opcode);
                 return mitra_trap(TRAP_VM, pc, trappc);
             }
         }
@@ -482,10 +478,10 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
         case 0xC000: {
             uint16 Crpcode = inst & 0x0800;
             switch (Crpcode) {
-                case 0x00:
+                case 0x0000:
                     group_4_RP(inst);
                     break;
-                case 0x08:
+                case 0x0800:
                     group_4_RM(inst);
                     break;
             }
@@ -494,10 +490,10 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
         case 0xD000: {
             uint16 Drpcode = inst & 0x0800;
             switch (Drpcode) {
-                case 0x00:
+                case 0x0000:
                     group_5_IL(inst);
                     break;
-                case 0x08:
+                case 0x0800:
                     group_5_IG(inst);
                     break;
             }
@@ -511,20 +507,31 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 mode, uint16 * trappc) {
             break;
     }
     
-    MLOG_INST("  regs-after : P=%05o A=%06o E=%06o X=%06o C=%d O=%d L=%05o G=%05o\n",
+    printf("  regs-after : P=%#010x A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x G=%#010x\n",
               cpu_state.reg_P, cpu_state.reg_A, cpu_state.reg_E,
               cpu_state.reg_X, cpu_state.C, cpu_state.OV,
               cpu_state.reg_L, cpu_state.reg_G);
 
     /* Check for traps after instruction execution */
-    if (cpu_state.trap_pending) {
-        MLOG_INST("  -> cpu_state.trap_pending set (cause=%d) after execution, dispatching mitra_trap()\n", cpu_state.trap_cause);
-        return mitra_trap(cpu_state.trap_cause, pc, trappc);
-    }
-    
+	if (cpu_state.trap_pending) {
+	    int cause = mitra_resolve_trap_cause(cpu_state.trp_req_bits);
+	    if (cause < 0) {
+		/* Defensive: flag was set but no cause bit is actually present. */
+		printf("  -> trap_pending set but trp_req_bits=0, clearing spurious trap\n");
+		cpu_state.trap_pending = FALSE;
+	    } else {
+		cpu_state.trap_cause = cause;
+		printf("  -> trap pending (cause=%d %s) after execution, dispatching mitra_trap()\n",
+		         cause, mitra_trap_name(cause));
+		return mitra_trap(cause, pc, trappc);
+	    }
+	}    
     return SCPE_OK;
 }
 
+/*
+* Instructions in 0XXX form
+*/
 uint16 group_1_DL(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -538,25 +545,43 @@ uint16 group_1_DL(uint16 inst) {
      *    Byte, word or double-word, located in the first 256 bytes of the local segment.
      *    Y = (L) + D
      */
-    uint16 op = inst >> 8; /* full 8-bit opcode byte              */
     uint16 disp = inst & I_DISP_MASK; /* 8-bit unsigned displacement / param */
-    uint16 tmp;
     uint16 target_address;
+    
     target_address = (cpu_state.reg_L + disp) & 0x7FFF;
-    group_1(target_address, inst);
+    t_value target_value = read_word(target_address);
+    group_1(target_value, target_address, inst);
+
     return 0;
 }
 
+/*
+* Instructions in 1XXX form
+*/
 uint16 group_2_DL(uint16 inst, uint32 mode) {
-    uint16 op = inst >> 8;
+    /*
+     *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *      | 0 0  0 | 1| x x  x  x |     displacement      |
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *    
+     *    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+     *    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+     *
+     *    Byte, word or double-word, located in the first 256 bytes of the local segment.
+     *    Y = (L) + D
+     */
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 target_address;
+    
     target_address = (cpu_state.reg_L + disp) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
 
+/*
+* Instructions in 2XXX form
+*/
 uint16 group_1_P(uint16 inst) {
     /*
     *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -573,15 +598,19 @@ uint16 group_1_P(uint16 inst) {
     *   Y = (P) parameter or immediate
     *
     */
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 target_address;
-    target_address = (cpu_state.reg_P - 2) & 0x0FF;
-    group_1(target_address, inst);
+    
+    target_address = (cpu_state.reg_P - 2);
+    t_value target_value = read_word(target_address);
+    group_1(target_value, target_address, inst);
+
     return 0;
 }
 
+/*
+* Instructions in 3XXX form
+*/
 uint16 group_3_DL(uint16 inst, uint32 mode) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -596,9 +625,7 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
      *  Y = (L) + D
      */
     uint16 opcode = (inst >> I_OPCODE_SHIFT);
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 data;
     uint16 target_address;
     uint16 count;
@@ -843,15 +870,15 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
                     if (mode != 1) return MM_PRVINS;
                     if (!(cpu_unit.flags & UNIT_HSINT))
                         return MM_INVINS;
-                    cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
+                    cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
                     break;
                 case 2:
                     cpu_state.reg_E = compute_parity( & cpu_state.reg_A, count);
                     break;
                 case 3:
                     if (mode != 1) return MM_PRVINS;
-                    cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
-                    cpu_state.int_lvl = 0;
+                    cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
+                    cpu_state.curr_int_lvl = 0;
                     break;
                 case 4:
                     shift_rld( & cpu_state.reg_E, & cpu_state.reg_A, count);
@@ -880,6 +907,9 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
     return 0;
 }
 
+/*
+* Instructions in 4XXX form
+*/
 uint16 group_1_DG(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -893,15 +923,19 @@ uint16 group_1_DG(uint16 inst) {
      * Byte, word or double-word located in the first 256 bytes of the common segment.
      *  Y=(G) + D
      */
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 target_address;
+    
     target_address = (cpu_state.reg_G + disp) & 0x7FFF;
-    group_1(target_address, inst);
+    t_value target_value = read_word(target_address);
+    group_1(target_value, target_address, inst);
+
     return 0;
 }
 
+/*
+* Instructions in 5XXX form
+*/
 uint16 group_2_DG(uint16 inst, uint32 mode) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -916,13 +950,16 @@ uint16 group_2_DG(uint16 inst, uint32 mode) {
      *  Y=(G) + D
      */
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 target_address;
+    
     target_address = (cpu_state.reg_G + disp) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
 
+/*
+* Instructions in 6XXX form
+*/
 uint16 group_1_IL(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -936,16 +973,21 @@ uint16 group_1_IL(uint16 inst) {
      *  Y = (G' + mem[L + D]) & 0x7FFF
      *  Byte, word or double-word located anywhere and pointed at through the local segment.
      */
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
+    
     tmp = read_word(cpu_state.reg_L + disp);
     target_address = (GPRIME + tmp) & 0x7FFF;
-    group_1(target_address, inst);
+    t_value target_value = read_word(target_address);
+    group_1(target_value, target_address, inst);
+
     return 0;
 }
 
+/*
+* Instructions in 7XXX form
+*/
 uint16 group_2_IL(uint16 inst, uint32 mode) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -963,11 +1005,15 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
     uint16 tmp;
     tmp = read_word(cpu_state.reg_L + disp);
     uint16 target_address;
+    
     target_address = (GPRIME + tmp) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
 
+/*
+* Instructions in 8XXX form
+*/
 uint16 group_1_IGX(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -981,16 +1027,21 @@ uint16 group_1_IGX(uint16 inst) {
      * Element of an array pointed at through the common segment.
      *  Y = (G) + ((G)+D) + (cpu_state.reg_X)
      */
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
+    
     tmp = read_word(cpu_state.reg_G + disp);
     target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x7FFF;
-    group_1(target_address, inst);
+    t_value target_value = read_word(target_address);
+    group_1(target_value, target_address, inst);
+
     return 0;
 }
 
+/*
+* Instructions in 9XXX form
+*/
 uint16 group_2_IGX(uint16 inst, uint32 mode) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -1004,16 +1055,19 @@ uint16 group_2_IGX(uint16 inst, uint32 mode) {
      * Element of an array pointed at through the common segment.
      *  Y = (G) + ((G)+D) + (cpu_state.reg_X)
      */
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
+    
     tmp = read_word(cpu_state.reg_G + disp);
     target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
 
+/*
+* Instructions in AXXX form
+*/
 uint16 group_1_ILX(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -1027,16 +1081,20 @@ uint16 group_1_ILX(uint16 inst) {
      * Element of cpu_state.reg_A byte, word or double-word array located anywhere and pointed at through the local segment.
      *  Y = G' + ((L)+D)+(cpu_state.reg_X)
      */
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
+    
     tmp = read_word(cpu_state.reg_L + disp);
     target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x7FFF;
-    group_1(target_address, inst);
+    t_value target_value = read_word(target_address);
+    group_1(target_value, target_address, inst);
     return 0;
 }
 
+/*
+* Instructions in BXXX form
+*/
 uint16 group_2_ILX(uint16 inst, uint32 mode) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -1050,21 +1108,24 @@ uint16 group_2_ILX(uint16 inst, uint32 mode) {
      * Element of a byte, word or double-word array located anywhere and pointed at through the local segment.
      *  Y = G' + ((L)+D)+(X)
      */
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
+    
     tmp = read_word(cpu_state.reg_L + disp);
     target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x7FFF;
     group_2(inst, target_address, mode);
     return 0;
 }
 
+/*
+* Instructions in CXXX form (bit 4 == 0)
+*/
 uint16 group_4_RP(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
      *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-     *      |1  1  0 | 0| x x  x  x |     displacement      |
+     *      |1  1  0 | 0| 0 x  x  x |     displacement      |
      *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
      *    (Class 2 - RP addressing mode)
      *    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
@@ -1072,10 +1133,9 @@ uint16 group_4_RP(uint16 inst) {
      * Y={P)+2D
      */
     uint16 opcode = (inst >> I_OPCODE_SHIFT);
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 target_address;
+    
     target_address = cpu_state.reg_P + (disp << 1);
     switch (opcode) {
         case 0xC0:
@@ -1125,20 +1185,22 @@ uint16 group_4_RP(uint16 inst) {
     }
 }
 
+/*
+* Instructions in CXXX form (bit 4 == 1)
+*/
 uint16 group_4_RM(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
      *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-     *      |1  1  0 | 0| x x  x  x |     displacement      |
+     *      |1  1  0 | 0| 1 x  x  x |     displacement      |
      *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
      *    (Class 2 - RM addressing mode)
      *    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU",
      */
     uint16 opcode = (inst >> I_OPCODE_SHIFT);
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 target_address;
+    
     target_address = cpu_state.reg_P - (disp << 1);
     switch (opcode) {
         case 0xC8:
@@ -1180,6 +1242,9 @@ uint16 group_4_RM(uint16 inst) {
     return 0;
 }
 
+/*
+* Instructions in DXXX form (bit 4 == 0)
+*/
 uint16 group_5_IL(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -1192,10 +1257,10 @@ uint16 group_5_IL(uint16 inst) {
      * Y = G' + ((L) + D)
      */
     uint16 opcode = (inst >> I_OPCODE_SHIFT);
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
+    
     tmp = (cpu_state.reg_L + disp) & 0x7FFF;
     target_address = GPRIME + tmp;
     switch (opcode) {
@@ -1245,6 +1310,9 @@ uint16 group_5_IL(uint16 inst) {
     return 0;
 }
 
+/*
+* Instructions in DXXX form (bit 4 == 1)
+*/
 uint16 group_5_IG(uint16 inst) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -1257,10 +1325,10 @@ uint16 group_5_IG(uint16 inst) {
      * Y = G'+((G)+D)
      */
     uint16 opcode = (inst >> I_OPCODE_SHIFT);
-    uint16 op = inst >> 8;
     uint16 disp = inst & I_DISP_MASK;
     uint16 tmp;
     uint16 target_address;
+    
     tmp = read_word(cpu_state.reg_G + disp);
     target_address = (GPRIME + tmp) & 0x7FFF;
     switch (opcode) {
@@ -1298,6 +1366,9 @@ uint16 group_5_IG(uint16 inst) {
     return 0;
 }
 
+/*
+* Instructions in EXXX form
+*/
 uint16 group_3_PX(uint16 inst, uint32 mode) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
@@ -1311,12 +1382,11 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
      *  Y = (P)
      */
     uint16 opcode = (inst >> I_OPCODE_SHIFT);
-    uint16 op = inst >> 8;
     uint16 count;
     uint16 data;
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 target_address;
+    
     target_address = (disp) & 0x0FF;
     switch (opcode) {
         case 0xE0: {
@@ -1469,21 +1539,23 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
 
         /* ========== P Mode System Instructions (F0-FF) ========== */
         // FIXME many bugs
+/*
+* Instructions in FXXX form
+*/
 uint16 group_3_P(uint16 inst, uint32 mode) {
     /*
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
      *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-     *      |1  1  1 | 0| x x  x  x |     displacement      |
+     *      |1  1  1 | 1| x x  x  x |     displacement      |
      *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
      *    (Class 1 - P addressing mode)
      *    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "",    "",
      */
     uint16 opcode = (inst >> I_OPCODE_SHIFT);
-    uint16 op = inst >> 8;
     uint16 count;
     uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
     uint16 target_address;
+    
     target_address = disp;
     uint16 data;
     
@@ -1496,37 +1568,16 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
 		        break;
 		            
 		case 0x01:  /* DIT - Deactivate Interrupt */
-                    {
-                /* Save context at context pointer address */
-                uint16 ctx_ptr = int_vec[cpu_state.int_lvl];
-                write_word(ctx_ptr, ((cpu_state.C ? 1 : 0) | (cpu_state.OV ? 2 : 0) | (cpu_state.MS ? 4 : 0)));
-                write_word(ctx_ptr + 2, cpu_state.reg_X);
-                write_word(ctx_ptr + 4, cpu_state.reg_E);
-                write_word(ctx_ptr + 6, cpu_state.reg_A);
-                write_word(ctx_ptr + 8, cpu_state.reg_G);
-                write_word(ctx_ptr + 10, cpu_state.reg_L);
-                write_word(ctx_ptr + 12, cpu_state.reg_P);
-                /* Deactivate current level */
-                cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
-                /* Find next highest priority level */
-                cpu_state.int_lvl = get_highest_interrupt();
-                /* Restore context */
-                ctx_ptr = int_vec[cpu_state.int_lvl];
-                {
-                    uint16 saved_flags = read_word(ctx_ptr);
-                    cpu_state.C = (saved_flags >> 0) & 1;
-                    cpu_state.OV = (saved_flags >> 1) & 1;
-                    cpu_state.MS = (saved_flags >> 2) & 1;
-                }
-                cpu_state.reg_X = read_word(ctx_ptr + 2);
-                cpu_state.reg_E = read_word(ctx_ptr + 4);
-                cpu_state.reg_A = read_word(ctx_ptr + 6);
-                cpu_state.reg_G = read_word(ctx_ptr + 8);
-                cpu_state.reg_L = read_word(ctx_ptr + 10);
-                cpu_state.reg_P = read_word(ctx_ptr + 12);
-                    }
+                    return mitra_interrupt_return(FALSE);
                     break;
-                    
+                   
+        /*
+        * RD et WD sont des instructions synchrones : le processeur attend la réponse du périphérique.
+	* On fait souvent du polling (boucle de RD) pour attendre un résultat ou un statut.
+	* Elles ne déclenchent pas elles-mêmes une interruption pour livrer un résultat différé.
+	* Les interruptions restent un mécanisme séparé, utilisé en parallèle pour les événements asynchrones (fin d’opération longue, signal externe, etc.).
+	* C’est le mode d’E/S le plus simple et le plus direct des mini-ordinateurs des années 1960-70, par opposition aux transferts par canal (IOP) qui sont eux asynchrones et pilotés par interruptions + chaînage de commandes.
+	*/
         case 0x02:
 		/*** RD 
 		bits 8 to 13 undefined
@@ -1553,7 +1604,6 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
 		}
 	}
     
-    shift_type_t type = (disp >> 5) & 0x07;
     count = disp & 0x1F;
     
     switch (opcode) {
@@ -1780,8 +1830,8 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
                         break;
                     case 1:
                         if (mode != 1) return MM_PRVINS;
-                        cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
-                        cpu_state.int_lvl = 0;
+                        cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
+                        cpu_state.curr_int_lvl = 0;
                         break;
                     case 2:
                         cpu_state.reg_A = compute_parity( & cpu_state.reg_A,
@@ -1789,8 +1839,8 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
                         break;
                     case 3:
                         if (mode != 1) return MM_PRVINS;
-                        cpu_state.intrpt_mask &= ~(1u << cpu_state.int_lvl);
-                        cpu_state.int_lvl = 0;
+                        cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
+                        cpu_state.curr_int_lvl = 0;
                         break;
                     case 4:
                         shift_rld( & cpu_state.reg_E, & cpu_state.reg_A, count);
@@ -1820,136 +1870,284 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
     return 0;
 }
 
-uint16 group_1(uint16 target_address, uint16 inst) {
     /*
+     * Load something and operate on it
+     *
      *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
      *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-     *      |                                   |  opcode   |
+     *      |  address  |   opcode  |     displacement      |
      *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *	
+     *    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
+     *    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
+     *
      */
+uint16 group_1(t_value mem_value, uint16 target_address, uint16 inst) {
     uint16 opcode = (inst >> I_GROUP_SHIFT) & 0x1F;
-    uint16 disp = inst & I_DISP_MASK;
-    uint16 tmp;
+    uint8 s_byte, d_byte;
+    uint16 i, data;
     uint16 carry, overflow;
     switch (opcode) {
-        case 0x00:
-            cpu_state.reg_A = read_word(target_address);
+        case 0x00: // "LDA"
+            cpu_state.reg_A = mem_value;
             set_condition_codes_load(cpu_state.reg_A);
             break;
-        case 0x01:
-            cpu_state.reg_E = read_word(target_address);
+            
+        case 0x01: // "LDE"
+            cpu_state.reg_E = mem_value;
             set_condition_codes_load(cpu_state.reg_E);
             break;
-        case 0x02:
-            cpu_state.reg_X = read_word(target_address);
+            
+        case 0x02: // "LDX"
+            cpu_state.reg_X = mem_value;
             set_condition_codes_load(cpu_state.reg_X);
             break;
-        case 0x03:
-            cpu_state.reg_A ^= read_word(target_address);
+            
+        case 0x03: // EOR - Exclusive OR
+            cpu_state.reg_A ^= mem_value;
             set_condition_codes_load(cpu_state.reg_A);
             break;
-        case 0x04:
+            
+        case 0x04: // "LEA"
             cpu_state.reg_A = (target_address - GPRIME) & 0x7FFF;
             set_condition_codes_load(cpu_state.reg_A);
             break;
-        case 0x05:
+            
+        case 0x05: // "ADD"
             carry = 0;
-            cpu_state.reg_A = add16(cpu_state.reg_A, read_word(target_address), &
+            cpu_state.reg_A = add16(cpu_state.reg_A, mem_value, &
                 carry, & overflow);
             set_condition_codes_arithmetic(cpu_state.reg_A, carry, overflow);
             break;
-        case 0x06:
+            
+        case 0x06: // "SUB"
             carry = 0;
-            cpu_state.reg_A = sub16(cpu_state.reg_A, read_word(target_address), &
+            cpu_state.reg_A = sub16(cpu_state.reg_A, mem_value, &
                 carry, & overflow);
             set_condition_codes_arithmetic(cpu_state.reg_A, carry, overflow);
             break;
-        case 0x07:
-            cpu_state.reg_A = cpu_state.reg_A | read_word(target_address);
+            
+        case 0x07: // IOR - Inclusive OR
+            cpu_state.reg_A = cpu_state.reg_A | mem_value;
             set_condition_codes_load(cpu_state.reg_A);
             break;
-    }
-    return 0;
-}
-
-uint16 group_2(uint16 inst, uint16 target_address, uint32 mode) {
-    /*
-     *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
-     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-     *      |                                   |  opcode   |
-     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-     */
-    uint16 opcode = (inst >> I_GROUP_SHIFT) & 0x1F;
-    uint16 disp = inst & I_DISP_MASK;
-    uint16 data;
-    uint16 tmp;
-    uint16 carry, overflow;
-    uint8 s_byte, d_byte;
-    int i;
-    switch (opcode) {
-        case 0x08:
-            if (mode != 1)
-                return MM_PRVINS;
-            if (!(cpu_unit.flags & UNIT_MULDIV))
-                return MM_INVINS;
-            data = read_word(target_address);
-            if (div32(cpu_state.reg_E, cpu_state.reg_A, data, & cpu_state.reg_A, & cpu_state.reg_E) != 0) {
+            
+        case 0x08:  /* DIV - Divide (optional) */
+// FIXME           if (mode != 1) 
+//            	return MM_PRVINS;
+            if (!(cpu_unit.flags & UNIT_MULDIV)) 
+            	return MM_INVINS;
+            if (div32(cpu_state.reg_E, cpu_state.reg_A, mem_value, &cpu_state.reg_A, &cpu_state.reg_E) != 0) {
                 cpu_state.OV = 1;
             }
             set_condition_codes_load(cpu_state.reg_A);
             break;
-        case 0x09:
-            cpu_state.reg_A = cpu_state.reg_A & read_word(target_address);
+            
+        case 0x09:  /* AND - Logical AND */
+            cpu_state.reg_A &= mem_value;
             set_condition_codes_load(cpu_state.reg_A);
             break;
-        case 0x0A:
-            if (!(cpu_unit.flags & UNIT_EXTINS))
-                return MM_INVINS;
-            s_byte = read_byte(disp);
+            
+        case 0x0A:  
+            /* CPS - Compare String (optional) 
+            * A byte in main memory is compared sequentially with each byte of a string starting at an address defined relative to the G-base by the contents of register A, and having a length specified in register E.
+		- If the reference byte is found in the string, its address relative to the G-base is held in register A, and register E contains the length of the remaining part of the string.
+		- If the reference byte is not found in the string, register A contains the starting address relative to the G-base, and the final content of register E is zero.
+            */
+            if (!(cpu_unit.flags & UNIT_EXTINS)) 
+            	return MM_INVINS;
             for (i = 0; i < cpu_state.reg_E; i++) {
+                s_byte = read_byte(target_address + i);
                 d_byte = read_byte(cpu_state.reg_G + cpu_state.reg_A + i);
-                if (s_byte == d_byte) {
-                    cpu_state.reg_A = cpu_state.reg_G + cpu_state.reg_A +
-                    i;
-                    cpu_state.reg_E = 0;
+                if (s_byte != d_byte) {
                     set_condition_codes_string(0, s_byte < d_byte);
                     break;
                 }
             }
-            if (i == cpu_state.reg_E) {
-                cpu_state.reg_A = cpu_state.reg_G + cpu_state.reg_A;
-                cpu_state.reg_E = 0;
-                set_condition_codes_string(1, 0);
-            }
+            if (i == cpu_state.reg_E) set_condition_codes_string(1, 0);
             break;
-        case 0x0B:
-            data = read_word(target_address);
-            sub16(cpu_state.reg_A, data, & carry, & overflow);
+            
+        case 0x0B:  /* CMP - Compare */
+            sub16(cpu_state.reg_A, mem_value, &carry, &overflow);
             set_condition_codes_compare(cpu_state.reg_A, data, 0);
             break;
-        case 0x0C:
-            if (!(cpu_unit.flags & UNIT_MULDIV))
-                return MM_INVINS;
-            data = read_word(target_address);
-            mul32(cpu_state.reg_A, data, & cpu_state.reg_E, & cpu_state.reg_A);
+            
+        case 0x0C:  /* MUL - Multiply */
+            if (!(cpu_unit.flags & UNIT_MULDIV)) 
+            	return MM_INVINS;
+            mul32(cpu_state.reg_A, mem_value, &cpu_state.reg_E, &cpu_state.reg_A);
             set_condition_codes_load(cpu_state.reg_E);
             break;
-        case 0x0D:
-            data = read_word(target_address);
-            cpu_state.reg_A = (cpu_state.reg_A & 0x00FF) | (data & 0xFF00);
+            
+        case 0x0D:  /* LBL - Load Byte Left */
+            cpu_state.reg_A = (cpu_state.reg_A & 0x00FF) | (mem_value & 0xFF00);
             set_condition_codes_load(cpu_state.reg_A);
             break;
-        case 0x0E:
-            data = read_word(target_address);
-            cpu_state.reg_A = data & 0x00FF;
+            
+        case 0x0E:  /* LBR - Load Byte Right */
+            cpu_state.reg_A = (mem_value & 0x00FF) | ((mem_value << 8) & 0xFF00);
             set_condition_codes_load(cpu_state.reg_A);
             break;
-        case 0x0F:
-            data = read_word(target_address);
-            cpu_state.reg_X = data & 0x00FF;
+            
+        case 0x0F:  /* LBX - Load Byte Right into X */
+            cpu_state.reg_X = (mem_value & 0x00FF) | ((mem_value << 8) & 0xFF00);
             set_condition_codes_load(cpu_state.reg_X);
             break;
+            
     }
+    return 0;
+}
+
+    /*
+     * Load something and operate on it
+     *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *      | 0 1  0 | 1| x x  x  x |     displacement      |
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *    
+     *    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
+     *    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
+     *
+     */
+uint16 group_2(uint16 inst, uint16 target_address, uint32 mode) {
+    uint16 opcode = (inst >> I_GROUP_SHIFT) & 0x1F;
+    uint16 data, data2, result;
+    uint16 carry, overflow;
+    int i;
+    uint16 * trappc = &cpu_state.reg_P; 
+    switch (opcode) {
+        case 0x0:  /* DLD - Double Load */
+            cpu_state.reg_E = read_word(target_address);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            set_condition_codes_load(cpu_state.reg_E);
+            break;
+            
+        case 0x1:  /* STA - Store A */
+            write_word(target_address, cpu_state.reg_A);
+            break;
+            
+        case 0x2:  /* STE - Store E */
+            write_word(target_address, cpu_state.reg_E);
+            break;
+            
+        case 0x3:  /* STX - Store X */
+            write_word(target_address, cpu_state.reg_X);
+            break;
+            
+        case 0x4:  /* SBL - Store Byte Left */
+            data = read_word(target_address);
+            write_word(target_address, (data & 0x00FF) | (cpu_state.reg_A & 0xFF00));
+            break;
+            
+        case 0x5:  /* SBR - Store Byte Right */
+            data = read_word(target_address);
+            write_word(target_address, (data & 0xFF00) | ((cpu_state.reg_A << 8) & 0x00FF));
+            break;
+            
+        case 0x6:  /* DST - Double Store */
+            write_word(target_address, cpu_state.reg_E);
+            write_word((target_address + 2) & 0x7FFF, cpu_state.reg_A);
+            break;
+            
+        case 0x7:  /* ADM - Add to Memory */
+            data = read_word(target_address);
+            carry = 0;
+            result = add16(data, cpu_state.reg_A, &carry, &overflow);
+            write_word(target_address, result);
+            cpu_state.reg_A = result;
+            set_condition_codes_arithmetic(result, carry, overflow);
+            break;
+            
+        case 0x8:  /* SPA - Store Program Address */
+            cpu_state.reg_A = (cpu_state.reg_P + 4 + GPRIME) & 0x7FFF;
+            write_word(target_address, cpu_state.reg_A);
+            break;
+            
+        case 0x9:  /* STS - Store Selective */
+            data = read_word(target_address);
+            result = (data & ~cpu_state.reg_E) | (cpu_state.reg_A & cpu_state.reg_E);
+            write_word(target_address, result);
+            set_condition_codes_load(result);
+            break;
+            
+        case 0xA:  /* FAD - Float Add (optional) */
+            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
+            data = read_word(target_address);
+            data2 = read_word((target_address + 2) & 0x7FFF);
+            {
+                double a = mitra_to_double(cpu_state.reg_A, cpu_state.reg_E);
+                double b = mitra_to_double(data, data2);
+                double r = a + b;
+                double_to_mitra(r, &cpu_state.reg_A, &cpu_state.reg_E);
+                set_condition_codes_load(cpu_state.reg_A);
+            }
+            break;
+            
+        case 0xB:  /* FSU - Float Subtract (optional) */
+            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
+            data = read_word(target_address);
+            data2 = read_word((target_address + 2) & 0x7FFF);
+            {
+                double a = mitra_to_double(cpu_state.reg_A, cpu_state.reg_E);
+                double b = mitra_to_double(data, data2);
+                double r = a - b;
+                double_to_mitra(r, &cpu_state.reg_A, &cpu_state.reg_E);
+                set_condition_codes_load(cpu_state.reg_A);
+            }
+            break;
+            
+        case 0xC:  /* FMU - Float Multiply (optional) */
+            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
+            data = read_word(target_address);
+            data2 = read_word((target_address + 2) & 0x7FFF);
+            {
+                double a = mitra_to_double(cpu_state.reg_A, cpu_state.reg_E);
+                double b = mitra_to_double(data, data2);
+                double r = a * b;
+                double_to_mitra(r, &cpu_state.reg_A, &cpu_state.reg_E);
+                set_condition_codes_load(cpu_state.reg_A);
+            }
+            break;
+            
+        case 0xD:  /* FDV - Float Divide (optional) */
+            if (!(cpu_unit.flags & UNIT_FP)) return MM_INVINS;
+            data = read_word(target_address);
+            data2 = read_word((target_address + 2) & 0x7FFF);
+            {
+                double a = mitra_to_double(cpu_state.reg_A, cpu_state.reg_E);
+                double b = mitra_to_double(data, data2);
+                if (b == 0.0) return mitra_trap(TRAP_INVINS, cpu_state.reg_P, trappc);
+                double r = a / b;
+                double_to_mitra(r, &cpu_state.reg_A, &cpu_state.reg_E);
+                set_condition_codes_load(cpu_state.reg_A);
+            }
+            break;
+            
+        case 0xE:  /* TRS - Translate String (optional) */
+            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
+            {
+                uint16 table = target_address;
+                for (i = 0; i < cpu_state.reg_E; i++) {
+                    uint8 b = read_byte(cpu_state.reg_A + i);
+                    uint8 t = read_byte(table + (b & 0xFF));
+                    write_byte(cpu_state.reg_X + i, t);
+                }
+                cpu_state.reg_E = 0xFFFF;
+            }
+            break;
+            
+        case 0xF:  /* MVS - Move String (optional) */
+            if (!(cpu_unit.flags & UNIT_EXTINS)) return MM_INVINS;
+            {
+                for (i = 0; i < cpu_state.reg_E; i++) {
+                    uint8 b = read_byte(cpu_state.reg_A + i);
+                    write_byte(cpu_state.reg_X + i, b);
+                }
+                cpu_state.reg_E = 0xFFFF;
+            }
+            break;
+    }
+
     return 0;
 }
 

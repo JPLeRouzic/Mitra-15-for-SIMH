@@ -2,7 +2,9 @@
  *
  * Based on MITRA 15 Reference Manual (CII, 1973) and documents in Patrick Chour's website
  * 
- * The Mitra-15 is a 16-bit word-addressable computer with:
+ * MITRA 15 is built around a core memory the capacity which can be extended by 4K 16-bit words blocks. 
+ * This core memory has four access ports for connecting up to four processing units or direct memory access controllers.
+ * Each processing unit is a 16-bit word-addressable computer with:
  * - 16-bit word size
  * - Byte-addressable (even addresses = word boundaries)
  * - Up to 32K words of memory, the bit 0 of program counter is always at 0.
@@ -11,7 +13,7 @@
  * - Master/Slave modes with memory protection
  * - Interrupt, fast interrupt, suspension, and trap support
  *
- * based on on SDS 940 CPU simulator
+ * Inspired the SDS 940 CPU and other SDS sigma simulators
 
    Copyright (c) 2001-2017, Robert M. Supnik
    Copyright (c) 2026, Jean-Pierre Le Rouzic contact@padiracinnovation.org
@@ -56,34 +58,20 @@
 
 /* Main memory - declared extern in mitra_cpu.h; this is the one real instance */
 t_value M[MAX_MEM_WORDS];
+uint32 MEMsize = MEM_32K;
 
 /* CPU state - declared extern in mitra_cpu.h; this is the one real, shared instance. */
 CPU_STATE cpu_state;
-
-/* Diagnostic trace-logging toggles - declared extern in mitra_cpu.h; defined once here. */
-int32 mitra_log_enable = 1;
-int32 mitra_log_inst = 0;
-int32 mitra_log_mem = 0;
-int32 mitra_log_int = 0;
-int32 mitra_log_io = 0;
 
 uint32 xfr_req = 0;                                     /* xfr req */
 uint32 ion = 0;                                         /* int enable */
 uint32 ion_defer = 0;                                   /* int defer */
 uint32 int_req = 0;                                     /* int requests */
-uint32 int_reqhi = 0;                                   /* highest int request */
-uint32 api_lvl = 0;                                     /* api active */
-uint32 api_lvlhi = 0;                                   /* highest api active */
-t_bool chan_req;                                        /* chan request */
+// int32 int_reqhi = 0;                                   /* highest int request, not uint32 */
 uint32 cpu_mode = NML_MODE;                             /* normal mode */
 uint32 mon_usr_trap = 0;                                /* mon-user trap */
-uint32 EM2 = 2, EM3 = 3;                                /* extension registers */
-uint32 RL1, RL2, RL4;                                   /* relocation maps */
 uint32 bpt;                                             /* breakpoint switches */
 uint32 alert;                                           /* alert dispatch */
-uint32 em2_dyn, em3_dyn;                                /* extensions, dynamic */
-uint32 usr_map[8];                                      /* user map, dynamic */
-uint32 mon_map[8];                                      /* mon map, dynamic */
 int32 ind_lim = 32;                                     /* indirect limit */
 int32 exu_lim = 32;                                     /* EXU limit */
 int32 cpu_astop = 0;                                    /* address stop */
@@ -99,6 +87,12 @@ uint32 hst_exclude = BAD_MODE;                          /* cpu_mode excluded fro
 InstHistory *hst = NULL;                                /* instruction history */
 int32 rtc_pie = 0;                                      /* rtc pulse ie */
 int32 rtc_tps = 60;                                     /* rtc ticks/sec */
+t_bool high_speed = FALSE;  /* TRUE if high-speed interrupt */
+
+static BRKTYPTAB cpu_breakpoints[] = {
+    BRKTYPE('E', "Execute Instruction"),
+    { 0 }
+};
 
 t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw);
 t_stat cpu_dep (t_value val, t_addr addr, UNIT *uptr, int32 sw);
@@ -167,7 +161,7 @@ REG cpu_reg[] = {
     { ORDATA(U, cpu_state.U, 16) },
     /* Use separate variables for interrupt state instead of struct member */
     { ORDATA(INT_REQ, cpu_state.intrpt_mask, 32) },
-    { ORDATA(INT_LVL, cpu_state.int_lvl, 5) },
+    { ORDATA(INT_LVL, cpu_state.curr_int_lvl, 5) },
     { ORDATA(SUSP_REQ, cpu_state.susp_req_bits, 32) },
     { ORDATA(SUSP_LVL, cpu_state.susp_active_level, 5) },
     { ORDATA(TRP_REQ, cpu_state.trp_req_bits, 16) },
@@ -179,13 +173,6 @@ REG cpu_reg[] = {
     { ORDATA(PANEL_DATA, cpu_state.panel_data_lights, 16) },
     { FLDATA(CPU_RUNNING, cpu_state.cpu_running, 0) },
     { FLDATA(INT_ENABLED, cpu_state.interrupts_enabled, 0) },
-//    { FLDATA(ROUTING_ENABLED, routing_enabled, 0) },
-    /* Diagnostic trace logging toggles: e.g. "d cpu LOG_MEM 0" to silence memory trace */
-    { FLDATA(LOG_ENABLE, mitra_log_enable, 0) },
-    { FLDATA(LOG_INST, mitra_log_inst, 0) },
-    { FLDATA(LOG_MEM, mitra_log_mem, 0) },
-    { FLDATA(LOG_INT, mitra_log_int, 0) },
-    { FLDATA(LOG_IO, mitra_log_io, 0) },
     { NULL }
 };
 
@@ -204,10 +191,34 @@ MTAB cpu_mod[] = {
 };
 
 DEVICE cpu_dev = {
-	"CPU", &cpu_unit, cpu_reg, cpu_mod,
-	1, 8, 16, 1, 8, 16,
-	&cpu_ex, &cpu_dep, &cpu_reset,
-	NULL, NULL, NULL, NULL, 0
+	"CPU", 			// device name
+	&cpu_unit, 		// pointer to array of UNIT structures
+	cpu_reg, 		// pointer to array of REG structures
+	cpu_mod,		// pointer to array of MTAB structures
+	1, 		// number of units in this device
+	16, 		// radix for input and display of device addresses (hexadecimal)
+	16, 		// # of bits of address field
+	2, 		// increment between device addresses, Mitra-15 is byte-addressable with even addresses = word boundaries
+	16, 		// radix for input and display of device data (hexadecimal)
+	16, 		// width in bits of device data
+	&cpu_ex, 		// address to examine
+	&cpu_dep, 		// address to deposit
+	&cpu_reset,		// address of reset routine
+	NULL, 			// address of bootstrap routine
+	NULL, 			// address of attach routine
+	NULL, 			// address of detach routine
+	NULL, 			// address of VM-specific device context table
+	0,			// device flags
+	0,			// debug control flags
+//	NULL,			// pointer to array of DEBTAB structures
+	NULL,			// address of memory size change routine
+	NULL,			// pointer to logical name string
+	NULL,			// address of help routine
+	NULL,			// address of displaying help
+	NULL,			// address of output of the "SHOW FEATURES"
+	cpu_breakpoints,	// Breakpoint types supported by the device
+	NULL,			// Device type encoded in the flags field
+	0			// Device unit test routine
 	};
 
 /* Clock data structures
@@ -271,10 +282,11 @@ uint32 trp_reqhi = 0; 		// Highest trap request
 
 /* ========== SIMH Interface Functions ========== */
 t_stat sim_instr(void) {
-    uint16 inst, save_P, trap_P;
+    uint16 inst, save_P;
     t_stat reason = 0;
     cpu_state.intrpt_mask = cpu_state.intrpt_mask & ~1;
     while (reason == 0) {
+    printf("\ncpu_state.reg_P: %#010x\n", cpu_state.reg_P);
         if (cpu_astop) {
             cpu_astop = 0;
             return SCPE_STOP;
@@ -283,16 +295,33 @@ t_stat sim_instr(void) {
             if ((reason = sim_process_event()))
                 break;
         }
+        
+        /* ----- BREAKPOINT TEST ----- */
+        if (sim_brk_summ &&
+            sim_brk_test(cpu_state.reg_P, SWMASK('E'))) {
+            reason = STOP_IBKPT;          /* or SCPE_STOP */
+            break;
+        }
+        
         sim_interval--;
 
         /* Check for traps.
-         * Traps are not implemented in the current simulator FIXME
-         */
-         int trap = -1; // Dummy code to be fixed late
-         if(trap >= 0) { // FIXME
-		uint16 * trappc = 0;
-		mitra_trap(trap, cpu_state.reg_P, trappc);
-             }
+         * Traps that became pending asynchronously (e.g. a future watchdog)
+	 * between the previous instruction's completion and this fetch.
+	 * Traps raised synchronously by instruction execution itself are
+	 * already dispatched from inside one_inst(); this exists only for
+	 * sources not tied to a specific instruction. */
+	if (cpu_state.trap_pending) {
+	    int cause = mitra_resolve_trap_cause(cpu_state.trp_req_bits);
+	    if (cause >= 0) {
+		cpu_state.trap_cause = cause;
+		reason = mitra_trap(cause, cpu_state.reg_P, &cpu_state.trap_P);
+		if (reason != SCPE_OK)
+		    break;
+		continue;   /* re-check breakpoints/suspensions/interrupts before fetching */
+	    }
+	    cpu_state.trap_pending = FALSE;  /* defensive: clear spurious flag */
+	}
         /* 
          * Check for suspensions
          * Suspensions are called interrupts in modern parlance as they are unconditionaly processed at the end of the current instruction.
@@ -302,8 +331,37 @@ t_stat sim_instr(void) {
         */
         mitra_suspension_process();
         
+        /* 
+        * Check for interrupts FIXME
+        *
+        * This is incorrect, not all instructions are interruptable
+        */
+        cpu_state.int_reqhi = get_highest_interrupt();
+        
+        if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > cpu_state.curr_int_lvl)) {
+puts("sim_instr(void) 17");
+            uint16 pa;
+	    reason = cpt_lookup((uint16)cpu_state.int_reqhi, &pa);
+	    if (reason != SCPE_OK)
+	        break;
+            /* Accept interrupt
+             * Save context of currently-running level (per DIT manual section)
+             * CPT is a 32-word table at absolute address M[10].
+             * CPT[i] = word address of the context save area for level i.
+             * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P 
+             */
+puts("sim_instr(void) 20");
+            reason = mitra_interrupt_accept(cpu_state.int_reqhi, high_speed);
+puts("sim_instr(void) 11");
+            if (reason != SCPE_OK) break;
+            
+/*            if (pa != VEC_RTCP && rtc_pie) {
+                cpu_state.intrpt_mask |= INT_RTCP;
+            } FIXME probably a remnant of SDS940*/
+        } else {
             /* Normal instruction fetch */
             if (sim_brk_summ) {
+            	// We encountered a breakpoint
                 static uint32 bmask[] = {
                     SWMASK('E') | SWMASK('N'),
                     SWMASK('E') | SWMASK('M'),
@@ -330,21 +388,23 @@ t_stat sim_instr(void) {
                     break;
                 }
             }
+            // Normal case, instruction execution 
             cpu_state.trap_P = save_P = cpu_state.reg_P;
             inst = read_word(cpu_state.reg_P);
             cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             if (inst != 0) {
-                MLOG_INST("--- sim_instr: fetched inst=%06o at P=%05o, calling one_inst() ---\n", inst, save_P);
+                printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x, calling one_inst() ---", inst, save_P);
                 reason = one_inst(inst, save_P, cpu_state.cpu_mode, & cpu_state.trap_P);
-                MLOG_INST("--- sim_instr: one_inst() returned reason=%d (cpu_state.trap_P=%05o) ---\n", reason, cpu_state.trap_P);
+                printf("\n--- sim_instr: one_inst() returned reason=%#010x (cpu_state.trap_P=%#010x) ---", reason, cpu_state.trap_P);
                 if (reason > 0 && reason != STOP_HALT) {
-                    MLOG_INST("    P restored to %05o (was advanced to %05o) due to reason=%d\n",
+                    printf("\n    P restored to %#010x (was advanced to %#010x) due to reason=%#010x",
                               save_P, cpu_state.reg_P, reason);
                     cpu_state.reg_P = save_P;
                 }
                 if (reason == STOP_IONRDY)
                     reason = 0;
             }
+        }
     }
     if (pcq_r)
         pcq_r->qptr = pcq_p;
@@ -356,11 +416,11 @@ int get_highest_interrupt(void) {
     int i;
     for (i = 31; i >= 0; i--) {
         if (cpu_state.intrpt_mask & (1u << i)) {
-            MLOG_INT("[INT] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrpt_mask);
+            printf("[INT] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrpt_mask);
             return i;
         }
     }
-    return -1;
+    return -1;   /* nothing pending */
 }
 
 /* ========== Memory Access Functions ========== */
@@ -368,19 +428,19 @@ t_value read_word(t_addr va) {
     uint16 pa = VA_TO_PA(va);
     if (pa >= MAX_MEM_WORDS) {
         /* Trigger address invalid trap (TRAP_AI) */
-        MLOG_MEM("    [MEM] read_word  va=%05o pa=%05o  ** OUT OF RANGE ** (MAX_MEM_WORDS=%05o) -> TRAP_AI queued\n",
+        printf("\n    [MEM] trap in read_word  va=%#010x pa=%#010x  ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
                  va, pa, MAX_MEM_WORDS);
         cpu_state.trp_req_bits |= (1 << TRAP_AI);
         cpu_state.trap_pending = TRUE;
         return 0;
     }
-    MLOG_MEM("    [MEM] read_word  va=%05o pa=%05o -> %06o\n", va, pa, M[pa]);
+    printf("\n    [MEM] read_word  va=%#010x, pa=%#010x, value: %#010x", va, pa, M[pa]);
     return M[pa];
 }
 void write_word(t_addr va, t_value val) {
     t_addr pa = VA_TO_PA(va);
     if (pa >= MAX_MEM_WORDS) {
-        MLOG_MEM("    [MEM] write_word va=%05o pa=%05o val=%06o ** OUT OF RANGE ** (MAX_MEM_WORDS=%05o) -> TRAP_AI queued\n",
+        printf("\n    [MEM] write_word va=%#010x pa=%d val=%#010x ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
                  va, pa, val, MAX_MEM_WORDS);
         cpu_state.trp_req_bits |= (1 << TRAP_AI);
         cpu_state.trap_pending = TRUE;
@@ -388,20 +448,20 @@ void write_word(t_addr va, t_value val) {
     }
     /* Check memory protection */
     if (!cpu_state.PR && (M[pa] & 0x0001)) {  /* Protection bit set and cpu_state.PR=0 */
-        MLOG_MEM("    [MEM] write_word va=%05o pa=%05o val=%06o ** PROTECTED ** (cpu_state.PR=0, prot bit set) -> TRAP_PM queued\n",
+        printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x ** PROTECTED ** (cpu_state.PR=0, prot bit set) -> TRAP_PM queued",
                  va, pa, val);
         cpu_state.trp_req_bits |= (1 << TRAP_PM);
         cpu_state.trap_pending = TRUE;
         return;
     }
-    MLOG_MEM("    [MEM] write_word va=%05o pa=%05o val=%06o (was %06o)\n", va, pa, val, M[pa]);
+    printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x (was %#010x)", va, pa, val, M[pa]);
     M[pa] = val;
 }
 uint8 read_byte(t_addr va) {
     uint16 word_addr = va >> 1;
     uint16 word = read_word(word_addr);
     uint8 b = (va & 1) ? (word & 0xFF) : ((word >> 8) & 0xFF);
-    MLOG_MEM("    [MEM] read_byte  va=%05o (word %05o, %s byte) -> %03o\n",
+    printf("\n    [MEM] read_byte  va=%#010x (word %#010x, %#010x byte) -> %#010x",
              va, word_addr, (va & 1) ? "low" : "high", b);
     return b;
 }
@@ -412,7 +472,7 @@ void write_byte(t_addr va, uint8 val) {
         word = (word & 0xFF00) | val;
     else
         word = (word & 0x00FF) | (val << 8);
-    MLOG_MEM("    [MEM] write_byte va=%05o (word %05o, %s byte) val=%03o\n",
+    printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
              va, word_addr, (va & 1) ? "low" : "high", val);
     write_word(word_addr, word);
 }
@@ -426,7 +486,7 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.MA = cpu_state.PR = 0;
     cpu_state.cpu_mode = 0;
     cpu_state.intrpt_mask = 0;
-    cpu_state.int_lvl = 0;
+    cpu_state.curr_int_lvl = 0;
     cpu_state.susp_req_bits = 0;
     susp_stack_ptr = 0;
     cpu_state.trp_req_bits = 0;
@@ -435,6 +495,7 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.interrupts_enabled = 0;
     cpu_state.panel_addr_lights = 0;
     cpu_state.panel_data_lights = 0;
+//    ctx_table = M[10]; FIXME how to assign an address in Mitra's simulated space to ctx_table?
     panel_reset();
     /* At cpu_reset(), the simulator does not need to initialize its own CPT in memory. 
     Every interrupt has an associated pointer indicating a memory area in which the context may be saved on occurence of an interrupt at this level. 
@@ -445,43 +506,12 @@ t_stat cpu_reset(DEVICE * dptr) {
     For example, it could allocate 32 context areas (7 words each) and fill the CPT at M[10] with their addresses. 
     This would allow the interrupt system to be tested independently of a full OS.
     */
+    
+    sim_brk_types = SWMASK('E') | SWMASK('R') | SWMASK('W');;   /* we support execution breakpoints */
+    sim_brk_dflt  = SWMASK('E');   /* default type for BREAK */
 
     return SCPE_OK;
 }
-
-/* For Next command, determine if should use breakpoints
-   to step over a subroutine branch or POP or SYSPOP.  Return
-   TRUE if so with a list of addresses where dynamic (temporary)
-   breakpoints should be set.
-*/
-typedef enum Next_Case {      /*    Next            Next Atomic         Next Forward */
-    Next_BadOp  = 0,          /*    FALSE           FALSE               FALSE        */
-    Next_Branch,              /*    FALSE           EA                  FALSE        */
-    Next_BRM,                 /*    P+1,P+2,P+3     EA+1,P+1,P+2,P+3    P+1,P+2,P+3  */
-    Next_BRX,                 /*    FALSE           EA,P+1              P+1          */
-    Next_Simple,              /*    FALSE           P+1                 P+1          */
-    Next_POP,                 /*    P+1,P+2         100+OP,P+1,P+2      P+1,P+2      */
-    Next_Skip,                /*    P+1,P+2         P+1,P+2             P+1,P+2      */
-    Next_EXU                  /*      ??              ??                  ??         */
-} Next_Case;
-
-Next_Case Op_Cases[64] = {
- Next_BadOp,    Next_Branch,    Next_Simple,    Next_BadOp,     /*  HLT BRU EOM ...  */
- Next_BadOp,    Next_BadOp,     Next_Simple,    Next_BadOp,     /*  ... ... EOD ...  */
- Next_Simple,   Next_Branch,    Next_Simple,    Next_Simple,    /*  MIY BRI MIW POT  */
- Next_Simple,   Next_BadOp,     Next_Simple,    Next_Simple,    /*  ETR ... MRG EOR  */
- Next_Simple,   Next_BadOp,     Next_Simple,    Next_EXU,       /*  NOP ... ROV EXU  */
- Next_BadOp,    Next_BadOp,     Next_BadOp,     Next_BadOp,     /*  ... ... ... ...  */
- Next_Simple,   Next_BadOp,     Next_Simple,    Next_Simple,    /*  YIM ... WIM PIN  */
- Next_BadOp,    Next_Simple,    Next_Simple,    Next_Simple,    /*  ... STA STB STX  */
- Next_Skip,     Next_BRX,       Next_BadOp,     Next_BRM,       /*  SKS BRX ... BRM  */
- Next_BadOp,    Next_BadOp,     Next_Simple,    Next_BadOp,     /*  ... ... RCH ...  */
- Next_Skip,     Next_Branch,    Next_Skip,      Next_Skip,      /*  SKE BRR SKB SKN  */
- Next_Simple,   Next_Simple,    Next_Simple,    Next_Simple,    /*  SUB ADD SUC ADC  */
- Next_Skip,     Next_Simple,    Next_Simple,    Next_Simple,    /*  SKR MIN XMA ADM  */
- Next_Simple,   Next_Simple,    Next_Simple,    Next_Simple,    /*  MUL DIV RSH LSH  */
- Next_Skip,     Next_Simple,    Next_Skip,      Next_Skip,      /*  SKM LDX SKA SKG  */
- Next_Skip,     Next_Simple,    Next_Simple,    Next_Simple };  /*  SKD LDB LDA EAX  */
 
 /* Memory examine */
 
@@ -490,9 +520,9 @@ t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 uint32 pa;
 
 pa = addr;
-if (pa > MAXMEMSIZE)
+if (pa > MAX_MEM_WORDS)
     return SCPE_REL;
-if (pa >= MEMSIZE)
+if (pa >= MAX_MEM_WORDS)
     return SCPE_NXM;
 if (vptr != NULL)
     *vptr = M[pa] & DMASK;
@@ -501,52 +531,46 @@ return SCPE_OK;
 
 /* Memory deposit */
 
-t_stat cpu_dep (t_value val, t_addr addr, UNIT *uptr, int32 sw)
-{
-uint32 pa;
-
-pa = addr;
-if (pa > MAXMEMSIZE)
-    return SCPE_REL;
-if (pa >= MEMSIZE)
-    return SCPE_NXM;
-M[pa] = val & DMASK;
-return SCPE_OK;
+t_stat cpu_dep(t_value val, t_addr addr, UNIT * uptr, int32 sw) {
+    uint32 pa = addr & 0x7FFF;
+    printf("\npa: %#010x \n", pa);
+    if (pa >= MAX_MEM_WORDS)
+        return SCPE_NXM;
+    M[pa] = val & DMASK;
+    return SCPE_OK;
 }
 
 /* Set memory size */
 
-t_stat cpu_set_size (UNIT *uptr, int32 val, CONST char *cptr, void *desc)
-{
-int32 mc = 0;
-uint32 i;
-
-if ((val <= 0) || (val > MAXMEMSIZE) || ((val & 037777) != 0))
-    return SCPE_ARG;
-for (i = val; i < MEMSIZE; i++)
-    mc = mc | M[i];
-if ((mc != 0) && (!get_yn ("Really truncate memory [N]?", FALSE)))
+t_stat cpu_set_size(UNIT * uptr, int32 val, CONST char * cptr, void * desc) {
+    int32 mc = 0;
+    uint32 i;
+    if (val <= 0 || val > MAX_MEM_WORDS || (val & 037777) != 0)
+        return SCPE_ARG;
+    for (i = val; i < MEMsize; i++)
+        mc = mc | M[i];
+    if (mc != 0 && !get_yn("Really truncate memory [N]?", FALSE))
+        return SCPE_OK;
+    MEMsize = val;
+    for (i = MEMsize; i < MAX_MEM_WORDS; i++)
+        M[i] = 0;
     return SCPE_OK;
-MEMSIZE = val;
-for (i = MEMSIZE; i < MAXMEMSIZE; i++)
-    M[i] = 0;
-return SCPE_OK;
 }
 
 /* The real time clock runs continuously; therefore, it only has
    a unit service routine and a reset routine.  The service routine
    sets an interrupt that invokes the clock counter.  The clock counter
    is a "one instruction interrupt", and only MIN/SKR are valid.
-*/
+
 
 t_stat rtc_svc (UNIT *uptr)
 {
-if (rtc_pie)                                            /* set pulse intr */
+if (rtc_pie)                                            /* set pulse intr *
     int_req = int_req | INT_RTCP;
-rtc_unit.wait = sim_rtcn_calb (rtc_tps, TMR_RTC);       /* calibrate */
-sim_activate (&rtc_unit, rtc_unit.wait);                /* reactivate */
+rtc_unit.wait = sim_rtcn_calb (rtc_tps, TMR_RTC);       /* calibrate *
+sim_activate (&rtc_unit, rtc_unit.wait);                /* reactivate *
 return SCPE_OK;
-}
+} */
 
 /* Clock interrupt instruction */
 
@@ -676,7 +700,7 @@ t_stat cpu_show_hist(FILE * st, UNIT * uptr, int32 val, CONST void * desc) {
     for (k = 0; k < lnt; k++) {
         h = & hst[(++hst_p_loc) % hst_lnt];
         if (h->typ) {
-            fprintf(st, "%s %05o %c  %o  %06o %06o %06o\n",
+            fprintf(st, "%s %d %c  %o  %d %d %d\n",
                 cyc[h->typ & 3], h->P, modes[(h->typ >> 5) & 3],
                 (h->typ >> 4) & 1, h->A, h->E, h->X);
         }
@@ -684,52 +708,4 @@ t_stat cpu_show_hist(FILE * st, UNIT * uptr, int32 val, CONST void * desc) {
     return SCPE_OK;
 }
 
-static void mitra_log_close(void) {
-    if (mitra_log_fp != NULL) {
-        fprintf(mitra_log_fp, "===== MITRA-15 trace log closed =====\n");
-        fclose(mitra_log_fp);
-        mitra_log_fp = NULL;
-    }
-}
-
-static void mitra_log_init(void) {
-    if (mitra_log_fp == NULL) {
-        mitra_log_fp = fopen(MITRA_LOG_FILENAME, "a");
-        if (mitra_log_fp != NULL) {
-            time_t now = time(NULL);
-            /* Line-buffered: each '\n' is flushed to disk immediately. */
-            setvbuf(mitra_log_fp, NULL, _IOLBF, 0);
-            fprintf(mitra_log_fp, "\n===== MITRA-15 trace log opened %s", ctime(&now));
-            atexit(mitra_log_close);
-        }
-    }
-}
-
-/* Low-level formatted write; always safe to call.
- * Not static: shared with mitra_io.c (and other modules) via extern
- * declarations, so CPU and device-level traces interleave in one file. */
-void mitra_log(const char *fmt, ...) {
-    va_list ap;
-    if (!mitra_log_enable)
-        return;
-    mitra_log_init();
-    if (mitra_log_fp == NULL)
-        return;
-    va_start(ap, fmt);
-    vfprintf(mitra_log_fp, fmt, ap);
-    va_end(ap);
-    fflush(mitra_log_fp);  /* belt-and-braces: guarantee it hits disk before a segfault can lose it */
-}
-
-/* Dumps the full visible CPU context (used by interrupt/trap/suspension logging).
- * Not static: also called from mitra_io.c. */
-void mitra_log_regs(const char *label) {
-    if (!(mitra_log_enable && mitra_log_int))
-        return;
-    mitra_log("    [%-9s] blk=%d P=%05o L=%05o G=%05o A=%06o E=%06o X=%06o C=%d O=%d cpu_state.MS=%d cpu_state.PR=%d cpu_state.MA=%d\n",
-        label, cpu_state.SuspensionStack[susp_stack_ptr].J_reg,
-        cpu_state.reg_P, cpu_state.reg_L, cpu_state.reg_G,
-        cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
-        cpu_state.C, cpu_state.OV, cpu_state.MS, cpu_state.PR, cpu_state.MA);
-}
 
