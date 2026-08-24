@@ -32,7 +32,7 @@
 #define FMTASC(x) ((x) < 040)? "<%03o>": "%c", (x)
 
 /* ========== External Declarations ========== */
-void io_init_system(void);
+void io_init(void);
 
 extern DEVICE cpu_dev;
 extern DEVICE panel_dev;
@@ -73,7 +73,7 @@ DEVICE *sim_devices[] = {
     &panel_dev,
     &rtc_dev,
     &dri_dev,
-    &sagem_dev,
+//    &sagem_dev,
     &ptr_dev,
     &ptp_dev,
     &asr_dev,
@@ -172,6 +172,17 @@ static const char *group2_opnames[] = {
     "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS"
 };
 
+/* Opcode names for Group 3 instructions (DLD, STA, etc.) */
+static const char *group3_opnames[] = {
+    "SHR", "SRG", "ICX", "DCX", "", "ICL", "DCL", "CSV",
+    "CLS", "LDR", "STR", "LDP", "SHC", "TES", "", ""
+};
+
+/* Opcode names for Group 4 instructions (DLD, STA, etc.) */
+static const char *group4_opnames[] = {
+    "BCT", "BRX", "BOT", "BCF", "BAN", "BAZ", "BOF", "BRU"
+};
+
 /* Addressing mode names */
 static const char *mode_names[] = {
     "DL",  /* 0 */
@@ -195,7 +206,7 @@ t_stat sim_reset(void) {
     if (r != SCPE_OK) return r;
     
     /* Reset all devices */
-    io_init_system();
+    io_init();
     
     return SCPE_OK;
 }
@@ -518,7 +529,7 @@ t_stat sim_init(void) {
     /* Initialize all devices */
     cpu_reset(&cpu_dev);
     rtc_reset(&rtc_dev);
-    io_init_system();
+    io_init();
 
     return SCPE_OK;
 }

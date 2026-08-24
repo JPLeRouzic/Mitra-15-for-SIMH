@@ -318,7 +318,7 @@ t_stat sim_instr(void) {
 	    int cause = mitra_resolve_trap_cause(cpu_state.trp_req_bits);
 	    if (cause >= 0) {
 		cpu_state.trap_cause = cause;
-		reason = mitra_trap(cause, cpu_state.reg_P, &cpu_state.trap_P);
+		reason = mitra_trap(cause, cpu_state.reg_P);
 		if (reason != SCPE_OK)
 		    break;
 		continue;   /* re-check breakpoints/suspensions/interrupts before fetching */
@@ -498,7 +498,7 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.interrupts_enabled = 0;
     cpu_state.panel_addr_lights = 0;
     cpu_state.panel_data_lights = 0;
-//    ctx_table = M[10]; FIXME how to assign an address in Mitra's simulated space to ctx_table?
+//    uint16 ctx_table = M[10]; // FIXME how to assign an address in Mitra's simulated space to ctx_table?
     panel_reset();
     /* At cpu_reset(), the simulator does not need to initialize its own CPT in memory. 
     Every interrupt has an associated pointer indicating a memory area in which the context may be saved on occurence of an interrupt at this level. 
@@ -523,12 +523,15 @@ t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 uint32 pa;
 
 pa = addr;
+sim_printf("\npa ex: %#010x", pa);
+sim_printf("\n");
 if (pa > MAX_MEM_WORDS)
     return SCPE_REL;
 if (pa >= MAX_MEM_WORDS)
     return SCPE_NXM;
-if (vptr != NULL)
+if (vptr != NULL) {
     *vptr = M[pa] & DMASK;
+    }
 return SCPE_OK;
 }
 
@@ -536,10 +539,12 @@ return SCPE_OK;
 
 t_stat cpu_dep(t_value val, t_addr addr, UNIT * uptr, int32 sw) {
     uint32 pa = addr & 0x7FFF;
-    sim_printf("\npa: %#010x", pa);
+    sim_printf("\npa  dep: %#010x", pa);
+    sim_printf("\n");
     if (pa >= MAX_MEM_WORDS)
         return SCPE_NXM;
     M[pa] = val & DMASK;
+    sim_printf("\nM[pa]: %#010x", M[pa]);
     return SCPE_OK;
 }
 

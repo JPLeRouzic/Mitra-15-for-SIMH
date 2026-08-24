@@ -78,14 +78,55 @@ All devices will follow the same integration pattern, they provide:
 extern CPU_STATE cpu_state;
 void panel_reset(void);
 t_stat panel_reset_dev(DEVICE *dptr);
+t_stat panel_rd(uint16 e_reg, uint16 *result);
+t_stat panel_wd(uint16 e_reg, uint16 a_val);
+
+/*
+* A wrapper function to manage RD or WD instruction execution
+* - matching dio_handler_t: t_stat xxx_dio(uint16 inst, t_bool is_write),
+* - that reads cpu_state.reg_E/reg_A and 
+* - calls the device's own _wd/_rd function, writing results back into cpu_state.reg_A for RD.
+*/
+t_stat panel_dio_handler(uint16 inst, t_bool is_write) {
+    if(is_write) {
+	return panel_wd(cpu_state.reg_E, cpu_state.reg_A);
+	}
+    else {
+	 return panel_rd(cpu_state.reg_E, &cpu_state.reg_A);
+	 }
+}
 
 /* RD (E=0x20) – read keys */
 t_stat panel_rd(uint16 e_reg, uint16 *result)
 {
-    if (e_reg != 0x20) return SCPE_IOERR;
-    /* In a real emulator we would read the front panel keys.
-       For now, always return 0. */
-    *result = 0;
+    if (e_reg != 0x20) 
+    	return SCPE_IOERR;
+    uint8  fnc  = (uint8)(e_reg & 0xFF);          /* low 8 bits of E as function */
+    switch (fnc) {
+        case 0x00:                            /* sense switches → A */
+            /* FIXME In a real machine the front-panel switches would be read.
+               We expose a simple global for the moment. */
+            cpu_state.reg_A = cpu_state.panel_data_lights;   /* or a dedicated SSW */
+            break;
+
+        case 0x10:                            /* read memory-fault register */
+            cpu_state.reg_A = 0;                       /* placeholder */
+            break;
+
+        case 0x20:                            /* read address lights */
+            cpu_state.reg_A = cpu_state.panel_addr_lights;
+            break;
+
+        case 0x40:                            /* read PSW2 / inhibit bits */
+            cpu_state.reg_A = (cpu_state.MA ? 0x8000 : 0) |
+                     (cpu_state.MS ? 0x4000 : 0) |
+                     (cpu_state.PR ? 0x2000 : 0);
+            break;
+
+        default:
+            return TRAP_II;
+        }
+
     return SCPE_OK;
 }
 
@@ -93,12 +134,16 @@ t_stat panel_rd(uint16 e_reg, uint16 *result)
 t_stat panel_wd(uint16 e_reg, uint16 a_val)
 {
     switch (e_reg) {
-        case 0x20:   /* write address lights */
-            cpu_state.panel_addr_lights = a_val;
+        case 0:   /* system reset */
+            /* Simulate power failure – reset entire system */
+            cpu_state.cpu_running = 0;
+            cpu_state.interrupts_enabled = 0;
+            cpu_state.routing_enabled = 0;
+            cpu_state.panel_addr_lights = 0;
+            cpu_state.panel_data_lights = 0;
+            /* Additional reset actions would be called from the main emulator */
             return SCPE_OK;
-        case 0x10:   /* write data lights */
-            cpu_state.panel_data_lights = a_val;
-            return SCPE_OK;
+
         case 1:
             switch (a_val) {
                 case 0x060:   /* turn off run light, mask interrupts, ignore routing */
@@ -120,18 +165,17 @@ t_stat panel_wd(uint16 e_reg, uint16 a_val)
             }
             return SCPE_OK;
             
-        case 0:   /* system reset */
-            /* Simulate power failure – reset entire system */
-            cpu_state.cpu_running = 0;
-            cpu_state.interrupts_enabled = 0;
-            cpu_state.routing_enabled = 0;
-            cpu_state.panel_addr_lights = 0;
-            cpu_state.panel_data_lights = 0;
-            /* Additional reset actions would be called from the main emulator */
+        case 0x10:   /* write data lights */
+            cpu_state.panel_data_lights = a_val;
             return SCPE_OK;
+            
+        case 0x20:   /* write address lights */
+            cpu_state.panel_addr_lights = a_val;
+            return SCPE_OK;
+            
         default:
             return SCPE_IOERR;
-    }
+        }
 }
 
 /* ========== SIMH STRUCTURES ========== */
@@ -162,6 +206,26 @@ MTAB panel_mod[] = {
     { 0 }
 };
 
+/* ========== DEVICE Structure ========== 
+* For a device to respond to RD or WD instructions, its dib_t must define two specific fields:
+*
+*    - dio: The "Mode" or index (0 to DIO_N_MOD - 1) that this device claims.
+*    - dio_disp: A pointer to the C function that will handle the RD/WD instructions for this specific mode.
+*
+* When you add a new device (e.g., via the SIMH ATTACH or SET commands) that utilizes Direct I/O, it becomes part of the sim_devices list. 
+* The next time io_init() runs (usually upon a system reset or boot), it will find the device's dib_t, read its dio mode, and insert 
+* its specific handler function into the dio_disp table. 
+* From that point on, any RD or WD instruction targeting that mode will be routed to the new device's code.
+*/
+t_stat panel_dio_handler(uint16 inst, t_bool is_write); // RD and WD wrapper
+
+dib_t panel_dib = {
+    0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
+    NULL,               // disp (not used for RD/WD)
+    0x15,               // dio: The "Mode" this device claims
+    panel_dio_handler     // dio_disp: The handler function
+};
+
 /* Device definition */
 DEVICE panel_dev = {
     "PANEL",            /* name */
@@ -180,7 +244,7 @@ DEVICE panel_dev = {
     NULL,               /* boot */
     NULL,               /* attach */
     NULL,               /* detach */
-    NULL,               /* ctxt */
+    &panel_dib,         /* ctxt */
     0,                  /* flags */
     0,                  /* dctrl */
     NULL,               /* debflags */

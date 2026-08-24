@@ -1,4 +1,4 @@
-/* sds_io.c: SDS 940 I/O simulator
+/* mitra_io,c derived from sds_io.c: SDS 940 I/O simulator
 
    Copyright (c) 2001-2020, Robert M. Supnik
 
@@ -26,6 +26,7 @@
    01-Nov-2020  RMS     Fixed overrun/underrun handling in single-word IO
    23-Oct-2020  RMS     TOP disconnects the channel rather than setting CHF_EOR
    19-Mar-2012  RMS     Fixed various declarations (Mark Pizzolato)
+   1-May-2026  RMS     Mitra-15 creation (Jean-Pierre Le Rouzic contact@padiracinnovation.org)
 */
 
 #include "mitra_defs.h"
@@ -105,8 +106,8 @@ extern t_stat pot_dsk (uint32 num, uint32 *dat);
 t_stat pin_mux (uint32 num, uint32 *dat);
 t_stat pot_mux (uint32 num, uint32 *dat);
 
-extern void dri_reset(void);
-extern void sagem_reset(void);
+extern t_stat dri_reset(DEVICE *dptr);
+extern t_stat sagem_reset(DEVICE *dptr);
 extern void cdr_reset(void);
 extern void asr33_reset(void);
 extern void ptr_reset(void);
@@ -119,14 +120,73 @@ struct aldisp {
     t_stat      (*pin) (uint32 num, uint32 *dat);       /* altnum, *dat */
     t_stat      (*pot) (uint32 num, uint32 *dat);       /* altnum, *dat */
     };
+    
+t_stat (*dio_disp[DIO_N_MOD])(uint16 inst, t_bool is_write);
 
+/* 
+========== System Initialization ========== 
+1. The Device Information Block (dib_t)
+Every I/O device in the simulator has a context structure called a Device Information Block (dib_t). 
+For a device to respond to RD or WD instructions, its dib_t must define two specific fields:
 
+    dio: The "Mode" or index (0 to DIO_N_MOD - 1) that this device claims.
+    dio_disp: A pointer to the C function that will handle the RD/WD instructions for this specific mode.
 
-/* ========== System Initialization ========== */
-void io_init_system(void) {
+2. The Initialization Routine (io_init)
+Whenever the simulator starts or resets, the CPU calls the io_init() function. 
+This function is responsible for wiring up the dispatch table. 
+
+When you add a new device (e.g., via the SIMH ATTACH or SET commands) that utilizes Direct I/O, it becomes part of the sim_devices list. 
+The next time io_init() runs (usually upon a system reset or boot), it will find the device's dib_t, read its dio mode, and insert its specific handler function into the dio_disp table. From that point on, any RD or WD instruction targeting that mode will be routed to the new device's code.
+
+f a device is disabled or removed from the configuration, it is omitted from the sim_devices list. 
+When io_init() runs, it simply skips over that device. Because io_init() explicitly sets all non-zero indices to NULL in Step A, the slot in dio_disp for that device's mode will remain NULL.
+
+If a program executes an RD or WD instruction targeting a mode that was removed (meaning dio_disp[mode] is NULL), the io_rwd() function will catch it.
+
+To prevent system instability, io_init() actively checks for hardware address conflicts. If two different devices attempt to claim the same dio mode, the simulator will detect that dio_disp[dio] is already populated and halt with a configuration error
+*/
+t_bool io_init(void) {
+DEVICE *dptr; 
+dib_t *dibp; 
+uint32 dio;
+
+    /* Clear the entire dio_disp array to NULL. */
+    for (uint i = 1; i < DIO_N_MOD; i++)
+        dio_disp[i] = NULL;
+        
+    // Next, loop through the global sim_devices list, which contains all devices currently enabled and configured in the simulator.
+    for (uint i = 0; (dptr = sim_devices[i]) != NULL; i++) {
+        if ((dibp = (dib_t *)dptr->ctxt) == NULL)
+            continue;
+        if (dibp->dio_disp == NULL)
+            continue;                         /* device does not use RD/WD */
+
+        dio = dibp->dio;                      /* the mode it claims */
+        if (dio >= DIO_N_MOD) {
+            sim_printf("%s: illegal dio mode %u\n", sim_dname(dptr), dio);
+            return true;                      /* error */
+        }
+        if (dio_disp[dio] != NULL) {
+            sim_printf("%s: direct I/O address conflict, dio = %02X\n",
+                       sim_dname(dptr), dio);
+            return true;
+        }
+        dio_disp[dio] = dibp->dio_disp;
+    }
+        
+    /* FIXME If the device has a dio_disp function pointer defined in its dib_t, io_init() plugs that function pointer into 
+    // the dio_disp array at the index specified by the device's dio field.
+        dio = dibp->dio;
+        // ...
+        if (dibp->dio_disp)
+            dio_disp[dio] = dibp->dio_disp;
+    */
+    
+    /* Reset every peripheral that needs it */
     printf("\n[IO-INIT] resetting all devices: DRI, SAGEM, CDR, ASR33, PANEL, PTR, PTP, PRINTER\n");
-    dri_reset();
-    sagem_reset();
+    dri_reset(dptr);
+//    sagem_reset(dptr);
     cdr_reset();
     asr33_reset();
     panel_reset();
@@ -134,10 +194,7 @@ void io_init_system(void) {
     ptp_reset();
     printer_reset();
     printf("\n[IO-INIT] all devices reset\n");
-}
-
-t_bool io_init(void) {
-    io_init_system();
+    
     return FALSE;
 }
 
@@ -159,7 +216,8 @@ t_stat read_byte_io(uint32 addr, uint8 *val, int zio) {
 void io_interrupt_dispatch(uint32 int_req, t_bool high_speed) {
     printf("\n  [IO-INT] io_interrupt_dispatch int_req=%08x high_speed=%d\n", int_req, (int)high_speed);
     cpu_state.intrpt_mask |= int_req;
-    if (high_speed) cpu_state.high_speed = TRUE;
+    if (high_speed) 
+    	cpu_state.high_speed = true;
 }
 
 

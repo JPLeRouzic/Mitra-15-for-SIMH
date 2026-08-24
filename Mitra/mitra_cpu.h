@@ -2,6 +2,8 @@
 #define MITRA_CPU_H
 
 #include <stdio.h>
+#include "mitra_defs.h"
+
 /* ========== Constants and Definitions ========== */
 #define PCQ_SIZE        64
 #define PCQ_MASK        (PCQ_SIZE - 1)
@@ -105,14 +107,19 @@ typedef struct {
  * So now operation in the simulator occurs on a set of shim registers that are made pointing to the correct block.
  * V and W are used by micro-programs.
  */
-    uint16 reg_A, reg_E, reg_X, reg_P, reg_L, reg_G, reg_V, reg_W;
+ 						
+    uint16 reg_P, reg_L, reg_G, reg_A, reg_E, reg_X ;	// | => Alias of bloc 0 of 8 registers
+    uint16 reg_V /* reg 6 */, reg_W;			// | reg_P is at index 0 and reg_W at index 7
+    
+ 															// |
+    uint16 reg_8; /* niveau de la tâche en cours */									// |
+    uint16 reg_cnt_MAE,  reg_curr_MAE, reg_Work_MAE; /* mémoire de voie au télétype de service (ASR 33 ou MAE) */	// | => Alias of bloc 1 of 8 registers
+    uint16 reg_12; /* adresse du bloc programme en cours d'utilisation */						// |
+    uint16 reg_NC1, reg_NC2, reg_NC3;	/* not important for SIMH */							// |
+    
     uint8 C, OV;
-    uint16 reg_8, reg_12;
         
-    struct {
-        uint16 A, E, X, P, L, G, Reg_6, Reg_unknown;
-        uint8 C, OV;
-    } reg_block[REG_BLOCS];
+    uint16 reg_block[REG_BLOCS][8];
     
     uint8 J_reg;     /* J register (bits 0-4 block selector: bits 5 to 7 register, MITRA 15S_15M/15 Manuel de microprogrammation) */
 
@@ -131,7 +138,7 @@ typedef struct {
     * It should be noted that addressing modes are different in master and slave modes (see Chapter V "Addressing modes") to provide absolute addressing capability.
     */
     uint8 MS; // Master/slave
-    uint8 MA; // Interrupt mask
+    uint8 MA; // If interrupt mask is set to 1: all interrupt levels are masked
     uint8 PR; // Access to protected areas
     
     /* Interrupt/High speed Interrupt/Suspension/Trap state */
@@ -194,7 +201,7 @@ uint8 read_byte(t_addr va);
 void write_byte(t_addr va, uint8 val);
 static uint16 add16(uint16 a, uint16 b, uint16 * carry, uint16 * overflow);
 static uint16 sub16(uint16 a, uint16 b, uint16 * carry, uint16 * overflow);
-static void set_condition_codes_load(uint16 result);
+void set_condition_codes_load(uint16 result);
 static void set_condition_codes_compare(uint16 a, uint16 b, uint16 result);
 static void set_condition_codes_arithmetic(uint16 result, uint16 carry, uint16 overflow);
 static void mul32(uint16 a, uint16 b, uint16 * high, uint16 * low);
@@ -205,7 +212,7 @@ const char *mitra_trap_name(int trap);
 int mitra_resolve_trap_cause(uint32 trp_req_bits);
 
 /* Enhanced trap and suspension functions */
-t_stat mitra_trap(int trap, uint16 pc, uint16 *trappc);
+t_stat mitra_trap(int trap, uint16 pc);
 t_stat mitra_suspension_request(uint16 susp_level);
 t_stat mitra_suspension_process(void);
 t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed);
@@ -230,5 +237,28 @@ t_stat cpu_set_hist(UNIT * uptr, int32 val, CONST char * cptr, void * desc);
 t_stat cpu_show_hist(FILE * st, UNIT * uptr, int32 val, CONST void * desc);
 void panel_reset(void);
 void mitra_log_regs(const char *label);
+uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst, t_addr target_address, t_value mem_value);
+void group_3_shift_PX(uint16 inst, uint32 mode);
+uint16 set_register(uint16 inst, uint32 mode);
+uint16 test_and_set(uint32 mode, t_addr target_address);
+uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address);
+uint16 load_mem_protect(uint32 mode, t_addr target_address);
+uint16 case_instr_LDR(uint16 inst);
+void call_section(t_addr target_address);
+void CSV_instr(t_addr target_address);
+void group_3_shift_DL(uint16 inst, uint32 mode);
+uint16 string_proc(uint16 inst, uint32 mode, t_addr target_address);
+uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address);
+uint16 shift_lls(uint16 val, int count);
+uint16 shift_rls(uint16 val, int count);
+uint16 shift_sas(uint16 val, int count);
+uint16 shift_srcs(uint16 val, int count);
+uint16 shift_slcs(uint16 val, int count);
+void shift_lld(uint16* E, uint16* A, int count);
+void shift_rld(uint16* E, uint16* A, int count);
+void shift_sad(uint16* E, uint16* A, int count);
+void shift_lcd(uint16* E, uint16* A, int count);
+void shift_rcd(uint16* E, uint16* A, int count);
+
 
 #endif

@@ -158,6 +158,22 @@
 #define CHM_M_HWC       037
 #define CHM_GETHWC(x)   (((x) >> CHM_V_HWC) & CHM_M_HWC)
 
+/*
+* The dio_disp table acts as a dynamic patch panel that is rewired every time the system resets. 
+* Devices "plug in" their handler functions via their dib_t structures during io_init(), and the CPU routes RD/WD instructions
+* to them based on the Mode bits extracted from the instruction's effective address.
+*/
+
+/* I/O device definition block */
+#define DIO_N_MOD       (128)                 /* FIXME # DIO "modes" */
+
+typedef struct {
+    uint32      dva;                                    /* dev addr (chan+dev) */
+    uint32      (*disp)(uint32 op, uint32 dva, uint32 *dvst);
+    uint32      dio;                                    /* dev addr (direct IO) */
+    t_stat      (*dio_disp)(uint16 inst, t_bool is_write);
+    } dib_t;
+
 /* Channel function prototypes
 void chan_set_flag (int32 ch, uint32 fl);
 void chan_set_ordy (int32 ch);

@@ -13,7 +13,7 @@ z:
   R10    |             adresse des octets — 1            |
          +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
   R11    |  caractère de         |      données u        |
-	     |		comparaison      |                       |
+         |	comparaison      |                       |
          +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 
 WD		E		1
@@ -94,6 +94,8 @@ All devices will follow the same integration pattern, they provide:
 #include <stdlib.h>
 #include <stdbool.h>
 
+t_stat asr_dio_handler(uint16 inst, t_bool is_write); // RD and WD wrapper
+
 /* ASR33 - Corrected Register Addresses */
 #define ASR33_R9   0x09   /* z bit (bit15) + byte count (bits 0-14) */
 #define ASR33_R10  0x0A   /* byte address - 1 */
@@ -116,6 +118,10 @@ extern t_value read_word(t_addr va);
 extern void write_word(t_addr va, t_value val);
 extern uint8 read_byte(t_addr va);
 extern void write_byte(t_addr va, uint8 val);
+
+t_stat asr33_rd(uint16 e_reg, uint16 *result);
+t_stat asr33_wd(uint16 e_reg, uint16 val);
+
 
 typedef struct {
     int    active;
@@ -161,76 +167,19 @@ static void asr_interrupt(void)
 
 }
 
-/* Write a character to the console */
-static void asr_putc(uint8 ch)
-{
-    sim_putchar(ch);
-}
-
-/* Read a character from console (non‑blocking) – returns -1 if none */
-static int asr_getc(void)
-{
-    int32 c = sim_poll_kbd();
-    if (c < SCPE_KFLAG)
-        return -1;
-    return c & 0xFF;
-}
-
-/* Poll routine – called from main I/O loop */
-int asr_poll(void)
-{
-    if (!asr_state.active) return 0;
-
-    if (asr_state.mode == 3) {   /* output (write) */
-        if (asr_state.bytes_left > 0) {
-            uint8 ch;
-            if (read_byte_io(asr_state.mem_addr, &ch, 0) != SCPE_OK) {
-                asr_state.active = 0;
-                asr_state.status = 0x07;   /* error */
-                asr_interrupt();
-                return 1;
-            }
-            asr_putc(ch);
-            asr_state.mem_addr++;
-            asr_state.bytes_left--;
-            asr_state.last_char = ch;
-        }
-        if (asr_state.bytes_left == 0) {
-            asr_state.active = 0;
-            asr_state.status = 0x02;   /* écriture finished */
-            asr_interrupt();
-        }
-        return 1;
-    }
-
-    if (asr_state.mode == 1 || asr_state.mode == 2) {   /* input from keyboard or paper tape */
-        int ch = asr_getc();
-        if (ch == -1) return 0;   /* no character yet */
-
-        uint8 ascii = (uint8)ch;
-        asr_state.last_char = ascii;
-        write_byte_io(asr_state.mem_addr, ascii, 0);
-        asr_state.mem_addr++;
-        asr_state.bytes_left--;
-
-        if (asr_state.bytes_left == 0 || (asr_state.stop_on_compare && ascii == asr_state.compare_char)) {
-            /* Transfer finished or compare character reached */
-            if (asr_state.stop_on_compare && ascii == asr_state.compare_char) {
-                /* Update R9 with number of bytes not read */
-                write_word(ASR33_R9, (asr_state.bytes_left & 0x7FFF) | (1 << 15)); /* z=1 */
-                /* Update R11 high byte with last character */
-                uint16 r11 = read_word(ASR33_R11);
-                r11 = (r11 & 0x00FF) | (ascii << 8);
-                write_word(ASR33_R11, r11);
-            }
-            asr_state.active = 0;
-            asr_state.status = 0x03;   /* lecture finished */
-            asr_interrupt();
-        }
-        return 1;
-    }
-
-    return 0;
+/*
+* A wrapper function to manage RD or WD instruction execution
+* - matching dio_handler_t: t_stat xxx_dio(uint16 inst, t_bool is_write),
+* - that reads cpu_state.reg_E/reg_A and 
+* - calls the device's own _wd/_rd function, writing results back into cpu_state.reg_A for RD.
+*/
+t_stat asr_dio_handler(uint16 inst, t_bool is_write) {
+    if(is_write) {
+	return asr33_wd(cpu_state.reg_E, cpu_state.reg_A);
+	}
+    else {
+	 return asr33_rd(cpu_state.reg_E, &cpu_state.reg_A);
+	 }
 }
 
 /* WD handler (E=1) */
@@ -239,18 +188,11 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
     if (e_reg != 1) return SCPE_IOERR;
     uint8 cmd = a_val & 0xFF;
 
-    /* Read channel registers: ADM at &1C, CM at &1D */
-    /* FIXME it is not clear if
-    	- Channel registers should be R9, R10, R11 (not &1C/&1D for ADM/CM)
-	- Registers are at absolute addresses 0x1C/0x1D or 9, 10, 11 
-    */
-    uint16 adm = read_word(0x1C);
-    uint16 cm  = read_word(0x1D);
-    uint32 mem_addr = adm + 2;
-    uint32 byte_count = cm * 2;
 
     /* Read R9 (z and count) and R11 compare char */
     uint16 r9  = read_word(ASR33_R9);
+    uint32 mem_addr = r9 & 0x07FF;
+    uint16 r10 = read_word(ASR33_R10);
     uint16 r11 = read_word(ASR33_R11);
     asr_state.stop_on_compare = (r9 >> 15) & 1;
     asr_state.compare_char = (r11 >> 8) & 0xFF;
@@ -272,7 +214,7 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
             asr_state.mode = 3;   /* write */
             asr_state.active = 1;
             asr_state.mem_addr = mem_addr;
-            asr_state.bytes_left = byte_count;
+            asr_state.bytes_left = r10 + 1;
             asr_state.status = 0x02;   /* écriture */
             break;
         case ASR_CMD_LEC_CLAV: /* Lecture clavier */
@@ -280,7 +222,7 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
             asr_state.mode = (cmd == ASR_CMD_LEC_CLAV) ? 1 : 2;
             asr_state.active = 1;
             asr_state.mem_addr = mem_addr;
-            asr_state.bytes_left = byte_count;
+            asr_state.bytes_left = r10 + 1;
             asr_state.status = 0x03;   /* lecture */
             break;
         case ASR_CMD_SUPPR:
@@ -299,18 +241,30 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
 /* RD handler (E=0x10) */
 t_stat asr33_rd(uint16 e_reg, uint16 *result)
 {
-    if (e_reg != 0x10) return SCPE_IOERR;
-    *result = (asr_state.status & 0x07) | (asr_state.last_char << 7);  /* bits 7-15 = last char */
+    if (e_reg != 0x10) 
+    	return SCPE_IOERR;
+    	
+    /* "état" occupies the top 3 bits (doc bits 0–2) and the last character occupies roughly the bottom byte (doc bits 7–15).
+    Lecture d'état 
+	E	&I0
+
+        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+      |  état  |  |           |                       |
+      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+
+	Bits 0 à 2: 
+		000	Repos
+		001 Repos
+		010 Ecriture
+		011 Lecture
+		111 Erreur
+
+	Bits 7 à 15: dernier caractère ASCII transféré.
+    */
+    *result = ((asr_state.status & 0x07) << 13) | (asr_state.last_char && 0x0FF);  /* bits 7-15 = last char */
     asr_state.status = 0;   /* clear on read */
     return SCPE_OK;
-}
-
-/* Reset device */
-void asr33_reset(void)
-{
-    asr_state.active = 0;
-    asr_state.status = 0;
-    asr_state.last_char = 0;
 }
 
 /* ========== SIMH STRUCTURES ========== */
@@ -322,9 +276,11 @@ t_stat asr_svc(UNIT *uptr)
 }
 
 /* Device reset routine - must match t_stat (*)(DEVICE *) */
-t_stat asr_reset(DEVICE *dptr)
+t_stat asr33_reset(DEVICE *dptr)
 {
-    asr33_reset();
+    asr_state.active = 0;
+    asr_state.status = 0;
+    asr_state.last_char = 0;
     return SCPE_OK;
 }
 
@@ -348,6 +304,25 @@ MTAB asr_mod[] = {
 	
 };
 
+/* ========== DEVICE Structure ========== 
+* For a device to respond to RD or WD instructions, its dib_t must define two specific fields:
+*
+*    - dio: The "Mode" or index (0 to DIO_N_MOD - 1) that this device claims.
+*    - dio_disp: A pointer to the C function that will handle the RD/WD instructions for this specific mode.
+*
+* When you add a new device (e.g., via the SIMH ATTACH or SET commands) that utilizes Direct I/O, it becomes part of the sim_devices list. 
+* The next time io_init() runs (usually upon a system reset or boot), it will find the device's dib_t, read its dio mode, and insert 
+* its specific handler function into the dio_disp table. 
+* From that point on, any RD or WD instruction targeting that mode will be routed to the new device's code.
+*/
+
+dib_t asr_dib = {
+    0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
+    NULL,               // disp (not used for RD/WD)
+    0x15,               // dio: The "Mode" this device claims
+    asr_dio_handler     // dio_disp: The handler function
+};
+
 /* Device definition */
 DEVICE asr_dev = {
     "ASR33",            /* name */
@@ -362,11 +337,11 @@ DEVICE asr_dev = {
     8,                  /* dwidth */
     NULL,               /* examine */
     NULL,               /* deposit */
-    &asr_reset,         /* reset */
+    &asr33_reset,         /* reset */
     NULL,               /* boot */
-    &asr33_attach,        /* attach */
-    &asr33_detach,        /* detach */
-    NULL,               /* ctxt */
+    &asr33_attach,      /* attach */
+    &asr33_detach,      /* detach */
+    &asr_dib,           /* ctxt */
     0,                  /* flags */
     0,                  /* dctrl */
     NULL,               /* debflags */
@@ -377,3 +352,4 @@ DEVICE asr_dev = {
     NULL,               /* help_ctxt */
     NULL,               /* description */
 };
+

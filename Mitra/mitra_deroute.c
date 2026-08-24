@@ -103,7 +103,14 @@ t_stat cpt_lookup(uint16 level, uint16 *ctx_ptr_out) {
     return SCPE_OK;
 }
 
-t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc) {
+/*
+* The trap processing micro-program:
+* - protects bytes 4 to 9 of the memory which contain L- and P-register values and the indicators status of the context of the instruction which initiated the trap;
+* - signals the cause of the trap by setting a bit in memory word 2;
+* - performs a call to supervisor section 0.
+* Now I don't understand this code
+*/
+t_stat mitra_trap(int trap, uint16 pc) {
     uint16 trap_word, prts_ptr, sect0_Lbase, sect0_Pbase;
     uint16 ind_word;
 
@@ -117,14 +124,15 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc) {
 
     /* Step 1: Set trap cause bit in absolute memory word 1 (byte address 2) */
     trap_word = read_word(1);
-    trap_word |= (0x8000u >> trap);
-    write_word(1, trap_word);
+    trap_word |= (0x8000u >> trap); //  the bit layout is "bit 0 = VM, bit 1 = PM, bit 2 = AI, bit 3 = PA, bit 4 = II, bit 5 = ES". 
+    write_word(1, trap_word); // FIXME IS IT 0 OR 1?
 
     /* Step 2: 
      *Protect bytes 4-9 with faulting context
      * Save faulting context in words 2, 3, 4 
-     * "bytes 4-9" = word addresses 2, 3, 4 (2 bytes per word) */
-    write_word(2, (pc - GPRIME) & 0x7FFF);
+     * "bytes 4-9" = word addresses 2, 3, 4 (2 bytes per word) 
+     */
+    write_word(2, (pc - GPRIME) & 0x7FFF); // 
     write_word(3, (cpu_state.reg_L - GPRIME) & 0x7FFF);
     /* Indicators word: cpu_state.PR, cpu_state.MA, cpu_state.MS, OV, C */
     ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
@@ -155,9 +163,9 @@ t_stat mitra_trap(int trap, uint16 pc, uint16 * trappc) {
     cpu_state.MA = 1;
     
     cpu_state.reg_L = (sect0_Lbase + cpu_state.reg_G) & 0x7FFF;
-    cpu_state.reg_P = (sect0_Pbase + cpu_state.reg_G) & 0x7FFF;
+    cpu_state.reg_P = (sect0_Pbase + cpu_state.reg_G) & 0x7FFF; // Performs a call to supervisor section 0.
     
-    *trappc = pc;
+//    *trappc = pc;
     cpu_state.trap_pending = FALSE;
     cpu_state.trp_req_bits = 0;
 
@@ -248,6 +256,7 @@ t_stat mitra_suspension_process(void) {
 /*
  * Process suspension request from micro-program level
  * Called from CPU when suspension is pending
+ * FIXME The io_suspension_dispatch() function must route DRI_SUSP_LEVEL (defined as 0 in IO_DRI_fix_disk.c) to dri_suspension_handler(unit)
  */
 void io_suspension_dispatch(uint16 susp_level) {
     /* Route to appropriate device handler based on suspension level */
@@ -331,9 +340,9 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         sim_printf("\n[INT] taking FAST/high-speed path: register-block switch %d -> 6\n", cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
         
         /* Save current indicators in block 0, register 6 */
-        cpu_state.reg_block[0].Reg_6 = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
-                         ((cpu_state.MS & 1) << 13) | ((cpu_state.reg_block[0].OV & 1) << 12) |
-                         ((cpu_state.reg_block[0].C & 1) << 11);
+        cpu_state.reg_block[0][6] = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
+                         ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
+                         ((cpu_state.C & 1) << 11);
         
         /* R12 is loaded with the number of the block which is reserved for high-speed interrupt processing */
         cpu_state.reg_12 = 6 ; // FIXME I bet this number is not hard coded but set somehow
@@ -342,7 +351,7 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 6;
         
         /* Load indicators from reserved block */
-        uint16 ind_word = cpu_state.reg_block[cpu_state.reg_12].Reg_6;
+        uint16 ind_word = cpu_state.reg_block[cpu_state.reg_12][6];
         cpu_state.PR = (ind_word >> 15) & 1;
         cpu_state.MA = (ind_word >> 14) & 1;
         cpu_state.MS = (ind_word >> 13) & 1;
@@ -350,12 +359,12 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         cpu_state.C = (ind_word >> 11) & 1;
         
         /* Load shim registers from reserved block */
-        cpu_state.reg_A = cpu_state.reg_block[cpu_state.reg_12].A;
-        cpu_state.reg_E = cpu_state.reg_block[cpu_state.reg_12].E;
-        cpu_state.reg_X = cpu_state.reg_block[cpu_state.reg_12].X;
-        cpu_state.reg_L = cpu_state.reg_block[cpu_state.reg_12].L;
-        cpu_state.reg_G = cpu_state.reg_block[cpu_state.reg_12].G;
-        cpu_state.reg_P = cpu_state.reg_block[cpu_state.reg_12].P;
+        cpu_state.reg_A = cpu_state.reg_block[cpu_state.reg_12][3]; // A
+        cpu_state.reg_E = cpu_state.reg_block[cpu_state.reg_12][4]; // E
+        cpu_state.reg_X = cpu_state.reg_block[cpu_state.reg_12][5]; // X
+        cpu_state.reg_L = cpu_state.reg_block[cpu_state.reg_12][1]; // L
+        cpu_state.reg_G = cpu_state.reg_block[cpu_state.reg_12][2]; // G
+        cpu_state.reg_P = cpu_state.reg_block[cpu_state.reg_12][0]; // P
 
         sim_printf("int-fast-out\n");
         
@@ -441,13 +450,14 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         uint16 ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
                          ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
                          ((cpu_state.C & 1) << 11);
-        cpu_state.reg_block[cpu_state.reg_12].Reg_6 = ind_word;
+        cpu_state.reg_block[cpu_state.reg_12][6] = ind_word;
         
         /* Return to block 0 */
         cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 0;
+        cpu_state.reg_12 = 0;
         
         /* Restore indicators from block 0, register 6 */
-        ind_word = cpu_state.reg_block[0].Reg_6;
+        ind_word = cpu_state.reg_block[0][6];
         cpu_state.PR = (ind_word >> 15) & 1;
         cpu_state.MA = (ind_word >> 14) & 1;
         cpu_state.MS = (ind_word >> 13) & 1;
@@ -455,13 +465,13 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         cpu_state.C = (ind_word >> 11) & 1;
         
         /* Restore shim registers from block 0 */
-        cpu_state.reg_A = cpu_state.reg_block[0].A;
-        cpu_state.reg_E = cpu_state.reg_block[0].E;
-        cpu_state.reg_X = cpu_state.reg_block[0].X;
-        cpu_state.reg_L = cpu_state.reg_block[0].L;
-        cpu_state.reg_G = cpu_state.reg_block[0].G;
-        cpu_state.reg_P = cpu_state.reg_block[0].P;
-        
+        cpu_state.reg_A = cpu_state.reg_block[0][3]; // A
+        cpu_state.reg_E = cpu_state.reg_block[0][4]; // E
+        cpu_state.reg_X = cpu_state.reg_block[0][5]; // X
+        cpu_state.reg_L = cpu_state.reg_block[0][1]; // L
+        cpu_state.reg_G = cpu_state.reg_block[0][2]; // G
+        cpu_state.reg_P = cpu_state.reg_block[0][0]; // P
+              
         sim_printf("\n[INT-RET] DITR complete, register block switched back to 0\n");
         sim_printf("ditret-fast-out\n");
         
@@ -480,7 +490,7 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
                          ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
                          ((cpu_state.C & 1) << 11);
         
-        write_word(ctx_ptr, ind_word);
+        write_word(ctx_ptr, ind_word); // FIXME we should restore context, this looks suspiciously as saving context
         write_word(ctx_ptr + 1, cpu_state.reg_X);
         write_word(ctx_ptr + 2, cpu_state.reg_E);
         write_word(ctx_ptr + 3, cpu_state.reg_A);
