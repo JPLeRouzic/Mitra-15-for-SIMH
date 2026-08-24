@@ -2195,10 +2195,11 @@ MITRA = ${MITRAD}/mitra_cpu.c ${MITRAD}/mitra_instr.c ${MITRAD}/mitra_instr_util
 	${MITRAD}/IO_asr33.c \
 	${MITRAD}/IO_DRI_fix_disk.c \
 	${MITRAD}/IO_front_panel.c \
-	${MITRAD}/mitra_sys.c
+	${MITRAD}/mitra_sys.c \
+	${MITRAD}/IO_punched_tape.c ${MITRAD}/IO_printer.c ${MITRAD}/IO_card_reader.c
 #	${MITRAD}/IO_analogic_interface.c ${MITRAD}/IO_console_Sintra.c ${MITRAD}/IO_coupleurs_asynchrones.c ${MITRAD}/IO_coupleurs_synchrones.c \
-#	${MITRAD}/IO_sagem_fix_disk.c  ${MITRAD}/IO_fast_channel_1_ADM.c ${MITRAD}/IO_fast_channel_2_ADM.c ${MITRAD}/IO_fast_channel_multiplexed.c \
-#	${MITRAD}/IO_punched_tape.c ${MITRAD}/IO_printer.c${MITRAD}/IO_card_reader.c ${MITRAD}/IO_IOP_1.c ${MITRAD}/IO_IOP_2.c \
+#	${MITRAD}/IO_sagem_fix_disk.c ${MITRAD}/IO_fast_channel_1_ADM.c ${MITRAD}/IO_fast_channel_2_ADM.c ${MITRAD}/IO_fast_channel_multiplexed.c \
+#	${MITRAD}/IO_IOP_1.c ${MITRAD}/IO_IOP_2.c \
 MITRA_OPT = -I ${MITRAD} -DUSE_SIM_CARD
 
 SEL32D = ${SIMHD}/SEL32
