@@ -4,7 +4,7 @@
 
 int get_highest_interrupt(void);
 
-uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst, uint32 mode);
+uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst);
 uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr address, uint32 mode);
 
 extern UNIT cpu_unit;
@@ -148,6 +148,10 @@ static uint16 add16(uint16 a, uint16 b, uint16* carry, uint16* overflow) {
     return result;
 }
 
+// A - Y => A
+/* 
+* carry must be seeded to 1 for a standalone op
+* If a genuine double-word SUB ever gets implemented, that's when we would need borrow propagation across two 16-bit halves
 static uint16 sub16(uint16 a, uint16 b, uint16* carry, uint16* overflow) {
     uint32 diff = (uint32)a + (uint32)(~b & 0xFFFF) + *carry;
     uint16 result = diff & 0xFFFF;
@@ -158,12 +162,29 @@ static uint16 sub16(uint16 a, uint16 b, uint16* carry, uint16* overflow) {
         *overflow = 0;
     }
     return result;
+} */
+static uint16 sub16(uint16 a, uint16 b, uint16* carry, uint16* overflow) {
+    uint16 result = (uint16)(a - b);   /* unsigned wraparound does the modular
+                                           arithmetic for you — no ~b+1 needed */
+
+    *carry    = (a < b) ? 1 : 0;       /* 1 = borrow occurred */
+    *overflow = (((a ^ b) & 0x8000) && ((a ^ result) & 0x8000)) ? 1 : 0;
+
+    return result;
 }
 
+/* mul32(cpu_state.reg_A, mem_value, &cpu_state.reg_E, &cpu_state.reg_A);
 static void mul32(uint16 a, uint16 b, uint16* high, uint16* low) {
     uint32 product = (uint32)(int16_t)a * (uint32)(int16_t)b;
+    sim_printf("\nproduct: %#010x", product);
     *high = (product >> 16) & 0xFFFF;
     *low = product & 0xFFFF;
+} */
+static void mul32(uint16 a, uint16 b, uint16* high, uint16* low) {
+    uint32 product = (uint32)a * (uint32)b;
+    sim_printf("\nproduct: %#010x", product);
+    *high = (uint16)(product >> 16);
+    *low  = (uint16)product;
 }
 
 static int div32(uint16 high, uint16 low, uint16 divisor, uint16* quot,
@@ -860,7 +881,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
  *    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
  *
  */
-uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst, uint32 mode) {
+uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst) {
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0F;
     uint8 s_byte, d_byte;
     uint16 i, data;
@@ -937,7 +958,8 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst, 
 
         case 0x0C:
             /* MUL - Multiply */
-            if (!(cpu_unit.flags & UNIT_MULDIV)) return MM_INVINS;
+            if (!(cpu_unit.flags)) 
+            	return MM_INVINS;
             mul32(cpu_state.reg_A, mem_value, &cpu_state.reg_E,
                   &cpu_state.reg_A);
             set_condition_codes_load(cpu_state.reg_E);

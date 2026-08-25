@@ -132,7 +132,8 @@ extern t_stat op_sks (uint32 inst, uint32 *skp);
 */
 
 UNIT cpu_unit = {
-    UDATA(NULL, UNIT_FIX + UNIT_BINK, MAX_MEM_WORDS)
+//    UDATA(NULL, UNIT_FIX + UNIT_BINK, MAX_MEM_WORDS)
+    UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV, MAX_MEM_WORDS) // Has optional divide
 };
 
 /*
@@ -396,9 +397,14 @@ sim_printf("sim_instr(void) 11\n");
             inst = read_word(cpu_state.reg_P);
             cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             if (inst != 0) {
-                sim_printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x, calling one_inst() ---", inst, save_P);
+                sim_printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x ---\n", inst, save_P);
+                
+                // Print the instruction  mnemonic
+                fprint_sym(stdout, save_P, (unsigned int *) &inst, NULL, 0);
+                sim_printf("\n");
+                
                 reason = one_inst(inst, save_P, cpu_state.cpu_mode, & cpu_state.trap_P);
-                sim_printf("\n--- sim_instr: one_inst() returned reason=%#010x (cpu_state.trap_P=%#010x) ---", reason, cpu_state.trap_P);
+                sim_printf("\n--- sim_instr: one_inst() returned reason=%#04x ---", reason);
                 if (reason > 0 && reason != STOP_HALT) {
                     sim_printf("\n    P restored to %#010x (was advanced to %#010x) due to reason=%#010x",
                               save_P, cpu_state.reg_P, reason);
@@ -442,6 +448,7 @@ t_value read_word(t_addr va) {
 }
 void write_word(t_addr va, t_value val) {
     t_addr pa = VA_TO_PA(va);
+sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, val);
     if (pa >= MAX_MEM_WORDS) {
         sim_printf("\n    [MEM] write_word va=%#010x pa=%d val=%#010x ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
                  va, pa, val, MAX_MEM_WORDS);
@@ -486,6 +493,7 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 0;
     cpu_state.MREG = cpu_state.reg_V = cpu_state.reg_W = cpu_state.U = 0;
     cpu_state.C = cpu_state.OV = cpu_state.MS = 0;
+    cpu_state.MS = 1; // We boot in master mode
     cpu_state.MA = cpu_state.PR = 0;
     cpu_state.cpu_mode = 0;
     cpu_state.intrpt_mask = 0;
@@ -517,14 +525,11 @@ t_stat cpu_reset(DEVICE * dptr) {
 }
 
 /* Memory examine */
-
 t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 {
 uint32 pa;
 
 pa = addr;
-sim_printf("\npa ex: %#010x", pa);
-sim_printf("\n");
 if (pa > MAX_MEM_WORDS)
     return SCPE_REL;
 if (pa >= MAX_MEM_WORDS)
@@ -532,19 +537,18 @@ if (pa >= MAX_MEM_WORDS)
 if (vptr != NULL) {
     *vptr = M[pa] & DMASK;
     }
+sim_printf("\nAddress at: %#010x contains: %#010x\n", pa, M[pa] & DMASK);
 return SCPE_OK;
 }
 
 /* Memory deposit */
-
 t_stat cpu_dep(t_value val, t_addr addr, UNIT * uptr, int32 sw) {
     uint32 pa = addr & 0x7FFF;
-    sim_printf("\npa  dep: %#010x", pa);
-    sim_printf("\n");
+    sim_printf("\nDeposit: %#010x, to: %#010x", val & DMASK, pa);
     if (pa >= MAX_MEM_WORDS)
         return SCPE_NXM;
     M[pa] = val & DMASK;
-    sim_printf("\nM[pa]: %#010x", M[pa]);
+    sim_printf("\nMemory now contains: %#010x\n", M[pa]);
     return SCPE_OK;
 }
 

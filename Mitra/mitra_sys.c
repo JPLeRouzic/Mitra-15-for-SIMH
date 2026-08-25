@@ -1,5 +1,6 @@
 /* mitra_sys.c: CII Mitra 15/30 Simulator SCP Interface
- *
+ * adapted from sds_sys.c
+ 
  * Copyright (c) 2001-2020, Robert M Supnik
  * Copyright (c) 2026, Jean-Pierre Le Rouzic
  *
@@ -343,11 +344,32 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw) {
             } else {
                 /* System instructions */
                 static const char *sys_names[] = {
-                    "SHR", "SRG", "ICX", "DCX", "???", "ICL", "DCL", "CSV",
+                    "SHR", "SRG", "ICX", "DCX", "SYS", "ICL", "DCL", "CSV",
                     "CLS", "LDR", "STR", "LDP", "SHC", "TES", "???", "???"
                 };
-                if (opcode >= 0x10 && opcode <= 0x1F)
+                if ((opcode >= 0x10 && opcode <= 0x1F) && opcode != 0x14) {
                     opname = sys_names[opcode - 0x10];
+                    }
+                else {
+                    // It's an intruction in the SYS group
+                    switch(disp) {
+                        case 0x00:
+                            opname = "CLM";
+                            break;
+                        case 0x01:
+                            opname = "DIT";
+                            break;
+                        case 0x02:
+                            opname = "RD";
+                            break;
+                        case 0x03:
+                            opname = "WD";
+                            break;
+                        case 0x08:
+                            opname = "STM";
+                            break;
+                    }
+                }
             }
             break;
         case 0xC000:

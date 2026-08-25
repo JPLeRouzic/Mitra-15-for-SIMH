@@ -109,7 +109,7 @@ t_stat pot_mux (uint32 num, uint32 *dat);
 extern t_stat dri_reset(DEVICE *dptr);
 extern t_stat sagem_reset(DEVICE *dptr);
 extern void cdr_reset(void);
-extern void asr33_reset(void);
+extern void asr33_reset(DEVICE *dptr);
 extern void ptr_reset(void);
 extern void ptp_reset(void);
 extern void printer_reset(void);
@@ -152,7 +152,7 @@ dib_t *dibp;
 uint32 dio;
 
     /* Clear the entire dio_disp array to NULL. */
-    for (uint i = 1; i < DIO_N_MOD; i++)
+    for (uint i = 0; i < DIO_N_MOD; i++)
         dio_disp[i] = NULL;
         
     // Next, loop through the global sim_devices list, which contains all devices currently enabled and configured in the simulator.
@@ -172,23 +172,20 @@ uint32 dio;
                        sim_dname(dptr), dio);
             return true;
         }
+        /* If the device has a dio_disp function pointer defined in its dib_t, io_init() plugs that function pointer into 
+        * the dio_disp array at the index specified by the device's dio field.
+        */
         dio_disp[dio] = dibp->dio_disp;
+        
+    	/* Reset every peripheral that have multiple units and that needs it */
+        dri_reset(dptr);
+	// sagem_reset(dptr);
+	asr33_reset(dptr);
     }
         
-    /* FIXME If the device has a dio_disp function pointer defined in its dib_t, io_init() plugs that function pointer into 
-    // the dio_disp array at the index specified by the device's dio field.
-        dio = dibp->dio;
-        // ...
-        if (dibp->dio_disp)
-            dio_disp[dio] = dibp->dio_disp;
-    */
-    
-    /* Reset every peripheral that needs it */
+    /* Reset every other peripheral that needs it */
     printf("\n[IO-INIT] resetting all devices: DRI, SAGEM, CDR, ASR33, PANEL, PTR, PTP, PRINTER\n");
-    dri_reset(dptr);
-//    sagem_reset(dptr);
     cdr_reset();
-    asr33_reset();
     panel_reset();
     ptr_reset();
     ptp_reset();

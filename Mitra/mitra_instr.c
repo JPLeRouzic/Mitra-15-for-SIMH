@@ -128,9 +128,8 @@ Bits 0-2 do not completely specify the address mode:
 7	111:	DG, IL, PX, P,
 */
 t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
-    sim_printf(
-        "one_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x",
-        inst, pc, modeSIMH, *trappc);
+//    sim_printf(
+//        "\none_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, modeSIMH, *trappc);
 
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
     uint16 disp = inst & I_DISP_MASK;
@@ -138,12 +137,12 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
     *trappc = pc;
 
     sim_printf(
-        "[INST] P=%#010x inst=%#010x (opcode=%#010x disp=%#010x hexcode=%04X) "
+        "\n[INST] P=%#010x inst=%#010x (opcode=%#010x disp=%#010x hexcode=%04X) "
         "mode=%s blk=%#010x\n",
         pc, inst, opcode, disp, inst & 0xF000, cpu_state.MS ? "MASTER" : "SLAVE",
         cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
     sim_printf(
-        "  regs-before: A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x "
+        "\nregs-before: A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x "
         "G=%#010x\n",
         cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X, cpu_state.C,
         cpu_state.OV, cpu_state.reg_L, cpu_state.reg_G);
@@ -171,14 +170,14 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
                     /* DIT, RD, WD, STM, CLM, DITR are privileged, so they trap in
                      * slave mode */
                     sim_printf(
-                        "  ** privileged SYS function (disp=%#010x) attempted "
+                        "\n** privileged SYS function (disp=%#010x) attempted "
                         "in SLAVE mode -> TRAP_VM **\n",
                         disp);
                     return mitra_trap(TRAP_VM, pc);
 //                }
             } else {
                 sim_printf(
-                    "  ** privileged instruction (opcode=%#010x) attempted in "
+                    "\n** privileged instruction (opcode=%#010x) attempted in "
                     "SLAVE mode -> TRAP_VM **\n",
                     opcode);
                 return mitra_trap(TRAP_VM, pc);
@@ -190,9 +189,9 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
     uint16 ret_code ; 
 
     /*
-     * It's a first layer of dispatcher per addressing mode. Instructions are
+     * It's a first layer of dispatcher per addressing type. Instructions are
      * encoded by blocks of 16 instructions except blocks 0xC000 and 0xD000 The
-     * next layer will execute the addressing mode by finding the effective
+     * next layer will execute the addressing type by finding the effective
      * address The third layer will attempt at executing most instructions
      * Special cases are handled separately
      */
@@ -266,7 +265,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
     }
 
     sim_printf(
-        "  regs-after : P=%#010x A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x "
+        "\nregs-after : P=%#010x A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x "
         "L=%#010x G=%#010x\n",
         cpu_state.reg_P, cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
         cpu_state.C, cpu_state.OV, cpu_state.reg_L, cpu_state.reg_G);
@@ -277,13 +276,13 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
         if (cause < 0) {
             /* Defensive: flag was set but no cause bit is actually present. */
             sim_printf(
-                "  -> trap_pending set but trp_req_bits=0, clearing spurious "
+                "\n  -> trap_pending set but trp_req_bits=0, clearing spurious "
                 "trap\n");
             cpu_state.trap_pending = FALSE;
         } else {
             cpu_state.trap_cause = cause;
             sim_printf(
-                "  -> trap pending (cause=%d %s) after execution, dispatching "
+                "\n  -> trap pending (cause=%d %s) after execution, dispatching "
                 "mitra_trap()\n",
                 cause, mitra_trap_name(cause));
             return mitra_trap(cause, pc);
