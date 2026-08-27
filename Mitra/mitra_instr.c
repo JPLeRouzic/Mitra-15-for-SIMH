@@ -136,16 +136,21 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
 
     *trappc = pc;
 
+    /*
     sim_printf(
         "\n[INST] P=%#010x inst=%#010x (opcode=%#010x disp=%#010x hexcode=%04X) "
         "mode=%s blk=%#010x\n",
         pc, inst, opcode, disp, inst & 0xF000, cpu_state.MS ? "MASTER" : "SLAVE",
         cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
+        
     sim_printf(
         "\nregs-before: A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x "
         "G=%#010x\n",
         cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X, cpu_state.C,
         cpu_state.OV, cpu_state.reg_L, cpu_state.reg_G);
+    */
+    sim_printf(
+        "\nregs-before: A=%#010x E=%#010x\n", cpu_state.reg_A, cpu_state.reg_E);
 
     /* Check for privileged instruction in slave mode
      * Privileged opcodes are: 0x3A (STR), 0x3B (LDP), 0x3D (TES),
@@ -264,12 +269,15 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
             break;
     }
 
+    /*
     sim_printf(
         "\nregs-after : P=%#010x A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x "
         "L=%#010x G=%#010x\n",
         cpu_state.reg_P, cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
         cpu_state.C, cpu_state.OV, cpu_state.reg_L, cpu_state.reg_G);
-
+    */
+    sim_printf(
+        "\nregs-after : A=%#010x E=%#010x\n", cpu_state.reg_A, cpu_state.reg_E);
     /* Check for traps after instruction execution */
     if (cpu_state.trap_pending) {
         int cause = mitra_resolve_trap_cause(cpu_state.trp_req_bits);
@@ -1131,6 +1139,8 @@ uint16 group_4_RP(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
+    // The PC is already 2 steps ahead, so we substract 2
+    cpu_state.reg_P = cpu_state.reg_P - 2;
     target_address = cpu_state.reg_P + (disp << 1); // (reg_P) + (2 * disp),'2 *' is << 1, not << 2
     switch (opcode) {
         case 0xC0:
@@ -1152,6 +1162,7 @@ uint16 group_4_RP(uint16 inst) {
             break;
         case 0xC2:
             /* BOT - Branch on Overflow True (RP mode) */
+            sim_printf("\nC2, Overflow: %#010x\n", cpu_state.OV);
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1213,6 +1224,8 @@ uint16 group_4_RM(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
+    // The PC is already 2 steps ahead, so we substract 2
+    cpu_state.reg_P = cpu_state.reg_P - 2;
     target_address = cpu_state.reg_P - (disp << 1);
     switch (opcode) {
         case 0xC8:
@@ -1234,6 +1247,8 @@ uint16 group_4_RM(uint16 inst) {
             cpu_state.reg_P = (target_address - (cpu_state.reg_X << 2)) & 0x7FFF;
             break;
         case 0xCA:
+            /* BOT */
+            sim_printf("\nCA, Overflow: %#010x\n", cpu_state.OV);
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1253,12 +1268,14 @@ uint16 group_4_RM(uint16 inst) {
                 cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xCD:
+            /* BAN */
             if (cpu_state.reg_A == 0)
                 cpu_state.reg_P = target_address;
             else
                 cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xCE:
+            /* BOF */
             if (!cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1318,6 +1335,8 @@ uint16 group_5_IL(uint16 inst) {
             cpu_state.reg_P = (GPRIME + ind_pointer) & 0x7FFF;
             break;
         case 0xD2:
+            /* BOT */
+            sim_printf("\nD2, Overflow: %#010x\n", cpu_state.OV);
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1331,18 +1350,21 @@ uint16 group_5_IL(uint16 inst) {
                 cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD4:
+            /* BAN */
             if (cpu_state.reg_A & 0x8000)
                 cpu_state.reg_P = target_address;
             else
                 cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD5:
+            /* BAZ */
             if (cpu_state.reg_A == 0)
                 cpu_state.reg_P = target_address;
             else
                 cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xD6:
+            /* BOF */
             if (!cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1400,6 +1422,8 @@ uint16 group_5_IG(uint16 inst) {
             cpu_state.reg_P = (GPRIME + ind_pointer) & 0x7FFF;
             break;
         case 0xDA:
+            /* BOT */
+            sim_printf("\nDA, Overflow: %#010x\n", cpu_state.OV);
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1413,18 +1437,21 @@ uint16 group_5_IG(uint16 inst) {
                 cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xDC:
+            /* BAN */
             if (cpu_state.reg_A & 0x8000)
                 cpu_state.reg_P = target_address;
             else
                 cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xDD:
+            /* BAZ */
             if (cpu_state.reg_A == 0)
                 cpu_state.reg_P = target_address;
             else
                 cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
             break;
         case 0xDE:
+            /* BOF */
             if (!cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else

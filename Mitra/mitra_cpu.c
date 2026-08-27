@@ -443,7 +443,7 @@ t_value read_word(t_addr va) {
         cpu_state.trap_pending = TRUE;
         return 0;
     }
-    sim_printf("\n    [MEM] read_word  va=%#010x, pa=%#010x, value: %#010x", va, pa, M[pa]);
+    sim_printf("\n[MEM] read_word  pa=%#010x, value: %#010x\n", pa, M[pa]);
     return M[pa];
 }
 void write_word(t_addr va, t_value val) {
@@ -464,7 +464,7 @@ sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, va
         cpu_state.trap_pending = TRUE;
         return;
     }
-    sim_printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x (was %#010x)", va, pa, val, M[pa]);
+    sim_printf("\n[MEM] write_word pa=%#010x val=%#010x (was %#010x)\n", pa, val, M[pa]);
     M[pa] = val;
 }
 uint8 read_byte(t_addr va) {
@@ -537,7 +537,7 @@ if (pa >= MAX_MEM_WORDS)
 if (vptr != NULL) {
     *vptr = M[pa] & DMASK;
     }
-sim_printf("\nAddress at: %#010x contains: %#010x\n", pa, M[pa] & DMASK);
+// sim_printf("\nAddress at: %#010x contains: %#010x\n", pa, M[pa] & DMASK);
 return SCPE_OK;
 }
 
