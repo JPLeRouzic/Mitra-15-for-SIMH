@@ -4,9 +4,11 @@ https://ajovomultja.hu/mitra-15
 
 ## A Mitra-15 Simulator for SIMH
 
-This is a preliminary version. For now, my code compiles, but it is not a Mitra-15 simulator in the strict sense; rather, it is a tentative effort toward a fully functional simulator. Many thanks to Pascal Chour for the very useful documentation available on his website: https://www.pascalchour.fr/ressources/cii/mitra15.htm
+This is a preliminary version. For now, my code compiles, but it is not a Mitra-15 simulator; rather, it is a tentative effort. Many thanks to Pascal Chour for the very useful documentation available on his website: https://www.pascalchour.fr/ressources/cii/mitra15.htm
 
-The Mitra-15 is a microcomputer that features interesting concepts, such as the ability to program input/output peripherals using microcode.
+As my C is rusty (pun is intended) I started with an existing SDS 940 simulator for SIMH and slowly modifying towards Mitra-15's characteristics.
+
+The Mitra-15 is a microcomputer that features interesting concepts, such as the ability to program input/output peripherals using microcode, instead of using an external mechanism such as DMA.
 https://en.wikipedia.org/wiki/Mitra_15
 
 The Mitra-15 was a 16-bit minicomputer developed by **CII (Compagnie Internationale pour l'Informatique)** in the early 1970s. It was widely used in industrial automation, scientific computing, education, and military applications.
@@ -15,29 +17,40 @@ I never programmed on Mitra-15, but I learned CS on a CII 10070 and later I work
 Although it was once widespread in France, very little software and documentation has survived. This project contributes to the preservation of this important part of computing history. 
 
 This Mitra-15 simulator is intended to eventually include:
-- Complete instruction decoder
+```
+- System and optional instructions
+- Extensive comments describing the original hardware behavior
 - SIMH console support
 - Memory management
-- Interrupt, fast interrupt, and trap systems
+- Interrupt, fast interrupt, suspensions and trap systems
+* printer
+* analogic interface
+* punched_tape
+* DRI fixed disk
+* sagem fixed disk
+* card reader
+* magnetic tape reader
 - Various I/O devices, but I lack documentation for many of those peripherals:
-IO_coupleurs_asynchrones.c
-IO_fast_channel_multiplexed.c
-IO_printer.c
-IO_analogic_interface.c
-IO_coupleurs_synchrones.c
-IO_front_panel.c
-IO_punched_tape.c
-IO_DRI_fix_disk.c
-IO_IOP_1.c and IO_IOP_2.c
-IO_sagem_fix_disk.c
-IO_card_reader.c
-IO_fast_channel_1_ADM.c
-IO_fast_channel_2_ADM.c
-IO_magn_tape.c
-- System instructions
-- Extensive comments describing the original hardware behavior
-
+* asynchronous channels 
+* synchronous channels 
+* fast channel multiplexed
+* fast channel ADM (no idea what it is)
+* IOPs (if it's not the same as asynchronous channels).
 ---
+
+To this day I did:
+- search for and analyzed the few remaining documents (see /doc folder).
+- create a working SIMH environment for SIMH (deposit/examine/run/break/etc)
+- created a complete instruction decoder for each instruction and addressing mode
+- created code for common Mitra and CII devices
+- create a convincing (not tested) code for RD and WD instructions for simple communication with devices such as ASR33 or line printer.
+- create a convincing (not tested) code for DRI disks (UK's Data Recording Instrument) that uses the suspension system, the CII invention that aims at a similar goal as modern DMA.
+- create a test program better than the first one I discussed previously.
+- test the branch instructions in RP (immediate in modern parlance) addressing mode, so at least this part should be correct.
+- I also started to reconstitute CII's MTR (real time monitor) from an hexadecimal dump found in a PDF file, but the OCR result is atrocious so I have to visually check each and all bytes. It will be probably the only original code from CII that my simulator will be tested against. All other code will be reconstituted from the documentation. So it is extremely important that this test succeeded.
+- It's not useful but I have also created a rudimentary assembler (not tested).
+
+On the long term I have plans to port RSX280 (RSX-11 clone) to the Mitra. Z80's BC and DE are similar to L and G registers, IX is an index register as Mitra's X, A and HL resemble to A and E. Main problems: Mitra has less registers, less addressing modes than the Z80, and it lacks a concept of a stack, which makes managing reentrancy complicated.
 
 ## Requirements
 
@@ -48,42 +61,12 @@ IO_magn_tape.c
 
 Within the SIMH monitor, you can then load memory, examine registers, and execute Mitra-15 programs.
 
----
-
-## Documentation
-
-Please look at the doc folder. 
-The implementation is primarily based on the original Mitra-15 technical documentation, including:
-
-- Processor reference manual
-- Programming manual
-- Hardware documentation
-- Original instruction set descriptions
-
-The simulator attempts to reproduce the documented behavior as closely as possible, though significant unknowns remain. I am proceeding on the assumption that the engineers who designed the Mitra-15 were familiar with Scientific Data Systems computers; after all, the machine the Mitra-15 was intended to replace within CII's lineup was the CII 10070—which was essentially an SDS Sigma 7 produced under license. ---
-
-## Repository Structure
-
-```
-Mitra/
-mitra_cpu.c Processor implementation
-
-mitra_defs.h Processor definitions
-
-mitra_sys.c SIMH integration
-
-mitra_io.c I/O peripherals
-
-IO_xxx.c Specific peripheral implementations
-
----
-
 ## Acknowledgments
 
 Many thanks to:
 
 - The SIMH developers for creating and maintaining the simulator
 
-- The historians and collectors who preserve CII documentation
+- The historians and collectors who preserved CII documentation but mainly Pascal Chour.
 
 - Everyone who has contributed to keeping the history of French computing alive
