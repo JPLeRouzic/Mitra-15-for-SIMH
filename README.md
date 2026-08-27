@@ -46,7 +46,7 @@ To this day I did:
 - create a convincing (not tested) code for DRI disks (UK's Data Recording Instrument) that uses the suspension system, the CII invention that aims at a similar goal as modern DMA.
 - create a test program.
 - test the branch instructions in RP (immediate in modern parlance) addressing mode, so at least this part should be correct.
-- I also started to reconstitute CII's MTR (real time monitor) from an hexadecimal dump found in a PDF file, but the OCR result is atrocious so I have to visually check each and all bytes. It will be probably the only original code from CII that my simulator will be tested against. All other code will be reconstituted from the documentation. So it is extremely important that this test succeeded.
+- I have also set out to reconstruct CII's MTR (Real-Time Monitor) from a hexadecimal dump found in a PDF file; however, as the OCR output is abysmal, I have to visually verify every single byte. This will likely be the only piece of original CII code against which my simulator is tested, as everything else will have to be inferred from the documentation. It is therefore crucial that this test be successful.
 - It's not useful but I have also created a rudimentary assembler (not tested).
 
 On the long term I have plans to port RSX280 (RSX-11 clone) to the Mitra. Z80's BC and DE are similar to L and G registers, IX is an index register as Mitra's X, A and HL resemble to A and E. Main problems: Mitra has less registers, less addressing modes than the Z80, and it lacks a concept of a stack, which makes managing reentrancy complicated.
