@@ -4,9 +4,9 @@ https://ajovomultja.hu/mitra-15
 
 ## A Mitra-15 Simulator for SIMH
 
-This is a preliminary version. For now, my code compiles, but it is not a Mitra-15 simulator; rather, it is a tentative effort. Many thanks to Pascal Chour for the very useful documentation available on his website: https://www.pascalchour.fr/ressources/cii/mitra15.htm
+This is a preliminary version. For now, my code compiles, but it is still not a true Mitra-15 simulator; rather, it is a tentative effort. Many thanks to Pascal Chour for the very useful documentation available on his website: https://www.pascalchour.fr/ressources/cii/mitra15.htm
 
-As my C is rusty (pun is intended) I started with an existing SDS 940 simulator for SIMH and slowly modifying towards Mitra-15's characteristics.
+As my C is rusty (pun is intended) I started with an existing SDS 940 simulator for SIMH and slowly modified it towards Mitra-15's characteristics.
 
 The Mitra-15 is a microcomputer that features interesting concepts, such as the ability to program input/output peripherals using microcode, instead of using an external mechanism such as DMA.
 https://en.wikipedia.org/wiki/Mitra_15
