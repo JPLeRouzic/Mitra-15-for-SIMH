@@ -36,8 +36,7 @@ This Mitra-15 simulator is intended to eventually include:
 * fast channel multiplexed
 * fast channel ADM (no idea what it is)
 * IOPs (if it's not the same as asynchronous channels).
----
-
+```
 To this day I did:
 - search for and analyzed the few remaining documents (see /doc folder).
 - create a working SIMH environment for SIMH (deposit/examine/run/break/etc)
