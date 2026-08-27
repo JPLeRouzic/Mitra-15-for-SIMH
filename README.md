@@ -40,11 +40,11 @@ This Mitra-15 simulator is intended to eventually include:
 To this day I did:
 - search for and analyzed the few remaining documents (see /doc folder).
 - create a working SIMH environment for SIMH (deposit/examine/run/break/etc)
-- created a complete instruction decoder for each instruction and addressing mode
-- created code for common Mitra and CII devices
+- create a complete instruction decoder for each instruction and addressing mode
+- create code for common Mitra and CII devices
 - create a convincing (not tested) code for RD and WD instructions for simple communication with devices such as ASR33 or line printer.
 - create a convincing (not tested) code for DRI disks (UK's Data Recording Instrument) that uses the suspension system, the CII invention that aims at a similar goal as modern DMA.
-- create a test program better than the first one I discussed previously.
+- create a test program.
 - test the branch instructions in RP (immediate in modern parlance) addressing mode, so at least this part should be correct.
 - I also started to reconstitute CII's MTR (real time monitor) from an hexadecimal dump found in a PDF file, but the OCR result is atrocious so I have to visually check each and all bytes. It will be probably the only original code from CII that my simulator will be tested against. All other code will be reconstituted from the documentation. So it is extremely important that this test succeeded.
 - It's not useful but I have also created a rudimentary assembler (not tested).
