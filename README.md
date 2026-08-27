@@ -66,6 +66,5 @@ Many thanks to:
 
 - The SIMH developers for creating and maintaining the simulator
 
-- The historians and collectors who preserved CII documentation but mainly Pascal Chour.
-
-- Everyone who has contributed to keeping the history of French computing alive
+- Everyone who has contributed to keeping the history of French computing alive but mainly Pascal Chour
+https://www.pascalchour.fr/ressources/cii/mitra15.htm
