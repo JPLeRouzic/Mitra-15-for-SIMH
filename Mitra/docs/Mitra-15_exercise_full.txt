@@ -1,0 +1,792 @@
+; ================================================================
+; MITRA-15 SIMH instruction smoke test
+; ================================================================
+;
+; Memory map used by this test:
+;
+;   0100-01FF   Test code
+;   0200-02FF   Local data segment, L = 0200
+;   0040-004F   General/common data, used when G = 0000
+;   0180-018F   CDS/context area for CSV/RSV tests
+;   0220-0227   Floating-point operands
+;   0230-0237   Floating-point/string result area
+;   0240-024F   TRS translation table area
+;
+; Register bases used for most tests:
+;
+;   L = 0200
+;   G = 0000
+;
+; This makes DL addressing access 0200+displacement.
+; DG addressing accesses 0000+displacement.
+; LEA with G=0000 returns the effective address directly.
+;
+; The tests are ordered so that leftover breakpoints from earlier
+; groups are not accidentally hit by later shorter test groups.
+;
+; ================================================================
+
+
+; ================================================================
+; CPU and basic memory initialization
+; ================================================================
+
+reset cpu
+
+; Try to place the CPU in a useful state.
+; If your SIMH Mitra-15 uses different register names for the
+; indicators, adjust these deposits accordingly.
+deposit cpu MS 1
+deposit cpu PR 1
+deposit cpu MA 0
+deposit cpu C 0
+deposit cpu O 0
+
+deposit cpu A 0000
+deposit cpu E 0000
+deposit cpu X 0000
+deposit cpu L 0200
+deposit cpu G 0000
+deposit cpu P 0100
+
+
+; ================================================================
+; Data area initialization
+; ================================================================
+
+; General/common data near zero, for DG tests with G=0000.
+deposit 040 0007
+deposit 042 0040
+
+; Local data segment at L=0200.
+deposit 200 A55A     
+; byte test data
+deposit 202 0005     
+; word operand 1
+deposit 204 0003     
+; word operand 2
+deposit 206 FFFD     
+; negative word
+deposit 208 0000     
+; result word
+deposit 20A 0204     
+; local pointer
+deposit 20C 0040     
+; general pointer
+deposit 20E 0000
+deposit 210 0000     
+; string source byte 0
+deposit 212 0000     
+; string source byte 1
+deposit 214 0000
+deposit 216 0000
+
+; Floating-point operands.
+; 0x41100000 is approximately +1.0 in Mitra-15 single precision.
+deposit 220 4110
+deposit 222 0000
+deposit 224 4110
+deposit 226 0000
+
+; Floating-point/string result area.
+deposit 230 0000
+deposit 232 0000
+deposit 234 0000
+deposit 236 0000
+
+; TRS translation table area.
+; Only entry 0 is needed because the test string uses byte 0.
+deposit 240 0000
+deposit 242 0000
+
+
+; ================================================================
+; TEST 01: Branch instruction group
+; ================================================================
+;
+; All conditional branches use RP mode with displacement 1.
+; That makes the target the following instruction.
+; Therefore whether the branch is taken or not, execution continues
+; sequentially. This allows opcode execution without complex setup.
+;
+; BRU, BRX and all conditional branch mnemonics are exercised.
+; ================================================================
+
+deposit 100 2000     
+; LDA =0
+deposit 102 C701     
+; BRU +1
+deposit 104 2200     
+; LDX =0
+deposit 106 C101     
+; BRX +1, X=0
+deposit 108 2B00     
+; CMP =0
+deposit 10A C001     
+; BCT +1
+deposit 10C C201     
+; BOT +1
+deposit 10E C301     
+; BCF +1
+deposit 110 C601     
+; BOF +1
+deposit 112 C501     
+; BAZ +1
+deposit 114 C401     
+; BAN +1
+deposit 116 C001     
+; BE +1
+deposit 118 C001     
+; BZ +1
+deposit 11A C201     
+; BL +1
+deposit 11C C201     
+; BLZ +1
+deposit 11E C301     
+; BNE +1
+deposit 120 C301     
+; BNZ +1
+deposit 122 C601     
+; BGE +1
+deposit 124 C601     
+; BPZ +1
+deposit 126 C700     
+; BRU $, halt point
+
+break 126
+run 100
+
+examine cpu A
+examine cpu X
+examine cpu P
+
+
+; ================================================================
+; TEST 02: Load and store instruction group
+; ================================================================
+;
+; Exercises:
+;   LBL, SBL, LBR, SBR, LBX,
+;   LDA, STA, LDE, STE, LDX, STX,
+;   LDR, STR, LEA, SPA, STS, DLD, DST
+;
+; STR is privileged; master mode was set above.
+; ================================================================
+
+deposit cpu L 0200
+deposit cpu G 0000
+
+deposit 100 0D00     
+; LBL 0
+deposit 102 1408     
+; SBL 8
+deposit 104 0E01     
+; LBR 1
+deposit 106 1509     
+; SBR 9
+deposit 108 0F01     
+; LBX 1
+deposit 10A 0002     
+; LDA DL 2
+deposit 10C 1108     
+; STA DL 8
+deposit 10E 0104     
+; LDE DL 4
+deposit 110 1208     
+; STE DL 8
+deposit 112 0202     
+; LDX DL 2
+deposit 114 1308     
+; STX DL 8
+deposit 116 F901     
+; LDR =1
+deposit 118 FA00     
+; STR =0
+deposit 11A 0402     
+; LEA DL 2
+deposit 11C 1808     
+; SPA DL 8
+deposit 11E 1908     
+; STS DL 8
+deposit 120 1020     
+; DLD DL 20
+deposit 122 1630     
+; DST DL 30
+deposit 124 C700     
+; BRU $, halt point
+
+break 124
+run 100
+
+examine cpu A
+examine cpu E
+examine cpu X
+examine cpu L
+examine 208
+examine 230
+
+
+; ================================================================
+; TEST 03: Fixed-point arithmetic and logical group
+; ================================================================
+;
+; Exercises:
+;   ADD, ADM, SUB, MUL, DIV,
+;   IOR, EOR, AND, CMP,
+;   ICX, DCX, ICL, DCL
+;
+; DIV is optional on some Mitra-15 models.
+; ICL/DCL are placed at the end and restore L to 0200.
+; ================================================================
+
+deposit cpu L 0200
+deposit cpu G 0000
+deposit 208 0000
+
+deposit 100 2005     
+; LDA =5
+deposit 102 2503     
+; ADD =3
+deposit 104 1708     
+; ADM DL 8
+deposit 106 2602     
+; SUB =2
+deposit 108 2C04     
+; MUL =4
+deposit 10A 2100     
+; LDE =0
+deposit 10C 200C     
+; LDA =12
+deposit 10E 2803     
+; DIV =3
+deposit 110 200F     
+; LDA =0F
+deposit 112 27F0     
+; IOR =F0
+deposit 114 23FF     
+; EOR =FF
+deposit 116 290F     
+; AND =0F
+deposit 118 2B05     
+; CMP =5
+deposit 11A 2210     
+; LDX =10
+deposit 11C F205     
+; ICX =5
+deposit 11E F302     
+; DCX =2
+deposit 120 F502     
+; ICL =2
+deposit 122 F602     
+; DCL =2
+deposit 124 C700     
+; BRU $, halt point
+
+break 124
+run 100
+
+examine cpu A
+examine cpu E
+examine cpu X
+examine cpu L
+examine 208
+
+
+; ================================================================
+; TEST 04: Inter-register operations, SRG family
+; ================================================================
+;
+; Exercises:
+;   XAE, XAX, XEX, XAA, CCE, ACE, CCA, AEE,
+;   CNX, AIE, AAE, LNE, CNA, CHX
+;
+; SRG derivatives are encoded as F1xx, where xx is the SRG
+; function number multiplied by 2.
+; ================================================================
+
+deposit cpu L 0200
+deposit cpu G 0000
+
+deposit 100 2012     
+; LDA =12
+deposit 102 2134     
+; LDE =34
+deposit 104 2256     
+; LDX =56
+deposit 106 F102     
+; XAE
+deposit 108 F104     
+; XAX
+deposit 10A F106     
+; XEX
+deposit 10C F108     
+; XAA
+deposit 10E F10A     
+; CCE
+deposit 110 F10E     
+; ACE
+deposit 112 F110     
+; CCA
+deposit 114 F112     
+; AEE
+deposit 116 F114     
+; CNX
+deposit 118 F116     
+; AIE
+deposit 11A F118     
+; AAE
+deposit 11C F11A     
+; LNE
+deposit 11E F11C     
+; CNA
+deposit 120 F11E     
+; CHX
+deposit 122 C700     
+; BRU $, halt point
+
+break 122
+run 100
+
+examine cpu A
+examine cpu E
+examine cpu X
+
+
+; ================================================================
+; TEST 05: Shift instruction group
+; ================================================================
+;
+; Exercises SHR derivatives:
+;   SLLS, SRCS, SLCS, SAS, SRLS, SAD, SLCD, SRCD
+;
+; Exercises SHC derivatives:
+;   SLLD, SRLD, PTY, NLZ
+;
+; Shift encoding:
+;   SHR: F0tt, where tt = shift type * 32 + count
+;   SHC: FCtt, where tt = special type * 32 + count
+;
+; Some SHC operations are optional.
+; ================================================================
+
+deposit cpu L 0200
+deposit cpu G 0000
+
+deposit 100 2001     
+; LDA =1
+deposit 102 F001     
+; SLLS 1
+deposit 104 F021     
+; SRCS 1
+deposit 106 F081     
+; SLCS 1
+deposit 108 F0A1     
+; SAS 1
+deposit 10A F0C1     
+; SRLS 1
+deposit 10C 2100     
+; LDE =0
+deposit 10E 2001     
+; LDA =1
+deposit 110 F041     
+; SAD 1
+deposit 112 F061     
+; SLCD 1
+deposit 114 F0E1     
+; SRCD 1
+deposit 116 FC01     
+; SLLD 1
+deposit 118 FC81     
+; SRLD 1
+deposit 11A FC50     
+; PTY 16
+deposit 11C FCCF     
+; NLZ 15
+deposit 11E C700     
+; BRU $, halt point
+
+break 11E
+run 100
+
+examine cpu A
+examine cpu E
+examine cpu X
+
+
+; ================================================================
+; TEST 06: Floating-point arithmetic group
+; ================================================================
+;
+; Exercises:
+;   FAD, FSU, FMU, FDV
+;
+; These require the optional floating-point operator.
+; The operand at 0220/0222 is approximately +1.0.
+; ================================================================
+
+deposit cpu L 0200
+deposit cpu G 0000
+
+deposit 100 0120     
+; LDE DL 20
+deposit 102 0022     
+; LDA DL 22
+deposit 104 1A24     
+; FAD DL 24
+
+deposit 106 0120     
+; LDE DL 20
+deposit 108 0022     
+; LDA DL 22
+deposit 10A 1B24     
+; FSU DL 24
+
+deposit 10C 0120     
+; LDE DL 20
+deposit 10E 0022     
+; LDA DL 22
+deposit 110 1C24     
+; FMU DL 24
+
+deposit 112 0120     
+; LDE DL 20
+deposit 114 0022     
+; LDA DL 22
+deposit 116 1D24     
+; FDV DL 24
+
+deposit 118 C700     
+; BRU $, halt point
+
+break 118
+run 100
+
+examine cpu A
+examine cpu E
+
+
+; ================================================================
+; TEST 07: Byte string instruction group
+; ================================================================
+;
+; Exercises:
+;   MVS, CPS, TRS
+;
+; These are optional on some configurations.
+;
+; MVS:
+;   Source address is G+A. With G=0000, A=0210.
+;   Length is in E.
+;   Destination is Y, here L+30 = 0230.
+;
+; CPS:
+;   Compares byte at Y with string starting at G+A.
+;
+; TRS:
+;   Uses a translation table at Y.
+;   Here Y = L+40 = 0240.
+;   The source string uses byte value 0, so only table entry 0
+;   is needed.
+; ================================================================
+
+deposit cpu L 0200
+deposit cpu G 0000
+
+deposit 210 0000
+deposit 212 0000
+deposit 240 0000
+
+deposit 100 0410     
+; LEA DL 10, A = 0210
+deposit 102 2104     
+; LDE =4
+deposit 104 1F30     
+; MVS DL 30
+
+deposit 106 0410     
+; LEA DL 10, A = 0210
+deposit 108 2104     
+; LDE =4
+deposit 10A 0A10     
+; CPS DL 10
+
+deposit 10C 0410     
+; LEA DL 10, A = 0210
+deposit 10E 2101     
+; LDE =1
+deposit 110 1E40     
+; TRS DL 40
+
+deposit 112 C700     
+; BRU $, halt point
+
+break 112
+run 100
+
+examine cpu A
+examine cpu E
+examine 230
+examine 210
+
+
+; ================================================================
+; TEST 08: Control instruction group
+; ================================================================
+;
+; Exercises:
+;   STM, CLM, TES, LDP
+;
+; STM/CLM are privileged.
+; TES and LDP are privileged and may be optional.
+;
+; LDP =80 uses bit 15 of the instruction word as the protection
+; value. Here it sets protection for one word starting at 0208.
+; ================================================================
+
+deposit cpu L 0200
+deposit cpu G 0000
+deposit cpu MS 1
+deposit cpu PR 1
+
+deposit 100 F408     
+; STM
+deposit 102 F400     
+; CLM
+deposit 104 0408     
+; LEA DL 8, A = 0208
+deposit 106 2101     
+; LDE =1
+deposit 108 3D08     
+; TES DL 8
+deposit 10A FB80     
+; LDP =80
+deposit 10C C700     
+; BRU $, halt point
+
+break 10C
+run 100
+
+examine cpu A
+examine cpu E
+examine cpu MA
+examine 208
+
+
+; ================================================================
+; TEST 09: RTS isolated test
+; ================================================================
+;
+; RTS restores P and L from the first two words of the current LDS.
+;
+; Set L = 0250.
+;   (0250) = 0102, so RTS will set P = 0102 + 2 = 0104.
+;   (0252) = 0200, so RTS will set L = 0200.
+;
+; The BRU at 0104 is the halt point.
+; ================================================================
+
+deposit cpu L 0250
+deposit cpu G 0000
+
+deposit 250 0102
+deposit 252 0200
+
+deposit 100 F100     
+; RTS
+deposit 104 C700     
+; BRU $
+
+break 104
+run 100
+
+examine cpu P
+examine cpu L
+
+
+; ================================================================
+; TEST 10: RSV isolated test
+; ================================================================
+;
+; RSV is privileged and returns from a supervisor section.
+; It restores indicators, L, and P from the calling program CDS.
+;
+; Use G = 0180 as the CDS base.
+;
+; Formula approximation used here:
+;   P = G + 2 + ((G))
+;   L = G + ((G+2))
+;
+; Therefore:
+;   ((0180)) = 0104 - 0182 = FF82
+;   ((0182)) = 0200 - 0180 = 0080
+;
+; After RSV, execution should continue at 0104.
+; ================================================================
+
+deposit cpu G 0180
+deposit cpu MS 1
+deposit cpu PR 1
+
+deposit 180 FF82
+deposit 182 0080
+deposit 184 0000
+
+deposit 100 F10C     
+; RSV
+deposit 104 C700     
+; BRU $
+
+break 104
+run 100
+
+examine cpu P
+examine cpu L
+
+
+; ================================================================
+; TEST 11: CLS isolated test
+; ================================================================
+;
+; CLS calls a program section.
+;
+; This test uses:
+;   G = 0200
+;   section number = 1
+;
+; The section relocation double word for section 1 is at G-4:
+;   0200 - 4 = 01FC
+;
+; The SRD contains relative L and P values:
+;   called L = 0200, relative to G=0200 => 0000
+;   called P = 0104, relative to G=0200 => FF04
+;
+; After CLS, execution should continue at 0104.
+; ================================================================
+
+deposit cpu G 0200
+deposit cpu L 0200
+deposit cpu MS 1
+
+deposit 1FC 0000
+deposit 1FE FF04
+
+deposit 100 F801     
+; CLS =1
+deposit 104 C700     
+; BRU $
+
+break 104
+run 100
+
+examine cpu P
+examine cpu L
+
+
+; ================================================================
+; TEST 12: CSV isolated test
+; ================================================================
+;
+; CSV calls a supervisor section.
+;
+; The supervisor PRT pointer is stored at absolute address 00C
+; hexadecimal, which is decimal 12 in the Mitra-15 manual.
+;
+; This test uses:
+;   PRTS pointer = 0300
+;   section number = 1
+;
+; Supervisor section entry is at pointer - 4:
+;   0300 - 4 = 02FC
+;
+; The entry is loaded as the called section L/P information.
+; The exact interpretation may depend on the monitor model, but
+; this exercises the CSV opcode and PRTS pointer mechanism.
+;
+; Use G = 0180 so CSV saves the calling context at 0180.
+; ================================================================
+
+deposit cpu G 0180
+deposit cpu L 0200
+deposit cpu MS 1
+deposit cpu PR 1
+
+deposit 00C 0300
+deposit 2FC 0200
+deposit 2FE 0104
+
+deposit 100 F701     
+; CSV =1
+deposit 104 C700     
+; BRU $
+
+break 104
+run 100
+
+examine cpu P
+examine cpu L
+examine 180
+examine 182
+examine 184
+
+
+; ================================================================
+; TEST 13: Dangerous/system instructions not executed directly
+; ================================================================
+;
+; The following instructions are deposited as data only because
+; they require a full interrupt/context/environment setup or real
+; I/O devices:
+;
+;   DIT, DITR, RD, WD
+;
+; If your simulator can safely execute them, you can place them
+; at 0100 and test them separately.
+;
+; DIT  = F401
+; DITR = FC20
+; RD   = F402
+; WD   = F403
+; ================================================================
+
+deposit 3F0 F401
+deposit 3F2 FC20
+deposit 3F4 F402
+deposit 3F6 F403
+
+examine 3F0
+examine 3F2
+examine 3F4
+examine 3F6
+
+
+; ================================================================
+; Pseudo-instruction equivalents
+; ================================================================
+;
+; Pseudo-instructions are not executable Mitra-15 opcodes.
+; They are assembler directives. The following deposits show
+; equivalent generated data.
+;
+; DATA equivalent:
+deposit 400 1234
+
+; TEXT-like equivalent, using arbitrary byte values:
+deposit 402 C1C2
+
+; RES equivalent:
+; Reserve area by not depositing meaningful code.
+; For example, reserve 4 words starting at 0410:
+deposit 410 0000
+deposit 412 0000
+deposit 414 0000
+deposit 416 0000
+
+; BND equivalent:
+; Merely aligns to a word boundary; no object code.
+
+; EQU, DEF, REF, CDS, LDS, IDS, LPS, FIN, END, PAGE, GOTO, DO,
+; and BASE are assembler-time directives and have no direct CPU
+; instruction encoding.
+; ================================================================
+
+quit
