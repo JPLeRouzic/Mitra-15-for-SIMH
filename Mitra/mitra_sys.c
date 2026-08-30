@@ -417,7 +417,7 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw) {
     /* Print instruction */
     if (opname) {
         if (disp) {
-            fprintf(of, "%s\t%s\t#%03o", opname, modename, disp);
+            fprintf(of, "%s\t%s\t#%03x", opname, modename, disp);
         } else {
             fprintf(of, "%s\t%s", opname, modename);
         }
@@ -488,7 +488,7 @@ void fprint_inst(FILE *of, uint16 inst, uint16 addr) {
     
     if (opname) {
         if (disp) {
-            fprintf(of, "%s\t%s\t#%03o", opname, modename, disp);
+            fprintf(of, "%s\t%s\t#%03x", opname, modename, disp);
         } else {
             fprintf(of, "%s\t%s", opname, modename);
         }
