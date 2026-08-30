@@ -399,7 +399,8 @@ uint16 case_instr_xDR(uint16 inst) {
             // This instruction is not privileged
             target_address = (cpu_state.reg_L + disp) & 0x7FFF;
             target_value = read_word(target_address);
-            reg_block = target_value & 0x003C;
+//            reg_block = target_value & 0x003C;
+            reg_block = (target_value >> 3) & 0x0007;
             reg_num = target_value & 0x0003;
 
             cpu_state.reg_A = cpu_state.reg_block[reg_block][reg_num];
@@ -882,7 +883,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
  *
  */
 uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst) {
-    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0F;
+    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
     uint8 s_byte, d_byte;
     uint16 i, data;
     uint16 carry, overflow;

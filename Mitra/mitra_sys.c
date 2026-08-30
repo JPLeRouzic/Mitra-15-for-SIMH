@@ -310,14 +310,37 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw) {
     /* Determine instruction group and get opcode name */
     uint16 hexcode = inst & 0xF000;
     
+    /*
+	hexcode	mode	formula
+	0x0	DL	Y = (L) + D
+	0x1	DL (store family)	Y = (L) + D
+	0x2	P	immediate (=n)
+	0x3	DL (system group)	ICX, DCX, ICL, DCL, LDR, STR, TES, SHR...
+	0x4	DG	Y = (G) + D
+	0x5	DG (store family)	Y = (G) + D
+	0x6	IL	Y = G′ + mem[(L)+D]
+	0x7	IL (store family)	Y = G′ + mem[(L)+D]
+	0x8	IGX	Y = (G) + mem[(G)+D] + (X)
+	0x9	IGX (store family)	Y = (G) + mem[(G)+D] + (X)
+	0xA	ILX	Y = G′ + mem[(L)+D] + (X)
+	0xB	ILX (store family)	Y = G′ + mem[(L)+D] + (X)
+	0xC	RP / RM	branches (bit 11 picks the sub-form)
+	0xD	D-IL / D-IG	indirect branch forms
+	0xE	PX	system group, Y = mem[(X)]
+	0xF	RM	system group (STM/CLM/DIT/RD/WD/SHR/SHC/LDR/STR...)
+    */
+    
     switch (hexcode) {
         case 0x0000:
+        case 0x2000:
         case 0x4000:
         case 0x6000:
         case 0x8000:
         case 0xA000:
-        case 0x2000:
-            /* Group 1 instructions */
+            /* 
+            Group 1 instructions 
+                opcode = (inst >> 8) & 0x1F;
+            */
             if (opcode < 16) {
                 static const char *g1_names[] = {
                     "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
@@ -327,14 +350,17 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw) {
             }
             break;
         case 0x1000:
+        case 0x3000:
         case 0x5000:
         case 0x7000:
         case 0x9000:
         case 0xB000:
-        case 0x3000:
         case 0xE000:
         case 0xF000:
-            /* Group 2 instructions */
+            /* 
+            Group 2 instructions 
+            opcode = (inst >> 8) & 0x1F;
+            */
             if (opcode < 16) {
                 static const char *g2_names[] = {
                     "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",

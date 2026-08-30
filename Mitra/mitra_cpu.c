@@ -106,7 +106,7 @@ t_stat Read (uint32 va, uint32 *dat);
 t_stat Write (uint32 va, uint32 dat);
 uint32 api_findreq (void);
 void api_dismiss (void);
-t_stat one_inst (uint32 inst, uint32 pc, uint32 mode, uint16 *trappc);
+t_stat one_inst (uint16 inst, uint16 pc, uint32 mode, uint16 *trappc);
 void inst_hist (uint32 inst, uint32 pc, uint32 typ);
 t_stat rtc_inst (uint32 inst);
 t_stat rtc_svc (UNIT *uptr);
@@ -343,7 +343,7 @@ t_stat sim_instr(void) {
         cpu_state.int_reqhi = get_highest_interrupt();
         
         if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > cpu_state.curr_int_lvl)) {
-sim_printf("sim_instr(void) 17\n");
+// sim_printf("sim_instr(void) 17\n");
             uint16 pa;
 	    reason = cpt_lookup((uint16)cpu_state.int_reqhi, &pa);
 	    if (reason != SCPE_OK)
@@ -354,9 +354,9 @@ sim_printf("sim_instr(void) 17\n");
              * CPT[i] = word address of the context save area for level i.
              * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P 
              */
-sim_printf("sim_instr(void) 20\n");
+// sim_printf("sim_instr(void) 20\n");
             reason = mitra_interrupt_accept(cpu_state.int_reqhi, high_speed);
-sim_printf("sim_instr(void) 11\n");
+// sim_printf("sim_instr(void) 11\n");
             if (reason != SCPE_OK) break;
             
 /*            if (pa != VEC_RTCP && rtc_pie) {

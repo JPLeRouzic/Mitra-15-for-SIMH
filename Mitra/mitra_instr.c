@@ -131,7 +131,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
 //    sim_printf(
 //        "\none_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, modeSIMH, *trappc);
 
-    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x1F;
+    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0xFF;
     uint16 disp = inst & I_DISP_MASK;
 
     *trappc = pc;
@@ -319,8 +319,16 @@ uint16 group_1_DL(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
+    sim_printf("\nL = %#010x \n", cpu_state.reg_L);
+
     target_address = (cpu_state.reg_L + disp) & 0x7FFF;
+
+    sim_printf("\ntarget_address = %#010x \n", target_address);
+
     t_value target_value = read_word(target_address);
+
+    sim_printf("\ntarget_value = %#010x \n", target_value);
+
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
     return ret_code;
@@ -342,7 +350,7 @@ uint16 group_2_DL(uint16 inst, uint32 mode) {
      *    Byte, word or double-word, located in the first 256 bytes of the local
      * segment. Y = (L) + D
      */
-    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
+    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0xFF;
     uint16 disp = inst & I_DISP_MASK;
     uint16 target_address;
     uint16 ret_code =0;
@@ -413,7 +421,7 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
      * Byte, word or double-word located in the first 256 bytes of the local
      * segment. Y = (L) + D
      */
-    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
+    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0xFF;
     uint16 disp = inst & I_DISP_MASK;
     uint16 data;
     uint16 target_address;
@@ -482,6 +490,17 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
     return ret_code;
 }
 
+    /*
+     *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *      | 0 0  1 | 1| x x  x  x |     displacement      |
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *
+     *    "SHR", "SRG", 
+     *
+     * Byte, word or double-word located in the first 256 bytes of the local
+     * segment. Y = (L) + D
+     */
 void group_3_shift_DL(uint16 inst, uint32 mode) {
     uint16 count;
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
