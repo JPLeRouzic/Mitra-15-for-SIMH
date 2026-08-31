@@ -350,51 +350,88 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw) {
             }
             break;
         case 0x1000:
-        case 0x3000:
         case 0x5000:
         case 0x7000:
         case 0x9000:
         case 0xB000:
+            /*
+            Group 2 instructions (store family): DLD, STA, STE, STX, SBL,
+            SBR, DST, ADM, SPA, STS, FAD, FSU, FMU, FDV, TRS, MVS.
+            opcode here is always 0x10 + suboffset (suboffset 0-15), because
+            the store-family flag bit is bit 12 of the instruction; mask it
+            off to recover the table index.
+            */
+            opname = group2_opnames[opcode & 0x0F];
+            break;
+        case 0x3000:
         case 0xE000:
         case 0xF000:
-            /* 
-            Group 2 instructions 
-            opcode = (inst >> 8) & 0x1F;
+            /*
+            System / register instructions: SHR, SRG, ICX, DCX, ICL, DCL,
+            CSV, CLS, LDR, STR, LDP, SHC, TES (plus STM/CLM at suboffset 4,
+            which the manual lists sharing a single P-only encoding). These
+            use their own three addressing forms - DL (0x3xxx), PX (0xExxx)
+            and P (0xFxxx) - which the generic mode_names[] table above does
+            NOT correctly represent (it collides with "P"/"RM"), so it's
+            overridden here.
             */
-            if (opcode < 16) {
-                static const char *g2_names[] = {
-                    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
-                    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS"
-                };
-                opname = g2_names[opcode];
-            } else {
-                /* System instructions */
+            {
                 static const char *sys_names[] = {
-                    "SHR", "SRG", "ICX", "DCX", "SYS", "ICL", "DCL", "CSV",
+                    "SHR", "SRG", "ICX", "DCX", "???", "ICL", "DCL", "CSV",
                     "CLS", "LDR", "STR", "LDP", "SHC", "TES", "???", "???"
                 };
-                if ((opcode >= 0x10 && opcode <= 0x1F) && opcode != 0x14) {
-                    opname = sys_names[opcode - 0x10];
+                int suboffset = opcode & 0x0F;
+                opname = sys_names[suboffset];
+                modename = (hexcode == 0x3000) ? "DL" :
+                           (hexcode == 0xE000) ? "PX" : "P";
+
+                if (suboffset == 0x0) {
+                    /* SHR: low byte is shift-type (bits 8-10) + step count
+                     * (bits 11-15), not a displacement (manual p.103/195). */
+                    static const char *shr_names[] = {
+                        "SLLS", "SRCS", "SAD", "SLCD", "SLCS", "SAS", "SRLS", "SRCD"
+                    };
+                    opname = shr_names[(disp >> 5) & 0x07];
+                    disp = disp & 0x1F;
+                } else if (suboffset == 0xC) {
+                    /* SHC: same layout as SHR, but only 4 of the 8 shift
+                     * types are assigned; type 1 is the unrelated DITR
+                     * instruction (manual p.112/195). */
+                    switch ((disp >> 5) & 0x07) {
+                        case 0: opname = "SLLD"; disp = disp & 0x1F; break;
+                        case 2: opname = "PTY";  disp = disp & 0x1F; break;
+                        case 4: opname = "SRLD"; disp = disp & 0x1F; break;
+                        case 6: opname = "NLZ";  disp = disp & 0x1F; break;
+                        case 1: opname = "DITR"; disp = 0; break;
+                        default: opname = NULL; break;
                     }
-                else {
-                    // It's an intruction in the SYS group
-                    switch(disp) {
-                        case 0x00:
-                            opname = "CLM";
-                            break;
-                        case 0x01:
-                            opname = "DIT";
-                            break;
-                        case 0x02:
-                            opname = "RD";
-                            break;
-                        case 0x03:
-                            opname = "WD";
-                            break;
-                        case 0x08:
-                            opname = "STM";
-                            break;
+                } else if (suboffset == 0x1) {
+                    /* SRG: low byte is 2 * sub-instruction number, e.g.
+                     * RTS=F100, XAE=F102, ..., RSV=F10C, ... CHX=F11E
+                     * (manual p.119/195, confirmed against Appendix B). */
+                    static const char *srg_names[] = {
+                        "RTS", "XAE", "XAX", "XEX", "XAA", "CCE", "RSV", "ACE",
+                        "CCA", "AEE", "CNX", "AIE", "AAE", "LNE", "CNA", "CHX"
+                    };
+                    int srg_sub = disp >> 1;
+                    opname = (srg_sub < 16) ? srg_names[srg_sub] : NULL;
+                    disp = 0;
+                } else if (suboffset == 0x4 && hexcode == 0xF000) {
+                    /* Control instructions CLM/DIT/RD/WD/STM: only exist as
+                     * the P-form F4xx (Appendix B shows 0x34/0xE4 unused),
+                     * selected directly by the low byte (manual p.164-167). */
+                    switch (disp) {
+                        case 0x00: opname = "CLM"; break;
+                        case 0x01: opname = "DIT"; break;
+                        case 0x02: opname = "RD";  break;
+                        case 0x03: opname = "WD";  break;
+                        case 0x08: opname = "STM"; break;
+                        default:   opname = NULL;  break;
                     }
+                    disp = 0;
+                } else if (suboffset == 0x4) {
+                    /* 0x34 / 0xE4: unused per Appendix B's hex-order table. */
+                    opname = NULL;
                 }
             }
             break;
@@ -410,6 +447,11 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw) {
                 case 5: opname = "BAZ"; break;
                 case 6: opname = "BOF"; break;
                 case 7: opname = "BRU"; break;
+            }
+            {
+                int rm_bit = (inst >> 11) & 1;
+                modename = (hexcode == 0xC000) ? (rm_bit ? "RM" : "RP")
+                                                : (rm_bit ? "IG" : "IL");
             }
             break;
     }
