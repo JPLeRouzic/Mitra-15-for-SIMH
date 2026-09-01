@@ -356,7 +356,15 @@ uint16 group_2_DL(uint16 inst, uint32 mode) {
     uint16 ret_code =0;
 
     target_address = (cpu_state.reg_L + disp) & 0x7FFF;
-    if(opcode == 0x1A) {
+
+    if(opcode == 0x10) {
+            /* DLD - Double Load */
+            cpu_state.reg_E = read_word(target_address);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            set_condition_codes_load(cpu_state.reg_E);
+    	    return ret_code;
+    	}
+    else if(opcode == 0x1A) {
             // FAD DL, Floating ADd (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -599,7 +607,14 @@ uint16 group_2_DG(uint16 inst, uint32 mode) {
     uint16 ret_code =0;
 
     target_address = (cpu_state.reg_G + disp) & 0x7FFF;
-    if(opcode == 0x5A) {
+    if(opcode == 0x50) {
+            /* DLD - Double Load */
+            cpu_state.reg_E = read_word(target_address);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            set_condition_codes_load(cpu_state.reg_E);
+    	    return ret_code;
+    	}
+    else if(opcode == 0x5A) {
             // FAD DG, Floating ADd (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -669,7 +684,14 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
     uint16 ret_code =0;
 
     target_address = (GPRIME + tmp) & 0x7FFF;
-    if(opcode == 0x7A) {
+    if(opcode == 0x70) {
+            /* DLD - Double Load */
+            cpu_state.reg_E = read_word(target_address);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            set_condition_codes_load(cpu_state.reg_E);
+    	    return ret_code;
+    	}
+    else if(opcode == 0x7A) {
             // FAD IL, Floating ADd (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -737,7 +759,14 @@ uint16 group_2_IGX(uint16 inst, uint32 mode) {
 
     tmp = read_word(cpu_state.reg_G + disp);
     target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x7FFF;
-    if(opcode == 0x9A) {
+    if(opcode == 0x90) {
+            /* DLD - Double Load */
+            cpu_state.reg_E = read_word(target_address);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            set_condition_codes_load(cpu_state.reg_E);
+    	    return ret_code;
+    	}
+    else if(opcode == 0x9A) {
             // FAD IGX, Floating ADd (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -805,7 +834,14 @@ uint16 group_2_ILX(uint16 inst, uint32 mode) {
 
     tmp = read_word(cpu_state.reg_L + disp);
     target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x7FFF;
-    if(opcode == 0xBA) {
+    if(opcode == 0xB0) {
+            /* DLD - Double Load */
+            cpu_state.reg_E = read_word(target_address);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            set_condition_codes_load(cpu_state.reg_E);
+    	    return ret_code;
+    	}
+    else if(opcode == 0xBA) {
             // FAD ILX, Floating ADd (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -907,6 +943,13 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
     return ret_code;
 }
 
+/*
+ *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+ *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *      |1  1  1 | 1| 0 0  0  x |   op   |   count      |
+ *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *    (Class 1 - P addressing mode)
+*/
 void group_3_Shift_P(uint16 inst, uint32 mode) {
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
     uint16 disp = inst & I_DISP_MASK;

@@ -386,7 +386,8 @@ static void double_to_mitra(double v, uint16* A, uint16* E) {
 }
 
 uint16 case_instr_xDR(uint16 inst) {
-    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
+    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF; // opcodes all over 8 bits
+            sim_printf("\nopcode: %#010x\n", opcode);
     uint16 disp = inst & 0x00FF;
     t_addr target_address;
     t_value target_value;
@@ -468,24 +469,25 @@ uint16 case_instr_xDR(uint16 inst) {
     return 0;
 }
 
-/* Special shift
+/* SHC, Special shift
  *
  *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
  *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
- *      |  address  |  opcode   |  type  |   count      |
+ *      |    opcode | 1  1  0  0|  type  |   count      |
  *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
  *
  */
 uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
+            sim_printf("\nopcode: %#010x\n", opcode);
     uint16 disp = inst & I_DISP_MASK;
     uint8 count = disp & 0x1F;
-    // FIXME target_address is missing
 
     switch (opcode) {
-        case 0x3C: {
+        case 0x3C: { // SHC DL
             uint8 shc_word = (uint8)(read_word(target_address) & 0xFF);
             uint8 shc_type = (shc_word >> 5) & 0x07;
+            sim_printf("\nshc_type: %#010x\n", shc_type);
             count = shc_word & 0x1F;
             switch (shc_type) {
                 case 0:
@@ -522,7 +524,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
             set_condition_codes_load(cpu_state.reg_A);
         }
 
-        case 0xEC: {
+        case 0xEC: { // SHC PX
             uint8 shc_type = (disp >> 5) & 0x07;
             switch (shc_type) {
                 case 0:
@@ -565,7 +567,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
             set_condition_codes_load(cpu_state.reg_block[cpu_state.J_reg][3]); // reg_A
         }
 
-        case 0xFC: {
+        case 0xFC: { // SHC P
             uint8 shc_type = (disp >> 5) & 0x07;
             switch (shc_type) {
                 case 0:
@@ -616,8 +618,10 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
      */
     uint16 set_register(uint16 inst, uint32 mode) {
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
+            sim_printf("\nopcode: %#010x\n", opcode);
     uint16 disp = inst & I_DISP_MASK;
     srg_op_t type = (disp & 0x1E) >> 1;
+            sim_printf("\ntype: %#010x\n", type);
     uint16 data;
     
     switch (opcode) {
@@ -883,7 +887,8 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
  *
  */
 uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst) {
-    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
+    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0F; // opcode on bits 4 to 7
+            sim_printf("\nopcode: %#010x\n", opcode);
     uint8 s_byte, d_byte;
     uint16 i, data;
     uint16 carry, overflow;
@@ -1001,13 +1006,6 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst) 
                                        // byte of X-register is cleared.
             set_condition_codes_load(cpu_state.reg_X);
             break;
-
-        case 0x10:
-            /* DLD - Double Load */
-            cpu_state.reg_E = read_word(target_address);
-            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
-            set_condition_codes_load(cpu_state.reg_E);
-            break;
     }
     return 0;
 }
@@ -1015,6 +1013,7 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst) 
 // Complex cases
 uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst, t_addr target_address, t_value mem_value) {
     uint16 disp = inst & I_DISP_MASK;
+            sim_printf("\nopcode: %#010x\n", opcode);
     switch (opcode) {
         case 0x04:  // "LEA"
             cpu_state.reg_A = (target_address - GPRIME) & 0x7FFF;
@@ -1064,7 +1063,8 @@ uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst, t_addr target_addres
  *
  */
 uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
-    uint8 opcode = (inst >> I_GROUP_SHIFT) & 0x1F;
+    uint8 opcode = (inst >> I_GROUP_SHIFT) & 0x0F; // opcodes on bits 4 to 7
+            sim_printf("\nopcode: %#010x\n", opcode);
     uint16 data, data2, result;
     uint16 carry, overflow;
     int i;
@@ -1188,6 +1188,7 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
 
 uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address) {
     uint8 opcode = ((inst & 0x0F00) >> I_OPCODE_SHIFT);
+            sim_printf("\nopcode: %#010x\n", opcode);
     uint16 data, data2;
     
     switch(opcode) {
@@ -1272,6 +1273,7 @@ uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address) {
 */
 uint16 string_proc(uint16 inst, uint32 mode, t_addr target_address) {
     uint8 opcode = ((inst & 0x0F00) >> I_OPCODE_SHIFT);
+            sim_printf("\nopcode: %#010x\n", opcode);
     
     switch(opcode) {
         case 0x1F:  /* MVS - MVS moves a string from (G)+(A) to Y (optional) */
