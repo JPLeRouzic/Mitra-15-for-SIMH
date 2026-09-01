@@ -357,32 +357,144 @@ static uint16 compute_parity(uint16* A, int count) {
     return parity_count;
 }
 
-/* ========== Floating Point (per manual section VII-9) ========== */
-/* Mitra-15 uses a base-16 exponent with a characteristic +64 */
-static double mitra_to_double(uint16 A, uint16 E) {
-    uint32 raw = ((uint32)A << 16) | E;
-    int sign = (raw >> 31) & 1;
-    int exp = (raw >> 24) & 0x7F;
-    uint32 mant = raw & 0xFFFFFF;
-    double m = mant / (double)(1 << 24);
-    /* Exponent is base-16, characteristic is exp-64 */
+/* ========== Floating Point (per manual section VII-9) ========== 
+ Mitra-15 uses a base-16 exponent with a characteristic +64 
+ the exponent is a power of 16, not a power of 2
+   ex: 1000=0.244140625×16^3
+ The 64 is a bias, a kind of sign for the characteristic. It lets the 7-bit unsigned field represent negative and positive exponents.
+┌────┬─────────┬───────────────────────┐
+│ S  │  C (7)  │       M (24)          │
+└────┴─────────┴───────────────────────┘
 
-    double val = m * pow(16.0, exp - 64);
-    return sign ? -val : val;
+          E                  A
+┌────────────────────┬─────────────────────┐
+│ 16 most significant│ 16 least significant│
+└────────────────────┴─────────────────────┘
+*/
+
+/*
+ * Convert a Mitra-15 value (E,A) to double.
+ *
+ * E = most significant 16 bits
+ * A = least significant 16 bits
+ */
+static double mitra_to_double(uint16_t A, uint16_t E)
+{
+    uint32_t raw = ((uint32_t)E << 16) | A;
+
+    if (raw == 0)
+        return 0.0;
+
+    /*
+     * Negative Mitra numbers are stored as the
+     * two's complement of the complete 32-bit value.
+     *
+     * Convert back to the positive magnitude first.
+     */
+    bool negative = (raw & 0x80000000U) != 0;
+
+    if (negative)
+        raw = (~raw) + 1;
+
+    /* Extract characteristic and mantissa */
+    int C = (raw >> 24) & 0x7F;
+    uint32_t mant = raw & 0xFFFFFFU;
+
+    /*
+     * M = mantissa / 2^24
+     */
+    double M = mant / 16777216.0;     /* 2^24 */
+
+    /*
+     * N = M * 16^(C-64)
+     */
+    double value = M * pow(16.0, C - 64);
+
+    return negative ? -value : value;
 }
 
-static void double_to_mitra(double v, uint16* A, uint16* E) {
-    int sign = (v < 0);
-    if (sign) v = -v;
-    int exp;
-    double m = frexp(v, &exp);
-    /* Convert from base-2 exponent to base-16 */
-    int exp16 = (exp - 1) / 4;
-    double m16 = m * pow(2.0, 4 - (exp - 1 - exp16 * 4));
-    uint32 mant = (uint32)(m16 * (1 << 24));
-    uint32 raw = (sign << 31) | ((exp16 + 64) << 24) | (mant & 0xFFFFFF);
-    *A = (raw >> 16) & 0xFFFF;
-    *E = raw & 0xFFFF;
+/*
+ * Convert a double to Mitra-15.
+ *
+ * Returns false if the value is outside the
+ * representable Mitra-15 range.
+ */
+static t_bool double_to_mitra(double v, uint16_t *A, uint16_t *E)
+{
+    if (!A || !E)
+        return false;
+
+    /* Zero */
+    if (v == 0.0) {
+        *A = 0;
+        *E = 0;
+        return true;
+    }
+
+    bool negative = v < 0.0;
+    double x = fabs(v);
+
+    /*
+     * Find e such that:
+     *
+     *     x = M * 16^e
+     *
+     * with:
+     *
+     *     1/16 <= M < 1
+     */
+    int e = (int)floor(log(x) / log(16.0)) + 1;
+
+    double M = x / pow(16.0, e);
+
+    /*
+     * Convert M to the 24-bit integer mantissa.
+     */
+    uint64_t mant =
+        (uint64_t)llround(M * 16777216.0);
+
+    /*
+     * Rounding can theoretically produce 2^24.
+     * Renormalize in that case.
+     */
+    if (mant >= 16777216ULL) {
+        mant = 1048576ULL;       /* 2^20 = 2^24 / 16 */
+        e++;
+    }
+
+    /*
+     * Mitra characteristic:
+     *
+     *     C = e + 64
+     *
+     * The specification says:
+     *
+     *     0 < C < 127
+     */
+    int C = e + 64;
+
+    if (C <= 0 || C >= 127)
+        return false;
+
+    /*
+     * Construct the positive 32-bit representation.
+     */
+    uint32_t raw =
+        ((uint32_t)C << 24) |
+        ((uint32_t)mant & 0xFFFFFFU);
+
+    /*
+     * Negative numbers are represented by the
+     * two's complement of the complete positive word.
+     */
+    if (negative)
+        raw = (~raw) + 1;
+
+    /* Split into E and A */
+    *E = (uint16_t)(raw >> 16);
+    *A = (uint16_t)(raw & 0xFFFF);
+
+    return true;
 }
 
 uint16 case_instr_xDR(uint16 inst) {

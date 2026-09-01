@@ -206,7 +206,7 @@ static void set_condition_codes_compare(uint16 a, uint16 b, uint16 result);
 static void set_condition_codes_arithmetic(uint16 result, uint16 carry, uint16 overflow);
 static void mul32(uint16 a, uint16 b, uint16 * high, uint16 * low);
 static int div32(uint16 high, uint16 low, uint16 divisor, uint16 * quot, uint16 * rem);
-static void double_to_mitra(double v, uint16 * A, uint16 * E);
+static t_bool double_to_mitra(double v, uint16 * A, uint16 * E);
 static double mitra_to_double(uint16 A, uint16 E);
 const char *mitra_trap_name(int trap);
 int mitra_resolve_trap_cause(uint32 trp_req_bits);
