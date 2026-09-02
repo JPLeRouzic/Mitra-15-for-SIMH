@@ -882,8 +882,8 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                 * ((L)) + G' + 2 -> (P)
                 * ((L) + 2) + G' -> (L)
                 */
-                    uint16 saved_P = read_word(cpu_state.reg_L) + ((GPRIME) + 2); 	// ((L)) + G' + 2
-                    uint16 saved_L = read_word(cpu_state.reg_L + 2) + GPRIME; 		// L = ((L) + 2) + G' 
+                    uint16 saved_P = (read_word(cpu_state.reg_L) + ((GPRIME) + 2)) & 0x7FFF ; 	// ((L)) + G' + 2
+                    uint16 saved_L = (read_word(cpu_state.reg_L + 2) + GPRIME) & 0x7FFF; 		// L = ((L) + 2) + G' 
                     cpu_state.reg_P = saved_P;
                     cpu_state.reg_L = saved_L; 
                     break;
@@ -930,7 +930,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                         cpu_state.OV = (saved_flags >> 13) & 1;
                         cpu_state.MA = (saved_flags >> 12) & 1;
                         cpu_state.PR = (saved_flags >> 11) & 1;
-                        cpu_state.MS = 0;
+                        cpu_state.MS = (saved_flags >> 10) & 1; // FIXME or cpu_state.MS = 0?
                     
                     cpu_state.reg_L = // (G) + ((G) + 2)
                         (cpu_state.reg_G + read_word(cpu_state.reg_G + 2)) &
@@ -1428,8 +1428,8 @@ void call_section(t_addr target_address) {
             * (G) + ((G) - 4Y + 2) -> (P)
             */ 
             uint16 section = target_address;
+            
             uint16 called_Lbase = read_word((cpu_state.reg_G - 4 * section) & 0x7FFF);		// Lbase = ((G) - 4Y)
-                
             uint16 called_Pbase = read_word((cpu_state.reg_G - 4 * section + 2) & 0x7FFF);	// ((G) - 4Y + 2)
                 
             uint16 LDS = (called_Lbase + cpu_state.reg_G) & 0x7FFF;		// LDS = (G) + ((G) - 4Y) = (G) + Lbase
@@ -1469,25 +1469,41 @@ void CSV_instr(t_addr target_address) {
 	    * ((12) - 4 target_address) -> (L)
 	    * ((12) - 4 target_address + 2) -> (P)
 	    *             
+	    * &C = adresse absolue 12 (0x0C) : pointeur vers la PRTS
+	    * &E = adresse absolue 14 (0x0E) : nombre max de sections superviseurs
             */
-            write_word(cpu_state.reg_G, cpu_state.reg_P - cpu_state.reg_G); 	// (P) - (G)
             
-            write_word(cpu_state.reg_G + 2, cpu_state.reg_L - cpu_state.reg_G);	// (L) - (G)
+	    /* ---- Contrôle de borne ---- */
+	    uint16 max_sections = read_word(0x0E);
+	    if (target_address >= max_sections) {
+	        sim_printf("\n[CSV] section %u >= max_sections %u -> TRAP_VM\n", target_address, max_sections);
+	        mitra_trap(TRAP_VM, cpu_state.reg_P);
+	        return;
+	    }
+
+	    /*  ---- Sauvegarde de P, L et des indicateurs dans la CDS ---- */
+            write_word(cpu_state.reg_G, (cpu_state.reg_P - cpu_state.reg_G) & 0x7FFF); 	// (P) - (G)            
+            write_word(cpu_state.reg_G + 2, (cpu_state.reg_L - cpu_state.reg_G) & 0x7FFF);	// (L) - (G)
             
             // Indicators -> ((G) + 4)
-            write_word(cpu_state.reg_G + 4, (cpu_state.C ? 1 : 0) |
-                                                (cpu_state.OV ? 2 : 0) |
-                                                (cpu_state.MS ? 4 : 0));
+	    /* Indicateurs sur les bits 14..10 — format identique à RSV */
+	    write_word(cpu_state.reg_G + 4,
+		((cpu_state.C  ? 1 : 0) << 14) |
+		((cpu_state.OV ? 1 : 0) << 13) |
+		((cpu_state.MA ? 1 : 0) << 12) |
+		((cpu_state.PR ? 1 : 0) << 11) |
+		((cpu_state.MS ? 1 : 0) << 10));
+
+	    /* ---- Forçage des indicateurs ---- */
             cpu_state.MS = 1;
             cpu_state.PR = 1;
 
-            uint16 PRTS_addr = read_word(12);
-            
-            cpu_state.reg_L = // L = ((12) - 4 target_address)
-                ((PRTS_addr - (4 * target_address))) & 0x7FFF;
-                
-            cpu_state.reg_P = // P = ((12) - 4 target_address + 2)
-                ((PRTS_addr - (4 * target_address) + 2)) & 0x7FFF;           
+	    /* ---- Initialisation de L et P depuis le contenu du SRDN ---- */
+	    uint16 PRTS_addr = read_word(0x0C);                 /* (&C) is address 12  in decimal*/
+	    uint16 srdn_addr = (PRTS_addr - 4 * target_address) & 0x7FFF;
+
+	    cpu_state.reg_L = read_word(srdn_addr);              /* ((&C) - 4N)     */
+	    cpu_state.reg_P = read_word(srdn_addr + 2);          /* ((&C) - 4N + 2) */
 }
 
 uint16 test_and_set(uint32 mode, t_addr target_address) {

@@ -470,7 +470,7 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
             /* CSV */
             CSV_instr(target_address);
             break;
-        case 0x38: 
+        case 0x38: /* CLS */ 
             call_section(target_address);
             break;
         case 0x39:  // LDR DL
@@ -923,7 +923,7 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
             CSV_instr(target_address);
             break;
 
-        case 0xE8: 
+        case 0xE8: /* CLS */
             call_section(target_address);
             break;
 
@@ -1153,7 +1153,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
             CSV_instr(target_address);
             break;
 
-        case 0xF8: 
+        case 0xF8: /* CLS */
             call_section(target_address);
             break;
 
