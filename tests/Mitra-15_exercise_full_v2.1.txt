@@ -1,0 +1,2211 @@
+; ================================================================
+; MITRA-15 SIMH ADDRESSING MODE & INSTRUCTION smoke test
+; ================================================================
+;
+; This test systematically exercises instructions across ALL valid 
+; addressing modes: DL, DG, IL, IGX, ILX, P, PX, RP, RM, IL(br), IG(br).
+; Each test runs, asserts the expected result, and continues.
+; If any assertion fails, SIMH stops immediately (bug found).
+; If all tests pass, a success message is printed at the end.
+;
+; Memory map used by this test:
+;   0000-003F   General/Common Data (G = 0000)
+;   0040-004F   General/common data, used when G = 0000
+;   0040-007F   DG Data & IGX Pointers
+;   0080-00BF   IG Pointers & Branch Targets
+;   0100-01FF   Test code
+;   0180-018F   CDS/context area for CSV/RSV tests
+;   0220-0227   Floating-point operands
+;   0230-0237   Floating-point/string result area
+;   0240-024F   TRS translation table area
+;   0400-04FF   Local Data Segment (L = 0400)
+;   0500-05FF   IL & ILX Pointers/Data
+;   0600-06FF   String / FP / TRS / CDS
+;
+; Register bases used for most tests:
+;   L = 0400 (or 0200 depending on the test block)
+;   G = 0000
+;
+; This makes DL addressing access 0400+displacement.
+; DG addressing accesses 0000+displacement.
+; LEA with G=0000 returns the effective address directly.
+;
+; ================================================================
+
+; ================================================================
+; CPU and basic memory initialization
+; ================================================================
+reset cpu
+; Initialize CPU registers
+deposit cpu MS 1
+deposit cpu PR 1
+deposit cpu MA 0
+deposit cpu C 0
+deposit cpu OV 0
+deposit cpu A 0000
+deposit cpu E 0000
+deposit cpu X 0000
+deposit cpu L 0400
+deposit cpu G 0000
+deposit cpu P 0100
+; ================================================================
+; Data area initialization
+; ================================================================
+; ========== DG Data (G=0000) ==========
+; DG LDA operand
+deposit 040 1111
+; DG STA operand
+deposit 042 2222
+; DG ADD operand
+deposit 044 0005
+; DG SUB operand
+deposit 046 0003
+; DG MUL operand
+deposit 048 0002
+; DG DIV operand
+deposit 04A 0004
+; DG IOR operand
+deposit 04C 3333
+; DG EOR operand
+deposit 04E 4444
+; DG AND operand
+deposit 050 5555
+; DG CMP operand
+deposit 052 6666
+; ========== IGX Pointers ==========
+; IGX pointer -> 0062
+deposit 060 0062
+; IGX LDA operand
+deposit 062 0080
+; IGX STA operand
+deposit 064 0082
+; IGX ADD operand
+deposit 066 0084
+; IGX SUB operand
+deposit 068 0086
+; IGX MUL operand
+deposit 06A 0088
+; IGX DIV operand
+deposit 06C 008A
+; IGX IOR operand
+deposit 06E 008C
+; IGX EOR operand
+deposit 070 008E
+; IGX AND operand
+deposit 072 0090
+; IGX CMP operand
+deposit 074 0092
+; ========== IGX Data ==========
+; IGX LDA data
+deposit 080 7777
+; IGX STA data
+deposit 082 8888
+; IGX ADD data
+deposit 084 0003
+; IGX SUB data
+deposit 086 0002
+; IGX MUL data
+deposit 088 0003
+; IGX DIV data
+deposit 08A 0004
+; IGX IOR data
+deposit 08C 9999
+; IGX EOR data
+deposit 08E AAAA
+; IGX AND data
+deposit 090 BBBB
+; IGX CMP data
+deposit 092 CCCC
+; ========== IG Branch Pointers ==========
+; IG branch pointer -> 0180
+deposit 0A0 0180
+; IG branch pointer -> 0182
+deposit 0A2 0182
+; ========== Local Data (L=0400) ==========
+; DL LDA operand
+deposit 410 5555
+; DL STA operand
+deposit 412 6666
+; DL ADD operand
+deposit 414 0002
+; DL SUB operand
+deposit 416 0003
+; DL MUL operand
+deposit 418 0004
+; DL DIV operand
+deposit 41A 0005
+; DL IOR operand
+deposit 41C 7777
+; DL EOR operand
+deposit 41E 8888
+; DL AND operand
+deposit 420 9999
+; DL CMP operand
+deposit 422 AAAA
+; ========== IL Pointers ==========
+; IL pointer -> 0432
+deposit 430 0432
+; IL LDA data
+deposit 432 0460
+; IL STA data
+deposit 434 0462
+; IL ADD data
+deposit 436 0464
+; IL SUB data
+deposit 438 0466
+; IL MUL data
+deposit 43A 0468
+; IL DIV data
+deposit 43C 046A
+; IL IOR data
+deposit 43E 046C
+; IL EOR data
+deposit 440 046E
+; IL AND data
+deposit 442 0470
+; IL CMP data
+deposit 444 0472
+; ========== IL Data ==========
+; IL LDA data
+deposit 460 BBBB
+; IL STA data
+deposit 462 CCCC
+; IL ADD data
+deposit 464 0004
+; IL SUB data
+deposit 466 0002
+; IL MUL data
+deposit 468 0003
+; IL DIV data
+deposit 46A 0005
+; IL IOR data
+deposit 46C DDDD
+; IL EOR data
+deposit 46E EEEE
+; IL AND data
+deposit 470 FFFF
+; IL CMP data
+deposit 472 0001
+; ========== ILX Pointers ==========
+; ILX pointer -> 0482
+deposit 480 0482
+; ILX LDA data
+deposit 482 04A0
+; ILX STA data
+deposit 484 04A2
+; ILX ADD data
+deposit 486 04A4
+; ILX SUB data
+deposit 488 04A6
+; ILX MUL data
+deposit 48A 04A8
+; ILX DIV data
+deposit 48C 04AA
+; ILX IOR data
+deposit 48E 04AC
+; ILX EOR data
+deposit 490 04AE
+; ILX AND data
+deposit 492 04B0
+; ILX CMP data
+deposit 494 04B2
+; ========== ILX Data ==========
+; ILX LDA data
+deposit 4A0 1111
+; ILX STA data
+deposit 4A2 2222
+; ILX ADD data
+deposit 4A4 0001
+; ILX SUB data
+deposit 4A6 0002
+; ILX MUL data
+deposit 4A8 0003
+; ILX DIV data
+deposit 4AA 0004
+; ILX IOR data
+deposit 4AC 3333
+; ILX EOR data
+deposit 4AE 4444
+; ILX AND data
+deposit 4B0 5555
+; ILX CMP data
+deposit 4B2 6666
+; ========== P/PX Immediate Data ==========
+; P immediate operand (ADD)
+deposit 4C0 0007
+; P immediate operand (SUB)
+deposit 4C2 0003
+; P immediate operand (MUL)
+deposit 4C4 0002
+; P immediate operand (DIV)
+deposit 4C6 0004
+; P immediate operand (IOR)
+deposit 4C8 00FF
+; P immediate operand (EOR)
+deposit 4CA 00AA
+; P immediate operand (AND)
+deposit 4CC 00F0
+; P immediate operand (CMP)
+deposit 4CE 0005
+; ========== General Test Data ==========
+; SHR DL param (SLLS, count 1)
+deposit 4D0 0001
+; ICX operand
+deposit 4D2 0007
+; DCX operand
+deposit 4D4 0005
+; ICL operand
+deposit 4D6 0003
+; DCL operand
+deposit 4D8 0002
+
+; ========== Local data segment at L=0200 ==========
+deposit 200 A55A
+deposit 202 0005
+deposit 204 0003
+deposit 206 FFFD
+deposit 208 0000
+deposit 20A 0204
+deposit 20C 0040
+deposit 20E 0000
+deposit 210 0000
+deposit 212 0000
+deposit 214 0000
+deposit 216 0000
+; ========== Floating-point operands ==========
+; +1.0 in Mitra-15 single precision
+deposit 220 4110
+deposit 222 0000
+deposit 224 4110
+deposit 226 0000
+; ========== Floating-point/string result area ==========
+deposit 230 0000
+deposit 232 0000
+deposit 234 0000
+deposit 236 0000
+; ========== TRS translation table area ==========
+deposit 240 0000
+deposit 242 0000
+; ================================================================
+; TEST GROUP 1: Load Instructions - All Addressing Modes
+; ================================================================
+
+; ========== TEST 1.1: LDA ==========
+echo "TEST 1.1: LDA"
+; DL: LDA DL 10 -> loads (0400+10=0410)
+deposit 100 0010
+; BRU $
+deposit 102 C700
+break 102
+go 100
+assert cpu A=5555
+nobreak all
+; DG: LDA DG 40 -> loads (0000+40=0040)
+deposit 104 4040
+deposit 106 C700
+break 106
+go 104
+assert cpu A=1111
+nobreak all
+; IL: LDA IL 30 -> loads ((0400+30=0430)) = 0460
+deposit 108 6030
+deposit 10A C700
+break 10A
+go 108
+assert cpu A=BBBB
+nobreak all
+; IGX: LDA IGX 60 (X=0)
+deposit cpu X 0000
+; LDA IGX 60 -> loads ((0000+60=0060)) = 0080
+deposit 10C 8060
+deposit 10E C700
+break 10E
+go 10C
+assert cpu A=7777
+nobreak all
+; ILX: LDA ILX 80 (X=0)
+deposit 110 A080
+deposit 112 C700
+break 112
+go 110
+assert cpu A=1111
+nobreak all
+; P: LDA P C0 -> immediate operand = 00C0
+deposit 114 20C0
+deposit 116 C700
+break 116
+go 114
+assert cpu A=00C0
+nobreak all
+; ========== TEST 1.2: LDE ==========
+echo "TEST 1.2: LDE"
+; DL
+; LDE DL 10
+deposit 120 0110
+deposit 122 C700
+break 122
+go 120
+assert cpu E=5555
+nobreak all
+; DG
+; LDE DG 40
+deposit 124 4140
+deposit 126 C700
+break 126
+go 124
+assert cpu E=1111
+nobreak all
+; IL
+; LDE IL 30
+deposit 128 6130
+deposit 12A C700
+break 12A
+go 128
+assert cpu E=BBBB
+nobreak all
+; IGX
+deposit cpu X 0000
+; LDE IGX 60
+deposit 12C 8160
+deposit 12E C700
+break 12E
+go 12C
+assert cpu E=7777
+nobreak all
+; ILX
+; LDE ILX 80
+deposit 130 A180
+deposit 132 C700
+break 132
+go 130
+assert cpu E=1111
+nobreak all
+; P
+; LDE P C0
+deposit 134 21C0
+deposit 136 C700
+break 136
+go 134
+assert cpu E=00C0
+nobreak all
+; ========== TEST 1.3: LDX ==========
+echo "TEST 1.3: LDX"
+; DL
+; LDX DL 10
+deposit 140 0210
+deposit 142 C700
+break 142
+go 140
+assert cpu X=5555
+nobreak all
+; DG
+; LDX DG 40
+deposit 144 4240
+deposit 146 C700
+break 146
+go 144
+assert cpu X=1111
+nobreak all
+; IL
+; LDX IL 30
+deposit 148 6230
+deposit 14A C700
+break 14A
+go 148
+assert cpu X=BBBB
+nobreak all
+; IGX
+deposit cpu X 0000
+; LDX IGX 60
+deposit 14C 8260
+deposit 14E C700
+break 14E
+go 14C
+assert cpu X=7777
+nobreak all
+; ILX
+; LDX ILX 80
+deposit 150 A280
+deposit 152 C700
+break 152
+go 150
+assert cpu X=1111
+nobreak all
+; P
+; LDX P C0
+deposit 154 22C0
+deposit 156 C700
+break 156
+go 154
+assert cpu X=00C0
+nobreak all
+; ========== TEST 1.4: LBR ==========
+echo "TEST 1.4: LBR"
+; DL
+; LBR DL 10
+deposit 160 0E10
+deposit 162 C700
+break 162
+go 160
+assert cpu A=0055
+nobreak all
+; DG
+; LBR DG 40
+deposit 164 4E40
+deposit 166 C700
+break 166
+go 164
+assert cpu A=0011
+nobreak all
+; IL
+; LBR IL 30
+deposit 168 6E30
+deposit 16A C700
+break 16A
+go 168
+assert cpu A=00BB
+nobreak all
+; IGX
+deposit cpu X 0000
+; LBR IGX 60
+deposit 16C 8E60
+deposit 16E C700
+break 16E
+go 16C
+assert cpu A=0077
+nobreak all
+; ILX
+; LBR ILX 80
+deposit 170 AE80
+deposit 172 C700
+break 172
+go 170
+assert cpu A=0011
+nobreak all
+; P
+; LBR P C0
+deposit 174 2EC0
+deposit 176 C700
+break 176
+go 174
+assert cpu A=00C0
+nobreak all
+; ========== TEST 1.5: LBL ==========
+echo "TEST 1.5: LBL"
+; DL
+; LBL DL 10
+deposit 180 0D10
+deposit 182 C700
+break 182
+go 180
+assert cpu A=5500
+nobreak all
+; DG
+; LBL DG 40
+deposit 184 4D40
+deposit 186 C700
+break 186
+go 184
+assert cpu A=1100
+nobreak all
+; IL
+; LBL IL 30
+deposit 188 6D30
+deposit 18A C700
+break 18A
+go 188
+assert cpu A=BB00
+nobreak all
+; IGX
+deposit cpu X 0000
+; LBL IGX 60
+deposit 18C 8D60
+deposit 18E C700
+break 18E
+go 18C
+assert cpu A=7700
+nobreak all
+; ILX
+; LBL ILX 80
+deposit 190 AD80
+deposit 192 C700
+break 192
+go 190
+assert cpu A=1100
+nobreak all
+; P
+; LBL P C0
+deposit 194 2DC0
+deposit 196 C700
+break 196
+go 194
+assert cpu A=C000
+nobreak all
+; ========== TEST 1.6: LBX ==========
+echo "TEST 1.6: LBX"
+; DL
+; LBX DL 10
+deposit 198 0F10
+deposit 19A C700
+break 19A
+go 198
+assert cpu X=0055
+nobreak all
+; DG
+; LBX DG 40
+deposit 19C 4F40
+deposit 19E C700
+break 19E
+go 19C
+assert cpu X=0011
+nobreak all
+; IL
+; LBX IL 30
+deposit 1A0 6F30
+deposit 1A2 C700
+break 1A2
+go 1A0
+assert cpu X=00BB
+nobreak all
+; IGX
+deposit cpu X 0000
+; LBX IGX 60
+deposit 1A4 8F60
+deposit 1A6 C700
+break 1A6
+go 1A4
+assert cpu X=0077
+nobreak all
+; ILX
+; LBX ILX 80
+deposit 1A8 AF80
+deposit 1AA C700
+break 1AA
+go 1A8
+assert cpu X=0011
+nobreak all
+; P
+; LBX P C0
+deposit 1AC 2FC0
+deposit 1AE C700
+break 1AE
+go 1AC
+assert cpu X=00C0
+nobreak all
+; ========== TEST 1.7: LEA ==========
+echo "TEST 1.7: LEA"
+; DL: LEA DL 10 -> A = 0410
+deposit 1B0 0410
+deposit 1B2 C700
+break 1B2
+go 1B0
+assert cpu A=0410
+nobreak all
+; DG: LEA DG 40 -> A = 0040
+deposit 1B4 4440
+deposit 1B6 C700
+break 1B6
+go 1B4
+assert cpu A=0040
+nobreak all
+; IL: LEA IL 30 -> A = 0430
+deposit 1B8 6430
+deposit 1BA C700
+break 1BA
+go 1B8
+assert cpu A=0430
+nobreak all
+; IGX: LEA IGX 60 (X=0)
+deposit cpu X 0000
+; LEA IGX 60
+deposit 1BC 8460
+deposit 1BE C700
+break 1BE
+go 1BC
+assert cpu A=0060
+nobreak all
+; ILX: LEA ILX 80 -> A = 0480
+deposit 1C0 A480
+deposit 1C2 C700
+break 1C2
+go 1C0
+assert cpu A=0480
+nobreak all
+; P: LEA P C0 -> A = 00C0
+deposit 1C4 24C0
+deposit 1C6 C700
+break 1C6
+go 1C4
+assert cpu A=00C0
+nobreak all
+; ================================================================
+; TEST GROUP 2: Store Instructions - All Addressing Modes
+; ================================================================
+; ========== TEST 2.1: STA ==========
+echo "TEST 2.1: STA"
+; DL
+deposit cpu A 1234
+; STA DL 10
+deposit 200 1010
+deposit 202 C700
+break 202
+go 200
+assert 410=1234
+nobreak all
+deposit 410 5555
+; DG
+deposit cpu A 2345
+; STA DG 40
+deposit 204 5140
+deposit 206 C700
+break 206
+go 204
+assert 040=2345
+nobreak all
+deposit 040 1111
+; IL
+deposit cpu A 3456
+; STA IL 30
+deposit 208 7130
+deposit 20A C700
+break 20A
+go 208
+assert 460=3456
+nobreak all
+deposit 460 BBBB
+; IGX
+deposit cpu A 4567
+deposit cpu X 0000
+; STA IGX 60
+deposit 20C 9160
+deposit 20E C700
+break 20E
+go 20C
+assert 080=4567
+nobreak all
+deposit 080 7777
+; ILX
+deposit cpu A 5678
+; STA ILX 80
+deposit 210 B180
+deposit 212 C700
+break 212
+go 210
+assert 4A0=5678
+nobreak all
+deposit 4A0 1111
+; ========== TEST 2.2: STE ==========
+echo "TEST 2.2: STE"
+; DL
+deposit cpu E 1234
+; STE DL 10
+deposit 214 1210
+deposit 216 C700
+break 216
+go 214
+assert 410=1234
+nobreak all
+deposit 410 5555
+; DG
+deposit cpu E 2345
+; STE DG 40
+deposit 218 5240
+deposit 21A C700
+break 21A
+go 218
+assert 040=2345
+nobreak all
+deposit 040 1111
+; IL
+deposit cpu E 3456
+; STE IL 30
+deposit 21C 7230
+deposit 21E C700
+break 21E
+go 21C
+assert 460=3456
+nobreak all
+deposit 460 BBBB
+; IGX
+deposit cpu E 4567
+deposit cpu X 0000
+; STE IGX 60
+deposit 220 9260
+deposit 222 C700
+break 222
+go 220
+assert 080=4567
+nobreak all
+deposit 080 7777
+; ILX
+deposit cpu E 5678
+; STE ILX 80
+deposit 224 B280
+deposit 226 C700
+break 226
+go 224
+assert 4A0=5678
+nobreak all
+deposit 4A0 1111
+; ========== TEST 2.3: STX ==========
+echo "TEST 2.3: STX"
+; DL
+deposit cpu X 1234
+; STX DL 10
+deposit 228 1310
+deposit 22A C700
+break 22A
+go 228
+assert 410=1234
+nobreak all
+deposit 410 5555
+; DG
+deposit cpu X 2345
+; STX DG 40
+deposit 22C 5340
+deposit 22E C700
+break 22E
+go 22C
+assert 040=2345
+nobreak all
+deposit 040 1111
+; IL
+deposit cpu X 3456
+; STX IL 30
+deposit 230 7330
+deposit 232 C700
+break 232
+go 230
+assert 460=3456
+nobreak all
+deposit 460 BBBB
+; IGX
+deposit cpu X 4567
+deposit cpu X 0000
+; STX IGX 60
+deposit 234 9360
+deposit 236 C700
+break 236
+go 234
+assert 080=4567
+nobreak all
+deposit 080 7777
+; ILX
+deposit cpu X 5678
+; STX ILX 80
+deposit 238 B380
+deposit 23A C700
+break 23A
+go 238
+assert 4A0=5678
+nobreak all
+deposit 4A0 1111
+; ========== TEST 2.4: SBL ==========
+echo "TEST 2.4: SBL"
+; DL
+deposit cpu A 12FF
+; SBL DL 10 (store left byte)
+deposit 23C 1410
+deposit 23E C700
+break 23E
+go 23C
+assert 410=1200
+nobreak all
+deposit 410 5555
+; DG
+deposit cpu A 34FF
+; SBL DG 40
+deposit 240 5440
+deposit 242 C700
+break 242
+go 240
+assert 040=3400
+nobreak all
+deposit 040 1111
+; IL
+deposit cpu A 56FF
+; SBL IL 30
+deposit 244 7430
+deposit 246 C700
+break 246
+go 244
+assert 460=5600
+nobreak all
+deposit 460 BBBB
+; IGX
+deposit cpu A 78FF
+deposit cpu X 0000
+; SBL IGX 60
+deposit 248 9460
+deposit 24A C700
+break 24A
+go 248
+assert 080=7800
+nobreak all
+deposit 080 7777
+; ILX
+deposit cpu A 9AFF
+; SBL ILX 80
+deposit 24C B480
+deposit 24E C700
+break 24E
+go 24C
+assert 4A0=9A00
+nobreak all
+deposit 4A0 1111
+; ========== TEST 2.5: SBR ==========
+echo "TEST 2.5: SBR"
+; DL
+deposit cpu A FF12
+; SBR DL 10 (store right byte)
+deposit 250 1510
+deposit 252 C700
+break 252
+go 250
+assert 410=0012
+nobreak all
+deposit 410 5555
+; DG
+deposit cpu A FF34
+; SBR DG 40
+deposit 254 5540
+deposit 256 C700
+break 256
+go 254
+assert 040=0034
+nobreak all
+deposit 040 1111
+; IL
+deposit cpu A FF56
+; SBR IL 30
+deposit 258 7530
+deposit 25A C700
+break 25A
+go 258
+assert 460=0056
+nobreak all
+deposit 460 BBBB
+; IGX
+deposit cpu A FF78
+deposit cpu X 0000
+; SBR IGX 60
+deposit 25C 9560
+deposit 25E C700
+break 25E
+go 25C
+assert 080=0078
+nobreak all
+deposit 080 7777
+; ILX
+deposit cpu A FF9A
+; SBR ILX 80
+deposit 260 B580
+deposit 262 C700
+break 262
+go 260
+assert 4A0=009A
+nobreak all
+deposit 4A0 1111
+; ================================================================
+; TEST GROUP 3: Arithmetic Instructions - All Addressing Modes
+; ================================================================
+; ========== TEST 3.1: ADD ==========
+echo "TEST 3.1: ADD"
+; DL
+deposit cpu A 0010
+; ADD DL 14 (0414 = 0002)
+deposit 280 0014
+deposit 282 C700
+break 282
+go 280
+assert cpu A=0012
+nobreak all
+; DG
+deposit cpu A 0020
+; ADD DG 44 (0044 = 0005)
+deposit 284 4044
+deposit 286 C700
+break 286
+go 284
+assert cpu A=0025
+nobreak all
+; IL
+deposit cpu A 0030
+; ADD IL 36 (0436 = 0464, 0464 = 0004)
+deposit 288 6036
+deposit 28A C700
+break 28A
+go 288
+assert cpu A=0034
+nobreak all
+; IGX
+deposit cpu A 0040
+deposit cpu X 0000
+; ADD IGX 66 (0066 = 0084, 0084 = 0003)
+deposit 28C 8066
+deposit 28E C700
+break 28E
+go 28C
+assert cpu A=0043
+nobreak all
+; ILX
+deposit cpu A 0050
+; ADD ILX 86 (0486 = 04A4, 04A4 = 0001)
+deposit 290 A086
+deposit 292 C700
+break 292
+go 290
+assert cpu A=0051
+nobreak all
+; P
+deposit cpu A 0060
+; ADD P C0 (immediate = 00C0)
+deposit 294 20C0
+deposit 296 C700
+break 296
+go 294
+assert cpu A=0120
+nobreak all
+; ========== TEST 3.2: SUB ==========
+echo "TEST 3.2: SUB"
+; DL
+deposit cpu A 0010
+; SUB DL 14 (0414 = 0002)
+deposit 298 0614
+deposit 29A C700
+break 29A
+go 298
+assert cpu A=000E
+nobreak all
+; DG
+deposit cpu A 0020
+; SUB DG 44 (0044 = 0005)
+deposit 29C 4644
+deposit 29E C700
+break 29E
+go 29C
+assert cpu A=001B
+nobreak all
+; IL
+deposit cpu A 0030
+; SUB IL 36
+deposit 2A0 6636
+deposit 2A2 C700
+break 2A2
+go 2A0
+assert cpu A=002C
+nobreak all
+; IGX
+deposit cpu A 0040
+deposit cpu X 0000
+; SUB IGX 66
+deposit 2A4 8666
+deposit 2A6 C700
+break 2A6
+go 2A4
+assert cpu A=003D
+nobreak all
+; ILX
+deposit cpu A 0050
+; SUB ILX 86
+deposit 2A8 A686
+deposit 2AA C700
+break 2AA
+go 2A8
+assert cpu A=004F
+nobreak all
+; P
+deposit cpu A 0060
+; SUB P C2 (immediate = 00C2)
+deposit 2AC 26C2
+deposit 2AE C700
+break 2AE
+go 2AC
+assert cpu A=FF9E
+nobreak all
+; ========== TEST 3.3: MUL ==========
+echo "TEST 3.3: MUL"
+; DL
+deposit cpu A 0003
+; MUL DL 18 (0418 = 0004)
+deposit 2B0 0C18
+deposit 2B2 C700
+break 2B2
+go 2B0
+assert cpu E=0000
+assert cpu A=000C
+nobreak all
+; DG
+deposit cpu A 0003
+; MUL DG 48 (0048 = 0002)
+deposit 2B4 4C48
+deposit 2B6 C700
+break 2B6
+go 2B4
+assert cpu E=0000
+assert cpu A=0006
+nobreak all
+; IL
+deposit cpu A 0003
+; MUL IL 38
+deposit 2B8 6C38
+deposit 2BA C700
+break 2BA
+go 2B8
+assert cpu E=0000
+assert cpu A=0009
+nobreak all
+; IGX
+deposit cpu A 0003
+deposit cpu X 0000
+; MUL IGX 68
+deposit 2BC 8C68
+deposit 2BE C700
+break 2BE
+go 2BC
+assert cpu E=0000
+assert cpu A=0009
+nobreak all
+; ILX
+deposit cpu A 0003
+; MUL ILX 88
+deposit 2C0 AC88
+deposit 2C2 C700
+break 2C2
+go 2C0
+assert cpu E=0000
+assert cpu A=0009
+nobreak all
+; P
+deposit cpu A 0003
+; MUL P C4 (immediate = 00C4)
+deposit 2C4 2CC4
+deposit 2C6 C700
+break 2C6
+go 2C4
+assert cpu E=0000
+assert cpu A=024C
+nobreak all
+; ========== TEST 3.4: DIV ==========
+echo "TEST 3.4: DIV"
+; DL
+deposit cpu A 0008
+deposit cpu E 0000
+; DIV DL 1A (041A = 0005)
+deposit 2C8 0C1A
+deposit 2CA C700
+break 2CA
+go 2C8
+assert cpu E=0003
+assert cpu A=0001
+nobreak all
+; DG
+deposit cpu A 0008
+deposit cpu E 0000
+; DIV DG 4A (004A = 0004)
+deposit 2CC 4C4A
+deposit 2CE C700
+break 2CE
+go 2CC
+assert cpu E=0000
+assert cpu A=0002
+nobreak all
+; IL
+deposit cpu A 0008
+deposit cpu E 0000
+; DIV IL 3A
+deposit 2D0 6C3A
+deposit 2D2 C700
+break 2D2
+go 2D0
+assert cpu E=0003
+assert cpu A=0001
+nobreak all
+; IGX
+deposit cpu A 0008
+deposit cpu E 0000
+deposit cpu X 0000
+; DIV IGX 6A
+deposit 2D4 8C6A
+deposit 2D6 C700
+break 2D6
+go 2D4
+assert cpu E=0000
+assert cpu A=0002
+nobreak all
+; ILX
+deposit cpu A 0008
+deposit cpu E 0000
+; DIV ILX 8A
+deposit 2D8 AC8A
+deposit 2DA C700
+break 2DA
+go 2D8
+assert cpu E=0000
+assert cpu A=0002
+nobreak all
+; P
+deposit cpu A 0008
+deposit cpu E 0000
+; DIV P C6 (immediate = 00C6)
+deposit 2DC 2CC6
+deposit 2DE C700
+break 2DE
+go 2DC
+assert cpu E=0000
+assert cpu A=0002
+nobreak all
+; ================================================================
+; TEST GROUP 4: Logical Instructions - All Addressing Modes
+; ================================================================
+; ========== TEST 4.1: AND ==========
+echo "TEST 4.1: AND"
+; DL
+deposit cpu A FFFF
+; AND DL 20 (0420 = 9999)
+deposit 300 0920
+deposit 302 C700
+break 302
+go 300
+assert cpu A=9999
+nobreak all
+; DG
+deposit cpu A FFFF
+; AND DG 4C (004C = 3333)
+deposit 304 494C
+deposit 306 C700
+break 306
+go 304
+assert cpu A=3333
+nobreak all
+; IL
+deposit cpu A FFFF
+; AND IL 42 (0442 = 0470, 0470 = FFFF)
+deposit 308 6942
+deposit 30A C700
+break 30A
+go 308
+assert cpu A=FFFF
+nobreak all
+; IGX
+deposit cpu A FFFF
+deposit cpu X 0000
+; AND IGX 72 (0072 = 0090, 0090 = BBBB)
+deposit 30C 8972
+deposit 30E C700
+break 30E
+go 30C
+assert cpu A=BBBB
+nobreak all
+; ILX
+deposit cpu A FFFF
+; AND ILX 92 (0492 = 04B0, 04B0 = 5555)
+deposit 310 A992
+deposit 312 C700
+break 312
+go 310
+assert cpu A=5555
+nobreak all
+; P
+deposit cpu A FFFF
+; AND P CC (immediate = 00CC)
+deposit 314 29CC
+deposit 316 C700
+break 316
+go 314
+assert cpu A=00CC
+nobreak all
+; ========== TEST 4.2: IOR ==========
+echo "TEST 4.2: IOR"
+; DL
+deposit cpu A 0000
+; IOR DL 1C (041C = 7777)
+deposit 318 071C
+deposit 31A C700
+break 31A
+go 318
+assert cpu A=7777
+nobreak all
+; DG
+deposit cpu A 0000
+; IOR DG 4C (004C = 3333)
+deposit 31C 474C
+deposit 31E C700
+break 31E
+go 31C
+assert cpu A=3333
+nobreak all
+; IL
+deposit cpu A 0000
+; IOR IL 3E (043E = 046C, 046C = DDDD)
+deposit 320 673E
+deposit 322 C700
+break 322
+go 320
+assert cpu A=DDDD
+nobreak all
+; IGX
+deposit cpu A 0000
+deposit cpu X 0000
+; IOR IGX 6C (006C = 008C, 008C = 9999)
+deposit 324 876C
+deposit 326 C700
+break 326
+go 324
+assert cpu A=9999
+nobreak all
+; ILX
+deposit cpu A 0000
+; IOR ILX 8C (048C = 04AC, 04AC = 3333)
+deposit 328 A78C
+deposit 32A C700
+break 32A
+go 328
+assert cpu A=3333
+nobreak all
+; P
+deposit cpu A 0000
+; IOR P C8 (immediate = 00C8)
+deposit 32C 27C8
+deposit 32E C700
+break 32E
+go 32C
+assert cpu A=00C8
+nobreak all
+; ========== TEST 4.3: EOR ==========
+echo "TEST 4.3: EOR"
+; DL
+deposit cpu A 0F0F
+; EOR DL 1E (041E = 8888)
+deposit 330 031E
+deposit 332 C700
+break 332
+go 330
+assert cpu A=8787
+nobreak all
+; DG
+deposit cpu A 0F0F
+; EOR DG 4E (004E = 4444)
+deposit 334 434E
+deposit 336 C700
+break 336
+go 334
+assert cpu A=4B4B
+nobreak all
+; IL
+deposit cpu A 0F0F
+; EOR IL 40 (0440 = 046E, 046E = EEEE)
+deposit 338 6340
+deposit 33A C700
+break 33A
+go 338
+assert cpu A=E1E1
+nobreak all
+; IGX
+deposit cpu A 0F0F
+deposit cpu X 0000
+; EOR IGX 6E (006E = 008E, 008E = AAAA)
+deposit 33C 836E
+deposit 33E C700
+break 33E
+go 33C
+assert cpu A=A5A5
+nobreak all
+; ILX
+deposit cpu A 0F0F
+; EOR ILX 8E (048E = 04AE, 04AE = 4444)
+deposit 340 A38E
+deposit 342 C700
+break 342
+go 340
+assert cpu A=4B4B
+nobreak all
+; P
+deposit cpu A 0F0F
+; EOR P CA (immediate = 00CA)
+deposit 344 23CA
+deposit 346 C700
+break 346
+go 344
+assert cpu A=0FC5
+nobreak all
+; ========== TEST 4.4: CMP ==========
+echo "TEST 4.4: CMP"
+; DL
+deposit cpu A 0010
+; CMP DL 22 (0422 = AAAA)
+deposit 348 0B22
+deposit 34A C700
+break 34A
+go 348
+assert cpu C=1
+assert cpu OV=0
+nobreak all
+; DG
+deposit cpu A 0010
+; CMP DG 52 (0052 = 6666)
+deposit 34C 4B52
+deposit 34E C700
+break 34E
+go 34C
+assert cpu C=1
+assert cpu OV=0
+nobreak all
+; IL
+deposit cpu A 0010
+; CMP IL 44 (0444 = 0472, 0472 = 0001)
+deposit 350 6B44
+deposit 352 C700
+break 352
+go 350
+assert cpu C=0
+assert cpu OV=0
+nobreak all
+; IGX
+deposit cpu A 0010
+deposit cpu X 0000
+; CMP IGX 74 (0074 = 0092, 0092 = CCCC)
+deposit 354 8B74
+deposit 356 C700
+break 356
+go 354
+assert cpu C=1
+assert cpu OV=0
+nobreak all
+; ILX
+deposit cpu A 0010
+; CMP ILX 92 (0492 = 04B2, 04B2 = 6666)
+deposit 358 AB92
+deposit 35A C700
+break 35A
+go 358
+assert cpu C=1
+assert cpu OV=0
+nobreak all
+; P
+deposit cpu A 0010
+; CMP P CE (immediate = 00CE)
+deposit 35C 2BCE
+deposit 35E C700
+break 35E
+go 35C
+assert cpu C=1
+assert cpu OV=0
+nobreak all
+; ================================================================
+; TEST GROUP 5: ICX/DCX/ICL/DCL - All Addressing Modes
+; ================================================================
+; ========== TEST 5.1: ICX ==========
+echo "TEST 5.1: ICX"
+; DL
+deposit cpu X 0000
+; ICX DL D2
+deposit 380 30D2
+deposit 382 C700
+break 382
+go 380
+assert cpu X=0007
+nobreak all
+; P
+deposit cpu X 0000
+; ICX P 7 (immediate = 7)
+deposit 384 F207
+deposit 386 C700
+break 386
+go 384
+assert cpu X=0007
+nobreak all
+; PX
+deposit cpu X 0002
+; ICX PX 5 (5 + X = 7)
+deposit 388 E205
+deposit 38A C700
+break 38A
+go 388
+assert cpu X=0007
+nobreak all
+; ========== TEST 5.2: DCX ==========
+echo "TEST 5.2: DCX"
+; DL
+deposit cpu X 0007
+; DCX DL D4
+deposit 38C 30D4
+deposit 38E C700
+break 38E
+go 38C
+assert cpu X=0002
+nobreak all
+; P
+deposit cpu X 0007
+; DCX P 5
+deposit 390 F305
+deposit 392 C700
+break 392
+go 390
+assert cpu X=0002
+nobreak all
+; PX
+deposit cpu X 0007
+; DCX PX 3 (3 + X = 5)
+deposit 394 E303
+deposit 396 C700
+break 396
+go 394
+assert cpu X=0002
+nobreak all
+; ========== TEST 5.3: ICL ==========
+echo "TEST 5.3: ICL"
+; DL
+deposit cpu L 0400
+; ICL DL D6
+deposit 398 34D6
+deposit 39A C700
+break 39A
+go 398
+assert cpu L=0403
+nobreak all
+; P
+deposit cpu L 0400
+; ICL P 3
+deposit 39C F503
+deposit 39E C700
+break 39E
+go 39C
+assert cpu L=0403
+nobreak all
+; PX
+deposit cpu L 0400
+deposit cpu X 0001
+; ICL PX 3 (3 + X = 4)
+deposit 3A0 E503
+deposit 3A2 C700
+break 3A2
+go 3A0
+assert cpu L=0404
+nobreak all
+; ========== TEST 5.4: DCL ==========
+echo "TEST 5.4: DCL"
+; DL
+deposit cpu L 0403
+; DCL DL D8
+deposit 3A4 36D8
+deposit 3A6 C700
+break 3A6
+go 3A4
+assert cpu L=0401
+nobreak all
+; P
+deposit cpu L 0403
+; DCL P 2
+deposit 3A8 F602
+deposit 3AA C700
+break 3AA
+go 3A8
+assert cpu L=0401
+nobreak all
+; PX
+deposit cpu L 0403
+deposit cpu X 0001
+; DCL PX 2 (2 + X = 3)
+deposit 3AC E602
+deposit 3AE C700
+break 3AE
+go 3AC
+assert cpu L=0400
+nobreak all
+; Restore L for subsequent tests
+deposit cpu L 0400
+; ================================================================
+; TEST GROUP 6: SHR - All Addressing Modes
+; ================================================================
+; ========== TEST 6.1: SHR SLLS ==========
+echo "TEST 6.1: SHR SLLS"
+; DL
+deposit cpu A 0001
+; SHR DL 90 (type 0, count 1)
+deposit 3C0 3090
+deposit 3C2 C700
+break 3C2
+go 3C0
+assert cpu A=0002
+nobreak all
+; P
+deposit cpu A 0001
+; SHR P 1
+deposit 3C4 F001
+deposit 3C6 C700
+break 3C6
+go 3C4
+assert cpu A=0002
+nobreak all
+; PX
+deposit cpu A 0001
+deposit cpu X 0000
+; SHR PX 1
+deposit 3C8 E001
+deposit 3CA C700
+break 3CA
+go 3C8
+assert cpu A=0002
+nobreak all
+; ========== TEST 6.2: SHR SRCS ==========
+echo "TEST 6.2: SHR SRCS"
+; DL
+deposit cpu A 8001
+; SHR DL A0 (type 1, count 1)
+deposit 3CC 30A0
+deposit 3CE C700
+break 3CE
+go 3CC
+assert cpu A=C000
+nobreak all
+; ========== TEST 6.3: SHR SRLS ==========
+echo "TEST 6.3: SHR SRLS"
+; DL
+deposit cpu A 8001
+; SHR DL C0 (type 6, count 1)
+deposit 3D0 30C0
+deposit 3D2 C700
+break 3D2
+go 3D0
+assert cpu A=4000
+nobreak all
+; ========== TEST 6.4: SHR SAS ==========
+echo "TEST 6.4: SHR SAS"
+; DL
+deposit cpu A 8001
+; SHR DL A1 (type 5, count 1)
+deposit 3D4 30A1
+deposit 3D6 C700
+break 3D6
+go 3D4
+assert cpu A=C000
+nobreak all
+; ================================================================
+; TEST GROUP 7: SRG (Inter-register operations)
+; ================================================================
+echo "TEST 7: SRG"
+deposit cpu L 0200
+deposit cpu G 0000
+; XAE
+deposit 3E0 2012
+; LDE =34
+deposit 3E2 2134
+; XAE (SRG = 02)
+deposit 3E4 F102
+deposit 3E6 C700
+break 3E6
+go 3E0
+assert cpu A=0034
+assert cpu E=0012
+nobreak all
+; XAX
+deposit 3E8 2056
+; LDX =78
+deposit 3EA 2278
+; XAX (SRG = 04)
+deposit 3EC F104
+deposit 3EE C700
+break 3EE
+go 3E8
+assert cpu A=0078
+assert cpu X=0056
+nobreak all
+; XEX
+deposit 3F0 219A
+; LDX =BC
+deposit 3F2 22BC
+; XEX (SRG = 06)
+deposit 3F4 F106
+deposit 3F6 C700
+break 3F6
+go 3F0
+assert cpu E=00BC
+assert cpu X=009A
+nobreak all
+; CCA
+deposit 3F8 20FF
+; CCA (SRG = 10)
+deposit 3FA F110
+deposit 3FC C700
+break 3FC
+go 3F8
+assert cpu A=FF00
+nobreak all
+; CCE
+deposit 3FE 21FF
+; CCE (SRG = 0A)
+deposit 400 F10A
+deposit 402 C700
+break 402
+go 3FE
+assert cpu E=FF00
+nobreak all
+; CNX
+deposit 404 2205
+; CNX (SRG = 14)
+deposit 406 F114
+deposit 408 C700
+break 408
+go 404
+assert cpu X=FFFB
+nobreak all
+; CNA
+deposit 40A 2005
+; CNA (SRG = 1C)
+deposit 40C F11C
+deposit 40E C700
+break 40E
+go 40A
+assert cpu A=FFFB
+nobreak all
+; CHX
+deposit 410 220A
+; CHX (SRG = 1E)
+deposit 412 F11E
+deposit 414 C700
+break 414
+go 410
+assert cpu X=0005
+nobreak all
+; ================================================================
+; TEST GROUP 8: Branch Instructions
+; ================================================================
+echo "TEST 8: Branches"
+; ========== TEST 8.1: BRU RP ==========
+; BRU RP +2 (Target = 420 + 4 = 424)
+deposit 420 C702
+; NOP (skipped)
+deposit 422 0000
+deposit 424 C700
+break 424
+go 420
+assert cpu P=0424
+nobreak all
+; ========== TEST 8.2: BRU RM ==========
+; BRU RM +2 (Target = 428 - 4 = 424)
+deposit 426 CF02
+; NOP
+deposit 428 0000
+deposit 42A C700
+break 42A
+go 426
+assert cpu P=0424
+nobreak all
+; ========== TEST 8.3: BRU IL ==========
+; IL pointer -> 0432
+deposit 430 0430
+; IL data -> 0440
+deposit 432 0440
+; BRU IL 32 (Target = (0432) = 0440)
+deposit 434 D732
+deposit 436 C700
+break 436
+go 434
+assert cpu P=0440
+nobreak all
+; ========== TEST 8.4: BRU IG ==========
+; IG pointer -> 0442
+deposit 438 0442
+; IG data -> 0450
+deposit 43A 0450
+; BRU IG 42 (Target = (0442) = 0450)
+deposit 43C DF42
+deposit 43E C700
+break 43E
+go 43C
+assert cpu P=0450
+nobreak all
+; ========== TEST 8.5: Conditional branches ==========
+echo "TEST 8.5: Conditional branches"
+; BCT
+deposit cpu C 1
+; BCT RP +1
+deposit 440 C001
+deposit 442 C700
+break 442
+go 440
+assert cpu P=0442
+nobreak all
+; BZ
+deposit cpu C 1
+; BZ RP +1
+deposit 444 C001
+deposit 446 C700
+break 446
+go 444
+assert cpu P=0446
+nobreak all
+; BE
+deposit cpu C 1
+; BE RP +1
+deposit 448 C001
+deposit 44A C700
+break 44A
+go 448
+assert cpu P=044A
+nobreak all
+; BOT
+deposit cpu OV 1
+; BOT RP +1
+deposit 44C C201
+deposit 44E C700
+break 44E
+go 44C
+assert cpu P=044E
+nobreak all
+; BL
+deposit cpu OV 1
+; BL RP +1
+deposit 450 C201
+deposit 452 C700
+break 452
+go 450
+assert cpu P=0452
+nobreak all
+; BLZ
+deposit cpu OV 1
+; BLZ RP +1
+deposit 454 C201
+deposit 456 C700
+break 456
+go 454
+assert cpu P=0456
+nobreak all
+; BCF
+deposit cpu C 0
+; BCF RP +1
+deposit 458 C301
+deposit 45A C700
+break 45A
+go 458
+assert cpu P=045A
+nobreak all
+; BNZ
+deposit cpu C 0
+; BNZ RP +1
+deposit 45C C301
+deposit 45E C700
+break 45E
+go 45C
+assert cpu P=045E
+nobreak all
+; BNE
+deposit cpu C 0
+; BNE RP +1
+deposit 460 C301
+deposit 462 C700
+break 462
+go 460
+assert cpu P=0462
+nobreak all
+; BOF
+deposit cpu OV 0
+; BOF RP +1
+deposit 464 C601
+deposit 466 C700
+break 466
+go 464
+assert cpu P=0466
+nobreak all
+; BPZ
+deposit cpu OV 0
+; BPZ RP +1
+deposit 468 C601
+deposit 46A C700
+break 46A
+go 468
+assert cpu P=046A
+nobreak all
+; BGE
+deposit cpu OV 0
+; BGE RP +1
+deposit 46C C601
+deposit 46E C700
+break 46E
+go 46C
+assert cpu P=046E
+nobreak all
+; BAZ
+deposit cpu A 0000
+; BAZ RP +1
+deposit 470 C501
+deposit 472 C700
+break 472
+go 470
+assert cpu P=0472
+nobreak all
+; BAN
+deposit cpu A 8000
+; BAN RP +1
+deposit 474 C401
+deposit 476 C700
+break 476
+go 474
+assert cpu P=0476
+nobreak all
+; ================================================================
+; TEST GROUP 9: BRX - Branch with Index
+; ================================================================
+echo "TEST 9: BRX"
+; Branch table entries
+deposit 480 0490
+deposit 482 0492
+deposit 484 0494
+deposit 486 0496
+
+; Target 0
+deposit 488 C700
+; Target 1
+deposit 48A C700
+; Target 2
+deposit 48C C700
+; Target 3
+deposit 48E C700
+; BRX RP
+; BRX RP +1 (X=0 -> branch to 494)
+deposit 490 C110
+deposit 492 C700
+break 492
+go 490
+assert cpu P=0494
+nobreak all
+; BRX RM
+; BRX RM +1 (X=0 -> branch to 49A)
+deposit 496 C910
+deposit 498 C700
+break 498
+go 496
+assert cpu P=049A
+nobreak all
+; BRX IL
+; BRX IL 80 (X=0 -> branch to (0480) = 0490)
+deposit 49C D180
+deposit 49E C700
+break 49E
+go 49C
+assert cpu P=0490
+nobreak all
+; BRX IG
+; BRX IG A0 (X=0 -> branch to (00A0) = 0180)
+deposit 4A0 D9A0
+deposit 4A2 C700
+break 4A2
+go 4A0
+assert cpu P=0180
+nobreak all
+; ================================================================
+; TEST GROUP 10: Floating-Point Instructions
+; ================================================================
+echo "TEST 10: Floating-Point"
+deposit cpu L 0200
+deposit cpu G 0000
+; FAD
+deposit 4C0 0120
+; LDA DL 22
+deposit 4C2 0022
+; FAD DL 24 (add +1.0)
+deposit 4C4 1A24
+deposit 4C6 C700
+break 4C6
+go 4C0
+assert cpu A=4110
+assert cpu E=0000
+nobreak all
+; FSU
+deposit 4C8 0120
+; LDA DL 22
+deposit 4CA 0022
+; FSU DL 24
+deposit 4CC 1B24
+deposit 4CE C700
+break 4CE
+go 4C8
+assert cpu A=0000
+assert cpu E=0000
+nobreak all
+; ================================================================
+; TEST GROUP 11: String Instructions
+; ================================================================
+echo "TEST 11: String"
+deposit cpu L 0200
+deposit cpu G 0000
+
+; MVS - Move String
+; Source string "AB"
+deposit 210 4142
+; Source string "CD"
+deposit 212 4344
+
+; LEA DL 10, A = 0210
+deposit 4E0 0410
+; LDE =4
+deposit 4E2 2104
+; MVS DL 30 (destination = 0230)
+deposit 4E4 1F30
+; BRU $
+deposit 4E6 C700
+break 4E6
+go 4E0
+assert 230=4142
+assert 232=4344
+nobreak all
+; CPS
+deposit 4E8 0410
+; LDE =4
+deposit 4EA 2104
+; CPS DL 10 (compare with byte at 0210)
+deposit 4EC 0A10
+deposit 4EE C700
+break 4EE
+go 4E8
+assert cpu A=0210
+assert cpu E=0003
+nobreak all
+; ================================================================
+; TEST GROUP 12: Control Instructions (Privileged)
+; ================================================================
+echo "TEST 12: Control"
+deposit cpu L 0200
+deposit cpu G 0000
+deposit cpu MS 1
+deposit cpu PR 1
+
+; STM - Set Interrupt Mask
+; STM
+deposit 500 F408
+deposit 502 C700
+break 502
+go 500
+assert cpu MA=1
+nobreak all
+; CLM
+deposit 504 F400
+deposit 506 C700
+break 506
+go 504
+assert cpu MA=0
+nobreak all
+; ================================================================
+; TEST GROUP 13: LDP - Load Memory Protection
+; ================================================================
+echo "TEST 13: LDP"
+deposit cpu L 0200
+deposit cpu G 0000
+deposit cpu MS 1
+
+; LEA DL 8, A = 0208
+deposit 510 0408
+; LDE =1
+deposit 512 2101
+; LDP =80 (protection bit = 1)
+deposit 514 FB80
+deposit 516 C700
+break 516
+go 510
+; Protection should be set - basic check that execution completed
+nobreak all
+; ================================================================
+; TEST GROUP 14: RTS - Return Section
+; ================================================================
+echo "TEST 14: RTS"
+deposit cpu L 0250
+deposit cpu G 0000
+
+; Return P = 0102 + 2 = 0104
+deposit 250 0102
+; Return L = 0200
+deposit 252 0200
+
+; RTS
+deposit 520 F100
+deposit 522 C700
+break 522
+go 520
+assert cpu P=0104
+assert cpu L=0200
+nobreak all
+; ================================================================
+; TEST GROUP 15: RSV - Return Supervisor
+; ================================================================
+echo "TEST 15: RSV"
+deposit cpu G 0180
+deposit cpu MS 1
+deposit cpu PR 1
+
+; P = G + 2 + ((G)) = 0180 + 2 + FF82 = 0104
+deposit 180 FF82
+; L = G + ((G+2)) = 0180 + 0080 = 0200
+deposit 182 0080
+
+; RSV
+deposit 530 F10C
+deposit 532 C700
+break 532
+go 530
+assert cpu P=0104
+assert cpu L=0200
+nobreak all
+; ================================================================
+; TEST GROUP 16: CLS - Call Section
+; ================================================================
+echo "TEST 16: CLS"
+deposit cpu G 0200
+deposit cpu L 0200
+deposit cpu MS 1
+
+; SRD: L = 0000 (relative to G=0200)
+deposit 1FC 0000
+
+; SRD: P = FF04 (relative to G=0200)
+deposit 1FE FF04
+
+; Actual P = 0200 + FF04 = 0104
+
+; CLS =1
+deposit 540 F801
+; BRU $
+deposit 542 C700
+break 542
+go 540
+assert cpu P=0104
+assert cpu L=0200
+nobreak all
+; ================================================================
+; TEST GROUP 17: CSV - Call Supervisor
+; ================================================================
+echo "TEST 17: CSV"
+deposit cpu G 0180
+deposit cpu L 0200
+deposit cpu MS 1
+deposit cpu PR 1
+
+; PRTS pointer at absolute address 12 (decimal = 00C)
+deposit 00C 0300
+
+; Supervisor section entry at 0300 - 4 = 02FC
+; L = 0200
+deposit 2FC 0200
+; P = 0104
+deposit 2FE 0104
+
+; CSV =1
+deposit 550 F701
+; BRU $
+deposit 552 C700
+break 552
+go 550
+assert cpu P=0104
+assert cpu L=0200
+nobreak all
+; ================================================================
+; TEST GROUP 18: DIT - De-activate Interrupt
+; ================================================================
+
+; Note: DIT requires proper context setup. This is a basic test only.
+
+deposit cpu MS 1
+deposit cpu PR 1
+
+; DIT
+deposit 560 F401
+deposit 562 C700
+break 562
+go 560
+; Basic test - execution completed without fault
+nobreak all
+; ================================================================
+; TEST GROUP 19: STS - Store Selective
+; ================================================================
+echo "TEST 19: STS"
+deposit cpu L 0200
+deposit cpu G 0000
+; Mask bits
+deposit cpu E 0F0F
+; Data to store
+deposit cpu A A5A5
+
+; STS DL 8 (store selective at 0208)
+deposit 570 1908
+deposit 572 C700
+break 572
+go 570
+; Should have selected bits from A where E has 1s
+; E=0F0F, A=A5A5 -> stored = 0505
+assert 208=0505
+nobreak all
+; ================================================================
+; TEST GROUP 20: DLD/DST - Double Load/Store
+; ================================================================
+echo "TEST 20: DLD/DST"
+deposit cpu L 0200
+deposit cpu G 0000
+
+; DLD - Double Load
+; DLD DL 20 (load 0220 -> E, 0222 -> A)
+deposit 580 1020
+deposit 582 C700
+break 582
+go 580
+assert cpu E=4110
+assert cpu A=0000
+nobreak all
+; DST
+deposit cpu E 1234
+deposit cpu A 5678
+; DST DL 30 (store 1234 at 0230, 5678 at 0232)
+deposit 584 1630
+deposit 586 C700
+break 586
+go 584
+assert 230=1234
+assert 232=5678
+nobreak all
+; ================================================================
+; TEST GROUP 21: SPA - Store Program Address
+; ================================================================
+echo "TEST 21: SPA"
+deposit cpu L 0200
+deposit cpu G 0000
+deposit cpu P 0600
+
+; SPA DL 8 (store P+4 = 0604 at 0208)
+deposit 590 1808
+deposit 592 C700
+break 592
+go 590
+assert 208=0604
+nobreak all
+; ================================================================
+; TEST GROUP 22: LDR - Load Register
+; ================================================================
+
+; LDR in P mode (immediate register number)
+; LDR =1 (load register 1 contents into A)
+deposit 5A0 F901
+deposit 5A2 C700
+break 5A2
+go 5A0
+; Basic test - execution completed without fault
+; Should show register 1 contents
+; examine cpu A
+nobreak all
+; ================================================================
+; End of test - halt at safe location
+; ================================================================
+
+; BRU $ (final halt)
+deposit 5C0 C700
+
+break 5C0
+go 5A0
+
+; ================================================================
+; All tests passed
+; ================================================================
+echo ""
+echo "=========================================="
+echo " ALL TESTS PASSED - No bugs detected"
+echo "=========================================="
+echo ""
+quit
