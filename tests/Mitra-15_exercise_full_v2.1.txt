@@ -2089,11 +2089,18 @@ deposit 2FC 0200
 ; P = 0104
 deposit 2FE 0104
 
+; RSV 
+deposit 104 F10C
+; BRU $
+; deposit 106 C700
+; break 106
+
 ; CSV =1
 deposit 550 F701
 ; BRU $
 deposit 552 C700
 break 552
+deposit 00E 0002
 go 550
 assert cpu P=0104
 assert cpu L=0200
