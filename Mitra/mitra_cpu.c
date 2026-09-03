@@ -544,11 +544,11 @@ return SCPE_OK;
 /* Memory deposit */
 t_stat cpu_dep(t_value val, t_addr addr, UNIT * uptr, int32 sw) {
     uint32 pa = addr & 0x7FFF;
-    sim_printf("\nDeposit: %#010x, to: %#010x", val & DMASK, pa);
+    sim_printf("\nDeposit: %#010x to: %#010x", val & DMASK, pa);
     if (pa >= MAX_MEM_WORDS)
         return SCPE_NXM;
     M[pa] = val & DMASK;
-    sim_printf("\nMemory now contains: %#010x\n", M[pa]);
+//    sim_printf("\nMemory now contains: %#010x\n", M[pa]);
     return SCPE_OK;
 }
 

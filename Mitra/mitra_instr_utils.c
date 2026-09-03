@@ -22,7 +22,9 @@ typedef enum {
     SHIFT_SRCD = 7
 } shift_type_t;
 
-/* SRG operation codes (manual page 7-55) */
+/* SRG operation codes (manual page 7-55) 
+* This is the value of disp shifted one bit to the right
+*/
 typedef enum {
     SRG_RTS = 0x00, /* Return Section */
     SRG_XAE = 0x01, /* Exchange A and E */
@@ -874,6 +876,8 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
         case 0xF1: {
             switch (type) {
                 case SRG_RTS:
+                sim_printf("\nplop");
+                exit(0);
                 /*
                 * RTS (there is no address mode)
                 * The RTS placed in a section called by a CLS provides the return to the calling section by restoring in 
@@ -925,6 +929,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                     if (mode != 1) 
                     	return MM_PRVINS;
                     
+                        // ((G) + 4) -> Indicators
                         uint16 saved_flags = read_word(cpu_state.reg_G + 4);
                         cpu_state.C = (saved_flags >> 14) & 1;
                         cpu_state.OV = (saved_flags >> 13) & 1;
@@ -1466,8 +1471,8 @@ void CSV_instr(t_addr target_address) {
 	    * 1 -> PR
 	    * 1 -> MS
 	    *
-	    * ((12) - 4 target_address) -> (L)
-	    * ((12) - 4 target_address + 2) -> (P)
+	    * ((12) - 4 * target_address) -> (L)
+	    * ((12) - 4 * target_address + 2) -> (P)
 	    *             
 	    * &C = adresse absolue 12 (0x0C) : pointeur vers la PRTS
 	    * &E = adresse absolue 14 (0x0E) : nombre max de sections superviseurs
