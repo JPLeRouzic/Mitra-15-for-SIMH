@@ -33,57 +33,23 @@ typedef unsigned short int t_stat;
  * look like two plausible EBCDIC characters?") is ambiguous by itself and
  * cannot reliably tell the two apart word-by-word.
  *
- * The strategy implemented below (as sketched by the user) is two-pass:
+ * The strategy implemented below is two-pass:
  *
- *   Pass 1 (text candidate detection): scan the loaded image and mark
- *   maximal *word-aligned* runs of words whose both bytes decode to a
- *   restrictive, curated set of printable EBCDIC characters (letters,
- *   digits, space, and common monitor punctuation) as "text candidates",
- *   provided the run is at least MIN_TEXT_WORDS words long. Word alignment
- *   matters because Mitra-15 memory is word-addressable and the CPU always
- *   fetches whole words as instructions; a text run that isn't word-aligned
- *   internally consistent would desynchronize any subsequent code decode.
- *
- *   Pass 2 (control-flow assertion): starting from one or more known entry
- *   points, do a worklist-based control-flow trace over words NOT (yet)
- *   excluded as text, following (a) the deterministic "PC advances to the
- *   next word" fallthrough edge for every non-terminal instruction, and
- *   (b) statically resolvable branch targets (see resolve_branch_target()
- *   below for the significant caveat on what "resolvable" means here).
- *   Whenever this trace lands on a word that Pass 1 flagged as a text
- *   candidate, that word (and, transitively, everything reachable from it)
- *   is demoted back to code and decoding continues normally from there.
- *
- *   Entry point special case: because the trace is seeded directly from
- *   the caller-supplied entry point address(es) *before* Pass 1's
- *   candidate flag is consulted, an entry point that Pass 1 mistakenly
- *   flagged as text is transparently corrected the moment Pass 2 visits it
- *   -- no separate special-casing code is needed, but callers MUST make
- *   sure the real entry point(s) are supplied (see -e / --entry), since a
- *   missing entry point cannot be discovered this way.
+ * It's not easy as EBCDIC valid characters are also valid Mitra-15 instructions.
+As there is no separate areas by assembler design between code and data, I guess a possible mechanism would be to have two passes:
+ * - the first one tries to guess what areas are EBCDIC strings,
+ * - a second pass will assert if there are branch/jump/return or simply if PC for next instruction enters in one of the string areas detected in the first pass. If it is the case then the area consists of code, not string.
+ * A special case is the entry point in the file, this two passes strategy might not work well here if we consider it might begin with a string, so this is a special case.
+ * An open question is how large is the windows for detection of EBCDIC strings in the first pass, we can't assume a too small string because we will find many such strings, and we have the reverse problem with large strings.
+ * In the second pass: Detecting if PC for next instruction enters in one of the string areas, works only if we are sure we come from a code area, otherwise as nearly every byte is a valid instruction, applying blindly this strategy would mean we detect nearly no strings.
+ * Indeed we still don't know what is the code entry point in this dump, so there are lot of ambiguities to live with.
  *
  * Caveats (please read before trusting the output):
- *   - Pass 2's branch-target resolution is best-effort and ONLY covers
- *     the RP ("relative to P", i.e. PC-relative) addressing form of
- *     unconditional/conditional branches, using an assumed 8-bit
- *     two's-complement word displacement relative to the address of the
- *     following instruction. This is a common minicomputer convention but
- *     has NOT been verified against the Mitra-15 microprogramming manual;
- *     please check it against Section... covering RP addressing and
- *     adjust resolve_branch_target() if the sign/scale differ. Indirect
- *     forms (RM, IL, IGX, ILX) depend on runtime register contents and are
- *     deliberately left unresolved -- fallthrough tracing is what recovers
- *     those cases.
- *   - This is a heuristic, not a proof: on real code that has a long
- *     literal run of alphanumeric-looking constants and is never reached
- *     by the traced control flow, it can still misclassify. Reachability
- *     from the entry points you supply is only as complete as those entry
- *     points are.
+ *   - This is a heuristic, not a safe disassembler: Check the parameters and try several values.
  * ======================================================================== */
 
 /* CP037 (EBCDIC) -> ASCII code point, 0 where there is no printable ASCII
- * equivalent (control codes, etc). Generated from the standard cp037
- * mapping. */
+ * equivalent (control codes, etc). */
 static const unsigned char ebcdic_to_ascii[256] = {
       0,   1,   2,   3,   0,   9,   0, 127,   0,   0,   0,  11,  12,  13,  14,  15,
      16,  17,  18,  19,   0,   0,   8,   0,  24,  25,   0,   0,  28,  29,  30,  31,
@@ -103,12 +69,9 @@ static const unsigned char ebcdic_to_ascii[256] = {
      48,  49,  50,  51,  52,  53,  54,  55,  56,  57,   0,   0,   0,   0,   0,   0,
 };
 
-/* Curated set of punctuation EBCDIC bytes accepted as part of a "text"
- * byte, on top of letters/digits/space. Deliberately narrow: the goal is
- * to keep Pass 1's per-byte test tight enough that long runs of code
- * rarely satisfy it by coincidence, since letters/digits/space alone are
- * already common enough in real instruction words. Extend if genuine
- * monitor strings use additional punctuation not listed here. */
+/* Set of punctuation EBCDIC bytes accepted as part of a "text". 
+ * Deliberately narrow.
+ * Extend if genuine strings use additional punctuation not listed here. */
 static bool is_ebcdic_punct_ascii(unsigned char a) {
     switch (a) {
         case ' ': case '.': case ',': case ':': case ';': case '\'': case '"':
@@ -136,44 +99,18 @@ static bool is_ebcdic_text_byte(uint8_t b) {
 static int g_min_text_words = 2; /* 2 words = 4 EBCDIC characters, default */
 static bool g_follow_branches = true; /* best-effort RP branch resolution */
 
-/* IMPORTANT, learned empirically on real monitor code: because almost every
- * byte pattern is *syntactically* a valid Mitra-15 instruction (as noted by
- * the user), a "PC simply advances to the next word" fallthrough edge
- * essentially never hits a dead end -- it will happily walk straight
- * through a genuine EBCDIC message table too, since the table's bytes also
- * parse as "valid-looking" instructions almost all the time. So trusting
- * fallthrough alone as proof of code, with no cap, floods through real
- * strings just as easily as it does through real code.
- *
- * Resolved branch/jump targets are a much stronger signal: nothing walks
- * "accidentally" to a specific computed address the way it accidentally
- * falls through to address+1. So by default, ONLY a resolved branch/jump
- * edge (or an explicit --entry point) demotes a Pass-1 text candidate back
- * to code. Fallthrough edges are still traced (so reachability can keep
- * discovering further branches deeper in real code), but do not by
- * themselves overturn a text candidate unless --fallthrough-demotes is
- * passed. Recommended: start strict (the default), and only relax this if
- * you have evidence -- e.g. from the manual, or from -e-supplied entry
- * points known to be real code -- that a given string-looking area is
- * genuinely misclassified. */
+/* 
+* By default, ONLY a resolved branch/jump or an explicit entry point demotes a Pass-1 text candidate back to code.  * Start strict, and only relax this if you have evidence that a given string-looking area is genuinely misclassified. 
+*/
 static bool g_fallthrough_demotes = false;
 
-/* When a text candidate IS trusted enough to be reachable via fallthrough
- * (see g_fallthrough_demotes), only trust it within this many consecutive
- * pure-fallthrough hops of the nearest ENTRY or resolved-BRANCH edge. This
- * matters right at a confirmed source: the word immediately after an entry
- * point (or a branch target) is very likely still code, so it's cheap to
- * trust one hop of fallthrough there -- but an unbounded chain of
- * fallthrough hops is exactly what flooded through the real message table
- * in testing (a long, branch-free run of ordinary instructions with no
- * dead end until it wanders into the data). Bounding the window keeps the
- * short "confirm the rest of this instruction's own body" case working
- * without reopening that flood. Tune with --fallthrough-trust-hops. */
+/* When a text candidate is trusted enough to be reachable, only trust it within this many consecutive
+ * ENTRY or resolved-BRANCH. The word immediately after an entry point (or a branch target) is very likely still code, but we should not trust a long, branch-free run of ordinary instructions with no
+ * dead end because it might wander into the data). 
+ * Tune with --fallthrough-trust-hops. 
+ */
 static int g_fallthrough_trust_hops = 1;
 
-/* Per-word memory + classification state, indexed by WORD address
- * (0 .. MAX_MEM_WORDS-1), matching the Mitra-15's word-addressable memory
- * (S register: 15 usable bits => exactly MAX_MEM_WORDS addressable words). */
 static uint16_t mem_word[MAX_MEM_WORDS];
 static bool     mem_loaded[MAX_MEM_WORDS];   /* word was present in the input file */
 static bool     mem_is_text[MAX_MEM_WORDS];  /* Pass 1 candidate, possibly demoted by Pass 2 */
@@ -318,7 +255,6 @@ static const char *mode_names[] = {
 /* ========== Disassembly Functions ========== */
 
 /* fprint_sym: Print symbolic output (disassemble instruction) */
-// t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw) {
 bool disassemble_inst(FILE* of, uint16_t val) {
     uint16 inst;
     int mode, opcode;
@@ -331,8 +267,8 @@ bool disassemble_inst(FILE* of, uint16_t val) {
     mode = (inst >> 13) & 0x07;
     opcode = (inst >> 8) & 0x1F;
     disp = inst & 0x00FF;
-    /* What actually gets printed after the mnemonic/mode. Normally same as
-     * disp, but the SRG/STM-group/SHR/SHC families below consume disp as a
+    /* "disp" is what comes usually after the mnemonic/mode. 
+     * But the SRG/STM-group/SHR/SHC families below consume disp as a
      * sub-opcode selector (and, for SHR/SHC, a shift count) rather than a
      * real address displacement, so they override this. */
     uint16 print_disp = disp;
@@ -475,11 +411,9 @@ bool disassemble_inst(FILE* of, uint16_t val) {
         case 0xD000:
             /*
             Branch instructions. opcode & 0x07 recovers BCT..BRU regardless
-            of addressing form (confirmed against the manual's branch pages).
-            The addressing-mode label, however, was wrong: mode_names[mode]
-            can't distinguish RP/RM (only differ in bit 11) nor 0xC/0xD
-            (only differ in bit 12, outside the 3-bit "mode" field), so it
-            always printed "RP". Fixed using the actual distinguishing bits.
+            of addressing form.
+            But addressing-mode label, mode_names[mode] can't distinguish RP/RM (only differ in bit 11) nor 0xC/0xD
+            (only differ in bit 12, outside the 3-bit "mode" field). Fixed using the actual distinguishing bits.
             */
             switch (opcode & 0x07) {
                 case 0: opname = "BCT"; break;
@@ -515,10 +449,10 @@ bool disassemble_inst(FILE* of, uint16_t val) {
 
 /* ========== Pass 1: text-candidate detection ========== */
 
-/* Scan [lo, hi) and flag maximal word-aligned runs of >= g_min_text_words
+/* Scan and flag maximal word-aligned runs of >= g_min_text_words
  * words, where both bytes of every word in the run look like EBCDIC text,
- * as text candidates. This is purely local/lexical -- Pass 2 is what
- * asserts or overturns these candidates using control flow. */
+ * as text candidates. 
+ * Pass 2 is what asserts or overturns these candidates data areas using control flow. */
 static void find_text_candidates(uint16_t lo, uint32_t hi) {
     uint32_t i = lo;
     while (i < hi) {
@@ -547,8 +481,9 @@ static void find_text_candidates(uint16_t lo, uint32_t hi) {
 /* ========== Pass 2: control-flow assertion ========== */
 
 /* Best-effort branch target resolution. Only the RP (PC-relative) form is
- * resolved -- see the caveats block near the top of this file. Returns
- * true and fills *target (a word index) if resolution succeeded. */
+ * resolved, not jumps returns or calls. 
+ * Returns true and fills *target (a word index) if resolution succeeded. 
+ */
 static bool resolve_branch_target(uint32_t widx, uint16_t inst, uint16_t *target) {
     if (!g_follow_branches) return false;
 
@@ -568,21 +503,14 @@ static bool resolve_branch_target(uint32_t widx, uint16_t inst, uint16_t *target
 
 typedef enum { EDGE_ENTRY, EDGE_BRANCH, EDGE_FALLTHROUGH } EdgeKind;
 
-/* Determine the set of statically-known control-flow successors of the
- * instruction at word index `widx` with raw value `inst`. Writes up to 2
- * word indices into out[] and their EdgeKind into kind[], and the count
- * into *n. An empty successor set means either a terminal instruction
- * (e.g. RTS) or an encoding this function doesn't recognize as valid -- in
- * both cases flow tracing stops here rather than guessing forward into
- * possibly-unrelated data. */
+/* Predict next instruction of the instruction at word index `widx` with raw value `inst`. 
+ * Writes up to 2 * word indices into out[] and the next instruction into kind[], and the count
+ * into *n. 
+ * An empty successor set means either a terminal instruction (e.g. RTS) or a word encoding this function doesn't recognize as valid. 
+ */
 static void get_successors(uint32_t widx, uint16_t inst, uint16_t out[2], EdgeKind kind[2],
                             int self_hops, int hops_out[2], int *n) {
     *n = 0;
-    /* self_hops is how many pure-fallthrough hops `widx` itself is from the
-     * nearest ENTRY/BRANCH source. A BRANCH successor always resets to 0
-     * (a freshly-resolved jump target is a strong source in its own
-     * right); a FALLTHROUGH successor is self_hops + 1. */
-
     uint16_t hexcode = inst & 0xF000;
     uint16_t opcode  = (inst >> 8) & 0x1F;
 
@@ -674,15 +602,17 @@ static void report_demotion(uint32_t widx, EdgeKind how) {
         "(reached via %s)\n", (unsigned)(widx * 2), names[how]);
 }
 
-/* Runs the worklist-based reachability trace from the configured entry
- * points, demoting any Pass-1 text candidate it actually reaches back to
- * code. See the caveats block near the top of the file.
+/* 
+ * If there is a branch to a word, then the target area consists of code, not string.
+ * To demote any Pass-1 text candidate we runs the worklist-based reachability trace from the configured entry
+ * points, 
  *
  * By default only EDGE_ENTRY and EDGE_BRANCH edges are trusted enough to
  * demote a text candidate; EDGE_FALLTHROUGH edges are still traced (so
  * reachability keeps discovering further branches) but do not by
  * themselves overturn a text candidate unless g_fallthrough_demotes is
- * set. See the comment on g_fallthrough_demotes for why. */
+ * set.
+ */
 static void flow_trace(bool verbose) {
     memset(mem_visited, 0, sizeof(mem_visited));
     memset(mem_is_code, 0, sizeof(mem_is_code));
@@ -701,20 +631,17 @@ static void flow_trace(bool verbose) {
                          (how == EDGE_FALLTHROUGH &&
                           (g_fallthrough_demotes || hops <= g_fallthrough_trust_hops));
             if (trust) {
-                /* Control flow actually reaches into what Pass 1 thought was
-                 * a string -- it's code after all. This also transparently
-                 * handles the "entry point begins with what looks like a
-                 * string" special case: the entry point is pushed above
+                /* Pass 1 thought this word was a string but it's code after all. 
+                 * This also handles the entry point problem: the entry point is pushed above
                  * unconditionally, before mem_is_text[] is ever consulted. */
                 mem_is_text[w] = false;
                 if (verbose) report_demotion(w, how);
             } else {
-                /* Don't trust a distant, unbroken fallthrough chain to
-                 * overturn a text candidate on its own (see
-                 * g_fallthrough_trust_hops) -- but also don't keep tracing
-                 * INTO the candidate as if it were code, since we've just
-                 * concluded it probably isn't. Stop this path here; the
-                 * text region will simply render as .EBCDIC and any real
+                /* Don't trust a distant, unbroken fallthrough chain to overturn a text candidate on its own 
+                 * (see g_fallthrough_trust_hops) 
+                 * but also don't keep tracing into the candidate as if it were code, since we've just
+                 * concluded it probably isn't. 
+		 * The text region will simply render as .EBCDIC and any real
                  * code after it needs to be reached some other way (a
                  * resolved branch, or its own -e entry point). */
                 continue;
@@ -851,17 +778,14 @@ int parse_hex_line(const char* line, FILE* out) {
         if (strlen(token) == 2 && isxdigit((unsigned char)token[0]) && isxdigit((unsigned char)token[1])) {
             bytes[byte_count++] = (uint8_t)strtol(token, NULL, 16);
         } else if (strlen(token) == 2) {
-            // BUGFIX: previously this case was silently ignored (the token
-            // was just dropped without incrementing byte_count), which
-            // desynchronized every following byte's position - all
-            // addresses and instruction words after the bad token would
-            // shift by one, with no indication anything had gone wrong.
             // A 2-character token that fails isxdigit() is almost always a
             // transcription typo in the source hexdump (e.g. letter 'O'
             // instead of digit '0', or 'l'/'I' instead of '1') rather than
-            // something to legitimately skip. Substitute a placeholder
-            // byte to keep alignment intact, but make the problem loud and
-            // specific so it can't be missed or silently trusted.
+            // something to legitimately skip.             
+            // All addresses and instruction words after that bad token would
+            // incorrectly shift the flow by one, with no indication anything had gone wrong.
+            // So we substitute a placeholder byte to keep alignment intact, but make the problem loud
+            // so it can't be missed or silently trusted.
             fprintf(stderr,
                 "WARNING: malformed byte token '%s' at approx. address "
                 "%06X (byte #%d on this line) - not valid hex, substituting "
