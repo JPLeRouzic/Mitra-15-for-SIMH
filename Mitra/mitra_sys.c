@@ -34,6 +34,7 @@
 
 /* ========== External Declarations ========== */
 void io_init(void);
+t_stat asr33_reset(DEVICE *dptr);
 
 extern DEVICE cpu_dev;
 extern DEVICE panel_dev;
@@ -572,10 +573,62 @@ t_stat rtc_svc(UNIT *uptr) {
 /* ========== SIMH Boot Support ========== */
 
 /* Boot from device */
-t_stat sim_boot(DEVICE *dptr) {
-    /* Default boot: load from paper tape reader */
-    /* This would be overridden by specific device boots */
-    return SCPE_NOFNC;
+t_stat sim_boot(int32 unit_num, DEVICE *dptr) {
+    /* Default boot: 
+ 	* Front-panel bootstraps read the paper tape reader directly, without going through the normal WD/RD instructions
+ 	* as it is micro-programmed in the Mitra-15.    
+ 	* This can be overridden by specific device boots.
+ 	*/
+    UNIT *uptr;
+    int32 c;
+    uint32 addr;
+
+    if (unit_num != 0)
+        return SCPE_NXDEV;              /* ASR33 only has one unit */
+
+    uptr = &dptr->units[unit_num];
+
+    if ((uptr->flags & UNIT_ATT) == 0)
+        return SCPE_UNATT;              /* no tape image attached */
+
+    if (uptr->fileref == NULL)
+        return SCPE_IERR;
+
+    if (fseek(uptr->fileref, 0, SEEK_SET) != 0)
+        return SCPE_IOERR;
+
+    /* Skip the leader: real paper tape starts with a run of blank frames
+       used to thread the tape through the reader before real data
+       begins. */
+    while ((c = fgetc(uptr->fileref)) == ASR33_LEADER_BYTE)
+        ;
+
+    if (c == EOF)
+        return SCPE_FMT;                /* tape was empty, or all leader */
+
+    /* Load the rest of the tape verbatim into memory, one byte per
+       frame, starting at ASR33_BOOT_LOAD_ADDR. The first non-leader
+       byte already read above is included as the first loaded byte. */
+    addr = ASR33_BOOT_LOAD_ADDR;
+    write_byte(addr++, (uint8)c);
+
+    while (addr < ASR33_BOOT_LOAD_ADDR + ASR33_BOOT_MAX_BYTES) {
+        c = fgetc(uptr->fileref);
+        if (c == EOF)
+            break;
+        write_byte(addr++, (uint8)c);
+    }
+
+    /* Reset the controller and CPU exactly as a hardware reset/boot
+       would, then transfer control to the freshly loaded code. */
+    asr33_reset(dptr);
+    cpu_reset(&cpu_dev);
+    cpu_state.MS = 1;                   /* master/privileged mode */
+    cpu_state.PR = 0;                   /* no protected-area restriction yet */
+    cpu_state.reg_P = ASR33_BOOT_ENTRY_ADDR;
+    cpu_state.cpu_running = 1;
+
+    return SCPE_OK;
 }
 
 t_stat sim_shutdown(void) {

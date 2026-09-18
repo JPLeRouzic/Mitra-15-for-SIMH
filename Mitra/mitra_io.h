@@ -57,6 +57,11 @@
 #define OPL_M_GI      15   /* go input */
 #define OPL_M_GO      16   /* go output */
 
+#define ASR33_BOOT_LOAD_ADDR    0        /* memory address the tape loads at   */
+#define ASR33_BOOT_ENTRY_ADDR   0        /* PC value after a successful load   */
+#define ASR33_BOOT_MAX_BYTES    4096     /* safety cap on how much we'll load  */
+#define ASR33_LEADER_BYTE       0x00     /* blank/leader frame to skip over    */
+
 // Interrupts save context in an area pointed by an index to the CPT table.
 // the CPT itself is pointed to by the contents of absolute address 10: M[10]
 // There is a "high-speed" interrupt mechanism that uses register block switching instead of memory-based context saves.

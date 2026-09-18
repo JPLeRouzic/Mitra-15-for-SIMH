@@ -215,6 +215,12 @@ void dri_set_error(int unit, uint16 error_bits);
 t_stat dri_rd(uint16 inst);
 t_stat dri_wd(uint16 inst);
 
+/* Forward declaration, alongside dri_rd/dri_wd */
+t_stat dri_boot(int32 unit_num, DEVICE *dptr);
+
+/* Needed to reach the CPU's own reset/registers from here */
+extern DEVICE cpu_dev;
+
 /* Memory Access Functions (defined in mitra_cpu.h) */
 extern t_value read_word(t_addr va);
 extern void write_word(t_addr va, t_value val);
@@ -613,6 +619,72 @@ t_stat dri_reset(DEVICE *dptr) {
     return SCPE_OK;
 }
 
+/* ====================================================================== */
+/* Boot Support                                                           */
+/* ====================================================================== */
+/*
+ * dri_boot - bootstrap loader for the DRI fixed disk.
+ *
+ * This emulates what the real front-panel "boot" microprogram would do:
+ * read the first physical sector (cylinder 0, head 0, sector 0) of the
+ * selected DRI unit into low memory, then transfer control to it.
+ *
+ * IMPORTANT: DRI_BOOT_LOAD_ADDR and DRI_BOOT_ENTRY_ADDR below are conventional defaults. 
+ * They are NOT confirmed against a documentation.
+ */
+#define DRI_BOOT_LOAD_ADDR   0      /* memory address the boot sector loads at */
+#define DRI_BOOT_ENTRY_ADDR  0      /* PC value after a successful boot load   */
+
+t_stat dri_boot(int32 unit_num, DEVICE *dptr)
+{
+    UNIT *uptr;
+    uint8 buf[DRI_SECTOR_SIZE];
+    uint32 i;
+    size_t nread;
+
+    if (unit_num < 0 || unit_num >= DRI_NUM_UNITS)
+        return SCPE_NXDEV;
+
+    uptr = &dptr->units[unit_num];
+
+    if ((uptr->flags & UNIT_ATT) == 0)
+        return SCPE_UNATT;             /* nothing attached to boot from */
+
+    if (dri_state[unit_num].image == NULL)
+        return SCPE_IERR;              /* attached but no FILE* - shouldn't happen */
+
+    /* Make sure no transfer left running from a previous op */
+    dri_state[unit_num].active = false;
+
+    /* Rewind to the very first sector of the image and read it */
+    if (fseek(dri_state[unit_num].image, 0, SEEK_SET) != 0)
+        return SCPE_IOERR;
+
+    memset(buf, 0, sizeof(buf));
+    nread = fread(buf, 1, DRI_SECTOR_SIZE, dri_state[unit_num].image);
+    if (nread == 0)
+        return SCPE_IOERR;
+
+    /* Copy the boot sector into memory byte by byte */
+    for (i = 0; i < (uint32)nread; i++)
+        write_byte(DRI_BOOT_LOAD_ADDR + i, buf[i]);
+
+    /* Remember which drive booted, as a real front panel would */
+    last_selected = (uint32)unit_num;
+
+    /* Put the CPU into a well-defined state and transfer control:
+       - reset general CPU state,
+       - force privileged (master) mode, since bootstrap code runs before any OS has set up protection or interrupts,
+       - then point PC at the boot entry point. */
+    cpu_reset(&cpu_dev);
+    cpu_state.MS = 1;                  /* master/privileged mode */
+    cpu_state.PR = 0;                  /* no protected-area restriction yet */
+    cpu_state.reg_P = DRI_BOOT_ENTRY_ADDR;
+    cpu_state.cpu_running = 1;
+
+    return SCPE_OK;
+}
+
 /* Poll all units */
 void dri_poll_devices(void)
 {
@@ -700,7 +772,7 @@ DEVICE dri_dev = {
     NULL,            /* examine (dri_ex was never implemented) */
     NULL,            /* deposit (dri_dep was never implemented) */
     &dri_reset,      /* reset */
-    NULL,            /* boot */
+    &dri_boot,            /* boot */
     &dri_attach,     /* attach */
     &dri_detach,     /* detach */
     &dri_dib,        /* ctxt */

@@ -126,6 +126,11 @@ All devices will follow the same integration pattern, they provide:
 #include <stdlib.h>
 #include <stdbool.h>
 
+#define PTR_BOOT_LOAD_ADDR    0        /* memory address the tape loads at   */
+#define PTR_BOOT_ENTRY_ADDR   0        /* PC value after a successful load   */
+#define PTR_LEADER_BYTE       0x00     /* blank/leader frame to skip over    */
+#define PTR_BOOT_MAX_BYTES    4096     /* safety cap on how much we'll load  */
+
 extern uint32 intrpt_mask;  /* interrupt request bits */
 
 /* Memory Access Functions (defined in mitra_cpu.h) */
@@ -138,6 +143,8 @@ t_stat ptr_rd(uint16 e_reg, uint16 *val);
 t_stat ptr_wd(uint16 e_reg, uint16 result);
 t_stat ptp_rd(uint16 e_reg, uint16 *val);
 t_stat ptp_wd(uint16 e_reg, uint16 result);
+
+extern DEVICE cpu_dev;
 
 /* ----- Reader state ----- */
 typedef struct {
@@ -350,7 +357,7 @@ t_stat ptp_rd(uint16 e_reg, uint16 *result)
 }
 
 /* Reset functions */
-void ptr_reset(void) { ptr.active = 0; ptr.status = 0; }
+void ptr_reset(DEVICE *dptr) { ptr.active = 0; ptr.status = 0; }
 void ptp_reset(void) { ptp.active = 0; ptp.status = 0; }
 
 /* ========== SIMH STRUCTURES ========== */
@@ -364,13 +371,62 @@ t_stat ptr_svc(UNIT *uptr)
 /* PTR device reset routine */
 t_stat ptr_reset_dev(DEVICE *dptr)
 {
-    ptr_reset();
+    ptr_reset(dptr);
     return SCPE_OK;
 }
 
 /* PTR device boot routine */
 t_stat ptr_boot(int32 unit_num, DEVICE *dptr)
 {
+    UNIT *uptr;
+    int32 c;
+    uint32 addr;
+
+    if (unit_num != 0)
+        return SCPE_NXDEV;              /* Punch tape reader only has one unit */
+
+    uptr = &dptr->units[unit_num];
+
+    if ((uptr->flags & UNIT_ATT) == 0)
+        return SCPE_UNATT;              /* no tape image attached */
+
+    if (uptr->fileref == NULL)
+        return SCPE_IERR;
+
+    if (fseek(uptr->fileref, 0, SEEK_SET) != 0)
+        return SCPE_IOERR;
+
+    /* Skip the leader: real paper tape starts with a run of blank frames
+       used to thread the tape through the reader before real data
+       begins. */
+    while ((c = fgetc(uptr->fileref)) == PTR_LEADER_BYTE)
+        ;
+
+    if (c == EOF)
+        return SCPE_FMT;                /* tape was empty, or all leader */
+
+    /* Load the rest of the tape verbatim into memory, one byte per
+       frame, starting at PTR_BOOT_LOAD_ADDR. The first non-leader
+       byte already read above is included as the first loaded byte. */
+    addr = PTR_BOOT_LOAD_ADDR;
+    write_byte(addr++, (uint8)c);
+
+    while (addr < PTR_BOOT_LOAD_ADDR + PTR_BOOT_MAX_BYTES) {
+        c = fgetc(uptr->fileref);
+        if (c == EOF)
+            break;
+        write_byte(addr++, (uint8)c);
+    }
+
+    /* Reset the controller and CPU exactly as a hardware reset/boot
+       would, then transfer control to the freshly loaded code. */
+    ptr_reset(dptr);
+    cpu_reset(&cpu_dev);
+    cpu_state.MS = 1;                   /* master/privileged mode */
+    cpu_state.PR = 0;                   /* no protected-area restriction yet */
+    cpu_state.reg_P = PTR_BOOT_ENTRY_ADDR;
+    cpu_state.cpu_running = 1;
+
     return SCPE_OK;
 }
 
