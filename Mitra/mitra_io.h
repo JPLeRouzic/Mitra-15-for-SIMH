@@ -79,8 +79,7 @@ int    io_check_ready(void);
 void   io_dev_attach(int oplabel, const char *file, int write);
 t_stat read_byte_io(uint32 addr, uint8 *val, int zio) ;
 void write_byte_io(uint32 addr, uint8 val, int zio) ;
-
-/* Add at the end of mitra_io.h: */
+t_stat get_BOOT_ENTRY_ADDR(void);
 extern uint32 intrpt_mask;
 extern t_bool high_speed_int;
 

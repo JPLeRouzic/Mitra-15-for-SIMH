@@ -379,47 +379,56 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
 	*/
         sim_printf("\n[INT] taking NORMAL path (context saved/loaded through memory CPT)\n");
         
-	uint16 ctx_ptr;
-	t_stat lk = cpt_lookup(int_level, &ctx_ptr);
-	if (lk != SCPE_OK) {
-	    sim_printf("\n[INT] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", int_level, lk);
-	    return lk;
+	uint16 old_ctx_ptr;
+	t_stat lk1 = cpt_lookup(cpu_state.curr_int_lvl, &old_ctx_ptr);
+	if (lk1 != SCPE_OK) {
+	    sim_printf("\n[INT] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", int_level, lk1);
+	    return lk1;
 	}
-        sim_printf("\n[INT] cpt_base=%#05x ctx_ptr=CPT[%d]=%#05x : saving outgoing context, loading incoming\n",
-                 cpt_base, int_level, ctx_ptr);
+        sim_printf("\n[INT] cpt_base=%#05x old_ctx_ptr=CPT[%d]=%#05x : saving outgoing context, loading incoming\n",
+                 cpt_base, int_level, old_ctx_ptr);
         
         /* Save current context */
         uint16 ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
                          ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
                          ((cpu_state.C & 1) << 11);
         
-        write_word(ctx_ptr, ind_word);
-        write_word(ctx_ptr + 1, cpu_state.reg_X);
-        write_word(ctx_ptr + 2, cpu_state.reg_E);
-        write_word(ctx_ptr + 3, cpu_state.reg_A);
-        write_word(ctx_ptr + 4, cpu_state.reg_G);
-        write_word(ctx_ptr + 5, cpu_state.reg_L);
-        write_word(ctx_ptr + 6, cpu_state.reg_P);
+        write_word(old_ctx_ptr, ind_word);
+        write_word(old_ctx_ptr + 1, cpu_state.reg_X);
+        write_word(old_ctx_ptr + 2, cpu_state.reg_E);
+        write_word(old_ctx_ptr + 3, cpu_state.reg_A);
+        write_word(old_ctx_ptr + 4, cpu_state.reg_G);
+        write_word(old_ctx_ptr + 5, cpu_state.reg_L);
+        write_word(old_ctx_ptr + 6, cpu_state.reg_P);
         
-        /* Switch to new level */
+        /* Switch to new interrupt level */
         sim_printf("\n[INT] switching current level %d -> %d\n", cpu_state.curr_int_lvl, int_level);
         cpu_state.curr_int_lvl = int_level;
         
-        /* Load new context */
-        ind_word = read_word(ctx_ptr);
+	uint16 new_ctx_ptr;
+	t_stat lk2 = cpt_lookup(cpu_state.curr_int_lvl, &new_ctx_ptr);
+	if (lk2 != SCPE_OK) {
+	    sim_printf("\n[INT] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", int_level, lk2);
+	    return lk2;
+	}
+        sim_printf("\n[INT] cpt_base=%#05x new_ctx_ptr=CPT[%d]=%#05x : loading new incoming context\n",
+                 cpt_base, int_level, old_ctx_ptr);
+
+        /* Now ctx_ptr points to the new context */
+        ind_word = read_word(new_ctx_ptr);
         cpu_state.PR = (ind_word >> 15) & 1;
         cpu_state.MA = (ind_word >> 14) & 1;
         cpu_state.MS = (ind_word >> 13) & 1;
         cpu_state.OV = (ind_word >> 12) & 1;
         cpu_state.C = (ind_word >> 11) & 1;
-        cpu_state.reg_X = read_word(ctx_ptr + 1);
-        cpu_state.reg_E = read_word(ctx_ptr + 2);
-        cpu_state.reg_A = read_word(ctx_ptr + 3);
-        cpu_state.reg_G = read_word(ctx_ptr + 4);
-        cpu_state.reg_L = read_word(ctx_ptr + 5);
-        cpu_state.reg_P = read_word(ctx_ptr + 6);
+        cpu_state.reg_X = read_word(new_ctx_ptr + 1);
+        cpu_state.reg_E = read_word(new_ctx_ptr + 2);
+        cpu_state.reg_A = read_word(new_ctx_ptr + 3);
+        cpu_state.reg_G = read_word(new_ctx_ptr + 4);
+        cpu_state.reg_L = read_word(new_ctx_ptr + 5);
+        cpu_state.reg_P = read_word(new_ctx_ptr + 6);
         sim_printf("\n[INT] program launched at level %d: P=%#05x L=%#05x (from CPT[%d]=%#05x)\n",
-                 int_level, cpu_state.reg_P, cpu_state.reg_L, int_level, ctx_ptr);
+                 int_level, cpu_state.reg_P, cpu_state.reg_L, int_level, new_ctx_ptr);
         sim_printf("int-out\n");
     }
     
@@ -538,4 +547,45 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
     return SCPE_OK;
 }
 
+t_stat get_BOOT_ENTRY_ADDR(void)
+{
+	uint16 ctx_ptr;
+	t_stat lk = cpt_lookup(cpu_state.curr_int_lvl, &ctx_ptr);
+	if (lk != SCPE_OK) {
+	    sim_printf("\n[INT] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", cpu_state.curr_int_lvl, lk);
+	    return lk;
+	}
+        sim_printf("\n[INT-RET] leaving level=%d", cpu_state.curr_int_lvl);
+        
+        /* Find next highest pending interrupt */
+        int next_lvl = -1;
+        for (int i = 31; i >= 0; i--) {
+            if (cpu_state.intrpt_mask & (1u << i)) {
+                next_lvl = i;
+                break;
+            }
+        }
+        
+        if (next_lvl >= 0) {
+            /* Accept next interrupt */
+            sim_printf("\n[INT-RET] another interrupt pending, resuming level=%d\n", next_lvl);
+            cpu_state.curr_int_lvl = next_lvl;
+            ctx_ptr = read_word(cpt_base + cpu_state.curr_int_lvl);
+            
+            uint16 ind_word = read_word(ctx_ptr);
+            cpu_state.PR = (ind_word >> 15) & 1;
+            cpu_state.MA = (ind_word >> 14) & 1;
+            cpu_state.MS = (ind_word >> 13) & 1;
+            cpu_state.OV = (ind_word >> 12) & 1;
+            cpu_state.C = (ind_word >> 11) & 1;
+            cpu_state.reg_X = read_word(ctx_ptr + 1);
+            cpu_state.reg_E = read_word(ctx_ptr + 2);
+            cpu_state.reg_A = read_word(ctx_ptr + 3);
+            cpu_state.reg_G = read_word(ctx_ptr + 4);
+            cpu_state.reg_L = read_word(ctx_ptr + 5);
+            cpu_state.reg_P = read_word(ctx_ptr + 6);
+            sim_printf("\n[INT-RET] program resumed at level %d: P=%#05x L=%#05x\n",
+                     next_lvl, cpu_state.reg_P, cpu_state.reg_L);
+      }
+}
 

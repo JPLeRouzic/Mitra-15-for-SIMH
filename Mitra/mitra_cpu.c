@@ -395,7 +395,7 @@ t_stat sim_instr(void) {
             // Normal case, instruction execution 
             cpu_state.trap_P = save_P = cpu_state.reg_P;
             inst = read_word(cpu_state.reg_P);
-            cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+            cpu_state.reg_P = (cpu_state.reg_P + 1) & 0x7FFF;
             if (inst != 0) {
                 sim_printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x ---\n", inst, save_P);
                 

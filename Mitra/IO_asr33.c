@@ -28,7 +28,6 @@ En lecture on recupère dans R9 le nombre de caractères non lus
 (lorsque l'arrêt s'est fait sur caractère de comparaison).
 Dans R11 (bits 7 à 15) on récupère le dernier caractère transféré.
 
-
 Lecture d'état 
 	E	&I0
 
@@ -96,10 +95,11 @@ All devices will follow the same integration pattern, they provide:
 
 t_stat asr_dio_handler(uint16 inst, t_bool is_write); // RD and WD wrapper
 
-/* ASR33 Register Addresses */
-#define ASR33_R9   0x09   /* z bit (bit15) + byte count (bits 0-14) */
-#define ASR33_R10  0x0A   /* byte address - 1 */
-#define ASR33_R11  0x0B   /* compare char (bits 8-15) + data (bits 0-7) */
+/* ASR-33 Register Addresses are located in cpu_state.reg_block[1][1] to cpu_state.reg_block[1][3]
+cpu_state.reg_block[1][1] z bit (bit15) + byte count (bits 0-14)
+cpu_state.reg_block[1][2] byte address - 1
+cpu_state.reg_block[1][3] compare char (bits 8-15) + data (bits 0-7)
+*/
 
 /* Command codes */
 #define ASR_CMD_REPOS        0x00
@@ -118,11 +118,8 @@ t_stat asr_dio_handler(uint16 inst, t_bool is_write); // RD and WD wrapper
 #ifndef ASR33_BOOT_LOAD_ADDR
 #define ASR33_BOOT_LOAD_ADDR 0
 #endif
-#ifndef ASR33_BOOT_ENTRY_ADDR
-#define ASR33_BOOT_ENTRY_ADDR 0
-#endif
 #ifndef ASR33_BOOT_MAX_BYTES
-#define ASR33_BOOT_MAX_BYTES (128 * 2)
+#define ASR33_BOOT_MAX_BYTES 128
 #endif
 
 /* Interrupt level for ASR33 */
@@ -244,9 +241,9 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
     uint8 cmd = a_val & 0xFF;
 
     /* Read R9 (z and count), R10 (address-1) and R11 compare char */
-    uint16 r9  = read_word(ASR33_R9);
-    uint16 r10 = read_word(ASR33_R10);
-    uint16 r11 = read_word(ASR33_R11);
+    uint16 r9  = cpu_state.reg_block[1][1]; // Byte count
+    uint16 r10 = cpu_state.reg_block[1][2]; // Current address
+    uint16 r11 = cpu_state.reg_block[1][3]; // Working register
 
     asr_state.stop_on_compare = (r9 >> 15) & 1;
     asr_state.compare_char    = (r11 >> 8) & 0xFF;
@@ -351,7 +348,7 @@ int asr33_poll(void)
         asr_state.active = 0;
         asr_state.status = (asr_state.mode == 3) ? 0x02 : 0x03;
         /* Update R9 with remaining count (0) */
-        write_word(ASR33_R9, 0);
+        cpu_state.reg_block[1][1] = 0; // cpu_state.reg_block[1][1] is R9
         asr_interrupt();
         return 1;
     }
@@ -382,9 +379,9 @@ int asr33_poll(void)
 
         /* Update R11 low byte with the last character */
         {
-            uint16 r11 = read_word(ASR33_R11);
+            uint16 r11 = cpu_state.reg_block[1][3];
             r11 = (r11 & 0xFF00) | (c & 0xFF);
-            write_word(ASR33_R11, r11);
+            cpu_state.reg_block[1][3] = r11;
         }
 
         /* Stop-on-compare? */
@@ -393,9 +390,7 @@ int asr33_poll(void)
             asr_state.active = 0;
             asr_state.status = 0x03;
             /* R9 gets number of unread bytes */
-            write_word(ASR33_R9,
-                       (asr_state.bytes_left & 0x7FFF) |
-                       (asr_state.stop_on_compare << 15));
+            cpu_state.reg_block[1][3] = (asr_state.bytes_left & 0x7FFF) | (asr_state.stop_on_compare << 15);
             asr_interrupt();
             return 1;
         }
@@ -420,7 +415,7 @@ int asr33_poll(void)
     if (asr_state.bytes_left == 0) {
         asr_state.active = 0;
         asr_state.status = (asr_state.mode == 3) ? 0x02 : 0x03;
-        write_word(ASR33_R9, 0);
+        cpu_state.reg_block[1][1] = 0;
         asr_interrupt();
     }
 
@@ -485,8 +480,7 @@ t_stat asr33_reset(DEVICE *dptr)
  * This uses the WD/RD instruction path (asr33_wd / asr33_rd)
  * not front panel's INI microprogram.
  *
- * NOTE: ASR33_BOOT_LOAD_ADDR / ASR33_BOOT_ENTRY_ADDR are placeholders,
- * to be confirmed against documentation.
+ * NOTE: ASR33_BOOT_LOAD_ADDR is a placeholder, to be confirmed against documentation.
  */
 t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
 {
@@ -518,7 +512,7 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
         return SCPE_IOERR;
 
     while ((c = fgetc(asr_state.image)) == ASR33_LEADER_BYTE)
-        ;
+        ;	// <- not a glitch!
 
     if (c == EOF)
         return SCPE_FMT;
@@ -543,9 +537,10 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
        would, then transfer control to the freshly loaded code. */
     asr33_reset(dptr);
     cpu_reset(&cpu_dev);
-    cpu_state.MS = 1;                   /* master/privileged mode */
-    cpu_state.PR = 0;                   /* no protected-area restriction yet */
-    cpu_state.reg_P = ASR33_BOOT_ENTRY_ADDR;
+//    cpu_state.MS = 1;                   /* master/privileged mode */
+//    cpu_state.PR = 0;                   /* no protected-area restriction yet */
+    asr_interrupt();
+    get_BOOT_ENTRY_ADDR(); // get registers and condition codes from task context
     cpu_state.cpu_running = 1;
 
     return SCPE_OK;

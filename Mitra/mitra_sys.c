@@ -570,9 +570,21 @@ t_stat rtc_svc(UNIT *uptr) {
     return SCPE_OK;
 }
 
-/* ========== SIMH Boot Support ========== */
+/* ========== SIMH Boot Support ========== *
+A Mitra-15 boots after an operator has selected a bootstrap device from the front panel.
+The MITRA 15 self-loading process is initiated via the front panel's INI microprogram, which loads a 128-word bootstrap into the beginning of memory from the microprogrammed peripheral specified by the control panel switches. The front panel is described in 'IO_front_panel.c'.
 
-/* Boot from device */
+In this simulator there will be two devices with bootstrap capability: The DRI disk described in 'IO_DRI_fix_disk.c' and the teletype ASR-33 described in 'IO_asr33.c'.
+- For the fix disk, the front-panel INI microprogram would read the first physical sector (cylinder 0, head 0, sector 0) of the selected DRI unit into low memory.
+- For the teletype, the front panel INI function initiates the reading of a 128 byte block from the teletype tape reader into memory.
+
+After the 128 words have been loaded, a "transfer complete" interrupt is generated.
+Once loading is complete, the "Start Program" button in the front panel is pressed to enable interrupt processing, allowing the loaded microprogram to capture the "transfer complete" interrupt from the addressed device.
+
+This bootstrap must then load the remainder of the program—located, for instance, further along on the same tape (read via the ASR-33) or on the fixed disk. The bootstrap then places the device in an idle state. The MITRA runs at level zero, executing a BRU instruction while awaiting the "load complete" interrupt that launches the program.
+
+Separately it should be possible to boot a device directly from the SIMH simulator by entering 'boot DRI' or 'boot ASR33'.
+*/
 t_stat sim_boot(int32 unit_num, DEVICE *dptr) {
     /* Default boot: 
  	* Front-panel bootstraps read the paper tape reader directly, without going through the normal WD/RD instructions

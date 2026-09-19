@@ -633,7 +633,6 @@ t_stat dri_reset(DEVICE *dptr) {
  * They are NOT confirmed against a documentation.
  */
 #define DRI_BOOT_LOAD_ADDR   0      /* memory address the boot sector loads at */
-#define DRI_BOOT_ENTRY_ADDR  0      /* PC value after a successful boot load   */
 
 t_stat dri_boot(int32 unit_num, DEVICE *dptr)
 {
@@ -677,9 +676,10 @@ t_stat dri_boot(int32 unit_num, DEVICE *dptr)
        - force privileged (master) mode, since bootstrap code runs before any OS has set up protection or interrupts,
        - then point PC at the boot entry point. */
     cpu_reset(&cpu_dev);
-    cpu_state.MS = 1;                  /* master/privileged mode */
-    cpu_state.PR = 0;                  /* no protected-area restriction yet */
-    cpu_state.reg_P = DRI_BOOT_ENTRY_ADDR;
+//    cpu_state.MS = 1;                  /* master/privileged mode */
+//    cpu_state.PR = 0;                  /* no protected-area restriction yet */
+    dri_interrupt(unit_num);
+    get_BOOT_ENTRY_ADDR(); // get registers and condition codes from task context
     cpu_state.cpu_running = 1;
 
     return SCPE_OK;
