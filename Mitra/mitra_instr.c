@@ -1220,7 +1220,7 @@ uint16 group_4_RP(uint16 inst) {
             * Y-address is loaded into P-register and execution proceeds at Y-address.
             * (P) + (2 * disp) + (2 * (X)) -> (P)
 	    */
-            cpu_state.reg_P = (target_address + (cpu_state.reg_X << 1)) & 0x7FFF;
+            cpu_state.reg_P = (target_address + (cpu_state.reg_X << 2)) & 0x7FFF;
             break;
         case 0xC2:
             /* BOT - Branch on Overflow True (RP mode) */
@@ -1265,6 +1265,7 @@ uint16 group_4_RP(uint16 inst) {
             cpu_state.reg_P = target_address; // (reg_P) + (2 * disp)
             break;
     }
+    return SCPE_OK;
 }
 
 /*
@@ -1284,7 +1285,6 @@ uint16 group_4_RM(uint16 inst) {
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
     uint16 disp = inst & I_DISP_MASK;
     uint16 target_address;
-    uint16 ret_code =0;
 
     // The PC is already 2 steps ahead, so we substract 2
     cpu_state.reg_P = cpu_state.reg_P - 2;
@@ -1350,7 +1350,7 @@ uint16 group_4_RM(uint16 inst) {
             cpu_state.reg_P = target_address;
             break;
     }
-    return ret_code;
+    return SCPE_OK;
 }
 
 /*
