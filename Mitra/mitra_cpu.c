@@ -342,21 +342,33 @@ t_stat sim_instr(void) {
         */
         cpu_state.int_reqhi = get_highest_interrupt();
         
+        
+        
+        sim_printf("cpu_state.MA = %#05x, cpu_state.int_reqhi = %#05x, cpu_state.curr_int_lvl = %#05x", cpu_state.MA, cpu_state.int_reqhi, cpu_state.curr_int_lvl);
+        
+        
+        
+        
+        
+// FIXME Why a master program sHould not be interrupted?        
         if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > cpu_state.curr_int_lvl)) {
-// sim_printf("sim_instr(void) 17\n");
+//        if (true) {
+ sim_printf("\nsim_instr(void) 17\n");
             uint16 pa;
 	    reason = cpt_lookup((uint16)cpu_state.int_reqhi, &pa);
-	    if (reason != SCPE_OK)
+	    if (reason != SCPE_OK) {
+	    	sim_printf("reason != SCPE_OK.  reason = %#05x, cpu_state.int_reqhi = %#05x, pa = %#05x", reason, cpu_state.int_reqhi, pa);
 	        break;
+	        }
             /* Accept interrupt
              * Save context of currently-running level (per DIT manual section)
              * CPT is a 32-word table at absolute address M[10].
              * CPT[i] = word address of the context save area for level i.
              * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P 
              */
-// sim_printf("sim_instr(void) 20\n");
+ sim_printf("\nsim_instr(void) 20\n");
             reason = mitra_interrupt_accept(cpu_state.int_reqhi, high_speed);
-// sim_printf("sim_instr(void) 11\n");
+ sim_printf("\nsim_instr(void) 11\n");
             if (reason != SCPE_OK) break;
             
 /*            if (pa != VEC_RTCP && rtc_pie) {
@@ -425,7 +437,7 @@ int get_highest_interrupt(void) {
     int i;
     for (i = 31; i >= 0; i--) {
         if (cpu_state.intrpt_mask & (1u << i)) {
-            sim_printf("[INT] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrpt_mask);
+            sim_printf("[get_highest_interrupt] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrpt_mask);
             return i;
         }
     }
@@ -468,7 +480,8 @@ sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, va
     M[pa] = val;
 }
 uint8 read_byte(t_addr va) {
-    uint16 word_addr = va >> 1;
+//    uint16 word_addr = va >> 1;
+    uint16 word_addr = va;
     uint16 word = read_word(word_addr);
     uint8 b = (va & 1) ? (word & 0xFF) : ((word >> 8) & 0xFF);
     sim_printf("\n    [MEM] read_byte  va=%#010x (word %#010x, %#010x byte) -> %#010x",
@@ -476,14 +489,15 @@ uint8 read_byte(t_addr va) {
     return b;
 }
 void write_byte(t_addr va, uint8 val) {
-    uint16 word_addr = va >> 1;
+//    uint16 word_addr = va >> 1;
+    uint16 word_addr = va;
     uint16 word = read_word(word_addr);
     if (va & 1)
         word = (word & 0xFF00) | val;
     else
         word = (word & 0x00FF) | (val << 8);
-    sim_printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
-             va, word_addr, (va & 1) ? "low" : "high", val);
+//    sim_printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
+//             va, word_addr, (va & 1) ? "low" : "high", val);
     write_word(word_addr, word);
 }
 

@@ -265,6 +265,8 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
             ret_code = group_3_PX(inst, mode);
             break;
         case 0xF000:
+    sim_printf("\n[case_instr_xDR #1] inst: %#010x\n", inst);
+    
             ret_code = group_3_P(inst, mode);
             break;
     }
@@ -1162,6 +1164,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
             break;
 
         case 0xFA:  // STR P
+    sim_printf("\n[case_instr_xDR #2] inst: %#010x\n", inst);
             case_instr_xDR(inst);
             break;
 

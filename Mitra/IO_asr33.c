@@ -115,9 +115,6 @@ cpu_state.reg_block[1][3] compare char (bits 8-15) + data (bits 0-7)
 #ifndef ASR33_LEADER_BYTE
 #define ASR33_LEADER_BYTE    0x00
 #endif
-#ifndef ASR33_BOOT_LOAD_ADDR
-#define ASR33_BOOT_LOAD_ADDR 0
-#endif
 #ifndef ASR33_BOOT_MAX_BYTES
 #define ASR33_BOOT_MAX_BYTES 128
 #endif
@@ -207,7 +204,8 @@ t_stat asr33_detach(UNIT *unit)
 
 static void asr_interrupt(void)
 {
-    uint32 int_req = (1 << ASR33_INT_LEVEL);   /* typical interrupt level for ASR33 */
+//    uint32 int_req = (1 << ASR33_INT_LEVEL);   /* no mask for interruption (source Mestrellet's thesis) */
+    uint32 int_req = ASR33_INT_LEVEL;   /* typical interrupt level for ASR33 */
     io_interrupt_dispatch(int_req, false);
 }
 
@@ -244,6 +242,7 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
     uint16 r9  = cpu_state.reg_block[1][1]; // Byte count
     uint16 r10 = cpu_state.reg_block[1][2]; // Current address
     uint16 r11 = cpu_state.reg_block[1][3]; // Working register
+            sim_printf("\n[asr33_wd 1] r9 = %#05x, r10 = %#05x, r11 = %#05x", r9, r10, r11);
 
     asr_state.stop_on_compare = (r9 >> 15) & 1;
     asr_state.compare_char    = (r11 >> 8) & 0xFF;
@@ -267,6 +266,7 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
 
         case ASR_CMD_LEC_CLAV:   /* Lecture clavier */
         case ASR_CMD_LEC_RUBAN:  /* Lecture ruban */
+            sim_printf("\n[asr33_wd 2] ASR_CMD_LEC_RUBAN");
             asr_state.mode = (cmd == ASR_CMD_LEC_CLAV) ? 1 : 2;
             asr_state.active = 1;
             asr_state.mem_addr  = r10 + 1;
@@ -342,6 +342,8 @@ int asr33_poll(void)
 {
     if (!asr_state.active)
         return 0;
+    
+    sim_printf("[asr33_poll], cpu_state.reg_block[1][0] = %#05x, cpu_state.reg_block[1][1] = %#05x, cpu_state.reg_block[1][2] = %#05x", cpu_state.reg_block[1][0], cpu_state.reg_block[1][1], cpu_state.reg_block[1][2]);
 
     if (asr_state.bytes_left == 0) {
         /* Transfer complete */
@@ -373,6 +375,7 @@ int asr33_poll(void)
         }
 
         asr_state.last_char = (uint16)(c & 0xFF);
+        sim_printf("[asr33_poll] write this byte:  %#05x, at address = %#05x", c, asr_state.mem_addr);
         write_byte(asr_state.mem_addr, (uint8)(c & 0xFF));
         asr_state.mem_addr++;
         asr_state.bytes_left--;
@@ -440,6 +443,7 @@ t_stat asr_svc(UNIT *uptr)
         return SCPE_OK;
 
     /* Perform one character of the transfer. */
+	    	sim_printf("[asr_svc]");
     asr33_poll();
 
     /* If the transfer is still active, reschedule ourselves so that
@@ -480,7 +484,6 @@ t_stat asr33_reset(DEVICE *dptr)
  * This uses the WD/RD instruction path (asr33_wd / asr33_rd)
  * not front panel's INI microprogram.
  *
- * NOTE: ASR33_BOOT_LOAD_ADDR is a placeholder, to be confirmed against documentation.
  */
 t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
 {
@@ -488,11 +491,13 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
     int32 c;
     uint32 addr;
 
+ sim_printf("\n[asr33_boot() 1] unit_num = %#05x", unit_num);
     if (unit_num != 0)
         return SCPE_NXDEV;              /* ASR33 only has one unit */
 
     uptr = &dptr->units[unit_num];
 
+ sim_printf("\n[asr33_boot() 2] (uptr->flags & UNIT_ATT) = %#05x uptr->fileref = %#05x", (uptr->flags & UNIT_ATT), uptr->fileref);
     if ((uptr->flags & UNIT_ATT) == 0)
         return SCPE_UNATT;              /* no tape image attached */
 
@@ -511,23 +516,29 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
     if (fseek(asr_state.image, 0, SEEK_SET) != 0)
         return SCPE_IOERR;
 
-    while ((c = fgetc(asr_state.image)) == ASR33_LEADER_BYTE)
+ sim_printf("\n[asr33_boot() 3]");
+    while ((c = fgetc(asr_state.image)) == ASR33_LEADER_BYTE) {
+ sim_printf("\n[asr33_boot() 4] c = %#05x", c);
         ;	// <- not a glitch!
+        }
 
     if (c == EOF)
         return SCPE_FMT;
 
-    /* Load the rest of the tape verbatim into memory, one byte per
-       frame, starting at ASR33_BOOT_LOAD_ADDR. The first non-leader
-       byte already read above is included as the first loaded byte.
-       We do this through write_byte, which is the same helper the
-       WD/RD transfer engine uses, so both paths share the memory
-       accessor. */
-    addr = ASR33_BOOT_LOAD_ADDR;
+    /* Load the rest of the tape into memory, one byte per at a time, starting at cpu_state.reg_block[1][2] + 1.
+       */
+//    addr = cpu_state.reg_block[1][2] ; // byte address - 1
+    addr = ASR33_BOOT_LOAD_ADDR;                 /* fixed: 0 */    
+ 
+sim_printf("\n[asr33_boot() 5] addr = %#05x", addr);
+
     write_byte(addr++, (uint8)c);
 
-    while (addr < ASR33_BOOT_LOAD_ADDR + ASR33_BOOT_MAX_BYTES) {
-        c = fgetc(asr_state.image);
+//    while (addr < cpu_state.reg_block[1][1]) { // byte count
+    while (addr < ASR33_BOOT_LOAD_ADDR + ASR33_BOOT_MAX_BYTES) {        c = fgetc(asr_state.image);
+ 
+sim_printf("\n[asr33_boot() 6] c = %#05x", c);
+
         if (c == EOF)
             break;
         write_byte(addr++, (uint8)c);

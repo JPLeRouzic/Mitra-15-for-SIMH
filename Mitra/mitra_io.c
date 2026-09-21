@@ -206,13 +206,12 @@ t_stat read_byte_io(uint32 addr, uint8 *val, int zio) {
     return SCPE_OK;
 }
 
-/* Note: this signature (void, taking a pre-shifted bitmask + a high-speed flag) is
-   inferred from how every device file calls it, e.g. io_interrupt_dispatch(int_req, false)
-   with int_req already built as (1 << level). If mitra_io.h declares a different
-   signature, adjust this definition to match it. */
 void io_interrupt_dispatch(uint32 int_req, t_bool high_speed) {
-    printf("\n  [IO-INT] io_interrupt_dispatch int_req=%08x high_speed=%d\n", int_req, (int)high_speed);
-    cpu_state.intrpt_mask |= int_req;
+    printf("\n  [io_interrupt_dispatch ] int_req=%08x high_speed=%d\n", int_req, (int)high_speed);
+    /* no mask for interruption (source Mestrellet's thesis) */
+//    cpu_state.intrpt_mask |= int_req;
+    if (cpu_state.MA == true) 
+    	cpu_state.reg_block[1][0] = 2 * int_req; // ITN = 2 times the interrupt level
     if (high_speed) 
     	cpu_state.high_speed = true;
 }

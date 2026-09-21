@@ -35,6 +35,7 @@
 /* ========== External Declarations ========== */
 void io_init(void);
 t_stat asr33_reset(DEVICE *dptr);
+t_stat boot_from_asr33(UNIT *uptr);
 
 extern DEVICE cpu_dev;
 extern DEVICE panel_dev;
@@ -591,17 +592,32 @@ t_stat sim_boot(int32 unit_num, DEVICE *dptr) {
  	* as it is micro-programmed in the Mitra-15.    
  	* This can be overridden by specific device boots.
  	*/
+	/* Reset the controller and CPU */
+    asr33_reset(dptr);
+    cpu_reset(&cpu_dev);
+
     UNIT *uptr;
-    int32 c;
     uint32 addr;
 
-    if (unit_num != 0)
-        return SCPE_NXDEV;              /* ASR33 only has one unit */
+    if (unit_num == 0)
+        return SCPE_NXDEV;              /* At least one ASR33 at reset */
 
     uptr = &dptr->units[unit_num];
 
-    if ((uptr->flags & UNIT_ATT) == 0)
-        return SCPE_UNATT;              /* no tape image attached */
+    if ((uptr->flags & UNIT_ATT) != 0)
+        return boot_from_asr33(uptr) ;              /* one tape image attached */
+
+     /* then transfer control to the freshly loaded code. */
+    cpu_state.MS = 1;                   /* master/privileged mode */
+    cpu_state.PR = 0;                   /* no protected-area restriction yet */
+    cpu_state.reg_P = ASR33_BOOT_ENTRY_ADDR;
+    cpu_state.cpu_running = 1;
+
+    return SCPE_OK;
+}
+
+t_stat boot_from_asr33(UNIT *uptr) {
+    int32 c;
 
     if (uptr->fileref == NULL)
         return SCPE_IERR;
@@ -612,8 +628,9 @@ t_stat sim_boot(int32 unit_num, DEVICE *dptr) {
     /* Skip the leader: real paper tape starts with a run of blank frames
        used to thread the tape through the reader before real data
        begins. */
-    while ((c = fgetc(uptr->fileref)) == ASR33_LEADER_BYTE)
+    while ((c = fgetc(uptr->fileref)) == ASR33_LEADER_BYTE) {
         ;
+        }
 
     if (c == EOF)
         return SCPE_FMT;                /* tape was empty, or all leader */
@@ -621,7 +638,7 @@ t_stat sim_boot(int32 unit_num, DEVICE *dptr) {
     /* Load the rest of the tape verbatim into memory, one byte per
        frame, starting at ASR33_BOOT_LOAD_ADDR. The first non-leader
        byte already read above is included as the first loaded byte. */
-    addr = ASR33_BOOT_LOAD_ADDR;
+    t_addr addr = ASR33_BOOT_LOAD_ADDR;
     write_byte(addr++, (uint8)c);
 
     while (addr < ASR33_BOOT_LOAD_ADDR + ASR33_BOOT_MAX_BYTES) {
@@ -630,17 +647,6 @@ t_stat sim_boot(int32 unit_num, DEVICE *dptr) {
             break;
         write_byte(addr++, (uint8)c);
     }
-
-    /* Reset the controller and CPU exactly as a hardware reset/boot
-       would, then transfer control to the freshly loaded code. */
-    asr33_reset(dptr);
-    cpu_reset(&cpu_dev);
-    cpu_state.MS = 1;                   /* master/privileged mode */
-    cpu_state.PR = 0;                   /* no protected-area restriction yet */
-    cpu_state.reg_P = ASR33_BOOT_ENTRY_ADDR;
-    cpu_state.cpu_running = 1;
-
-    return SCPE_OK;
 }
 
 t_stat sim_shutdown(void) {

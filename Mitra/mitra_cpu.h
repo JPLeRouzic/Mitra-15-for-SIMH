@@ -112,7 +112,7 @@ typedef struct {
     uint16 reg_V /* reg 6 */, reg_W;			// | reg_P is at index 0 and reg_W at index 7
     
  															// |
-    uint16 reg_8; /* niveau de la tâche en cours */									// |
+    uint16 reg_8; /* niveau de la tâche en cours */									// | FIXME
     uint16 reg_cnt_MAE,  reg_curr_MAE, reg_Work_MAE; /* mémoire de voie au télétype de service (ASR 33 ou MAE) */	// | => Alias of bloc 1 of 8 registers
     uint16 reg_12; /* adresse du bloc programme en cours d'utilisation */						// |
     uint16 reg_NC1, reg_NC2, reg_NC3;	/* not important for SIMH */							// |
@@ -142,7 +142,7 @@ typedef struct {
     uint8 PR; // Access to protected areas
     
     /* Interrupt/High speed Interrupt/Suspension/Trap state */
-    uint32 intrpt_mask;  /* 32-bit bitmask of pending interrupts */
+    uint32 intrpt_mask;  /* FIXME no 32-bit bitmask of pending interrupts after all? (source Mestrellet thesis) */
     int16 curr_int_lvl;     /* Current interrupt level not unit16 */
     t_bool high_speed;  /* TRUE if high-speed interrupt */
     int32 int_reqhi;         /* Highest pending interrupt level */

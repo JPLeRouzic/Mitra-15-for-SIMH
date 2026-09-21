@@ -499,9 +499,12 @@ static t_bool double_to_mitra(double v, uint16_t *A, uint16_t *E)
     return true;
 }
 
+// LDR or STR
 uint16 case_instr_xDR(uint16 inst) {
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF; // opcodes all over 8 bits
-            sim_printf("\nopcode: %#010x\n", opcode);
+            
+    sim_printf("\n[case_instr_xDR] opcode: %#010x\n", opcode);
+    
     uint16 disp = inst & 0x00FF;
     t_addr target_address;
     t_value target_value;
@@ -514,7 +517,6 @@ uint16 case_instr_xDR(uint16 inst) {
             // This instruction is not privileged
             target_address = (cpu_state.reg_L + disp) & 0x7FFF;
             target_value = read_word(target_address);
-//            reg_block = target_value & 0x003C;
             reg_block = (target_value >> 3) & 0x0007;
             reg_num = target_value & 0x0003;
 
