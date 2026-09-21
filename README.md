@@ -65,6 +65,8 @@ Within the SIMH monitor, you can then load memory, examine registers, and execut
 Many thanks to:
 
 - The SIMH developers for creating and maintaining the simulator
+- Istarian on VCFED forums who transcribed and verified each byte in Patrick Chour dump of the MTR (Mitra's real time small OS).
+https://forum.vcfed.org/index.php?members/istarian.86461/
 
 - Everyone who has contributed to keeping the history of French computing alive but mainly Pascal Chour
 https://www.pascalchour.fr/ressources/cii/mitra15.htm
