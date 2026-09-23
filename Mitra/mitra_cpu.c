@@ -41,6 +41,7 @@
 */
 
 
+#include <stdbool.h>
 #include "mitra_defs.h"
 #include "mitra_cpu.h"
 #include "mitra_io.h"
@@ -56,11 +57,12 @@
 #define HIST_MAX        65536
 #define HIST_NOEA       0x40000000
 
-/* Main memory - declared extern in mitra_cpu.h; this is the one real instance */
-t_value M[MAX_MEM_WORDS];
+/* Main memory */
+uint16 M[MAX_MEM_WORDS];
+bool MP[MAX_MEM_WORDS];
 uint32 MEMsize = MEM_32K;
 
-/* CPU state - declared extern in mitra_cpu.h; this is the one real, shared instance. */
+/* CPU state */
 CPU_STATE cpu_state;
 
 uint32 xfr_req = 0;                                     /* xfr req */
@@ -446,7 +448,8 @@ int get_highest_interrupt(void) {
 
 /* ========== Memory Access Functions ========== */
 t_value read_word(t_addr va) {
-    uint16 pa = VA_TO_PA(va);
+    uint16 pa1 = VA_TO_PA(va);
+    uint16 pa = pa1 >> 1;	// The address is given for bytes, but M[] is a 16 bits array
     if (pa >= MAX_MEM_WORDS) {
         /* Trigger address invalid trap (TRAP_AI) */
         sim_printf("\n    [MEM] trap in read_word  va=%#010x pa=%#010x  ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
@@ -455,11 +458,12 @@ t_value read_word(t_addr va) {
         cpu_state.trap_pending = TRUE;
         return 0;
     }
-    sim_printf("\n[MEM] read_word  pa=%#010x, value: %#010x\n", pa, M[pa]);
+    sim_printf("\n[MEM] read_word  pa=%#05x, value: %#05x, sizeof value: %#05x\n", pa, M[pa], sizeof(M[pa]));
     return M[pa];
 }
 void write_word(t_addr va, t_value val) {
-    t_addr pa = VA_TO_PA(va);
+    uint16 pa1 = VA_TO_PA(va);
+    uint16 pa = pa1 >> 1;	// The address is given for bytes, but M[] is a 16 bits array
 sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, val);
     if (pa >= MAX_MEM_WORDS) {
         sim_printf("\n    [MEM] write_word va=%#010x pa=%d val=%#010x ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
@@ -469,7 +473,7 @@ sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, va
         return;
     }
     /* Check memory protection */
-    if (!cpu_state.PR && (M[pa] & 0x0001)) {  /* Protection bit set and cpu_state.PR=0 */
+    if (!cpu_state.PR && MP[pa]) {  /* Protection bit set and cpu_state.PR=0 */
         sim_printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x ** PROTECTED ** (cpu_state.PR=0, prot bit set) -> TRAP_PM queued",
                  va, pa, val);
         cpu_state.trp_req_bits |= (1 << TRAP_PM);
@@ -480,7 +484,7 @@ sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, va
     M[pa] = val;
 }
 uint8 read_byte(t_addr va) {
-//    uint16 word_addr = va >> 1;
+    // The address is given for bytes, but M[] is a 16 bits array
     uint16 word_addr = va;
     uint16 word = read_word(word_addr);
     uint8 b = (va & 1) ? (word & 0xFF) : ((word >> 8) & 0xFF);
@@ -489,15 +493,15 @@ uint8 read_byte(t_addr va) {
     return b;
 }
 void write_byte(t_addr va, uint8 val) {
-//    uint16 word_addr = va >> 1;
+    // The address is given for bytes, but M[] is a 16 bits array
     uint16 word_addr = va;
     uint16 word = read_word(word_addr);
     if (va & 1)
         word = (word & 0xFF00) | val;
     else
         word = (word & 0x00FF) | (val << 8);
-//    sim_printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
-//             va, word_addr, (va & 1) ? "low" : "high", val);
+    sim_printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
+             va, word_addr, (va & 1) ? "low" : "high", val);
     write_word(word_addr, word);
 }
 
@@ -541,28 +545,28 @@ t_stat cpu_reset(DEVICE * dptr) {
 /* Memory examine */
 t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 {
-uint32 pa;
+    uint16 pa = addr >> 1;	// The address is given for bytes, but M[] is a 16 bits array
 
-pa = addr;
-if (pa > MAX_MEM_WORDS)
-    return SCPE_REL;
-if (pa >= MAX_MEM_WORDS)
-    return SCPE_NXM;
-if (vptr != NULL) {
-    *vptr = M[pa] & DMASK;
-    }
-// sim_printf("\nAddress at: %#010x contains: %#010x\n", pa, M[pa] & DMASK);
-return SCPE_OK;
+	if (pa > MAX_MEM_WORDS)
+	    return SCPE_REL;
+	if (pa >= MAX_MEM_WORDS)
+	    return SCPE_NXM;
+	if (vptr != NULL) {
+	    *vptr = M[pa] & DMASK;
+	    }
+	sim_printf("\nAddress at: %#010x contains: %#010x\n", pa, M[pa] & DMASK);
+	return SCPE_OK;
 }
 
 /* Memory deposit */
 t_stat cpu_dep(t_value val, t_addr addr, UNIT * uptr, int32 sw) {
-    uint32 pa = addr & 0x7FFF;
+    uint16 pa = addr >> 1;	// The address is given for bytes, but M[] is a 16 bits array
+
     sim_printf("\nDeposit: %#010x to: %#010x", val & DMASK, pa);
     if (pa >= MAX_MEM_WORDS)
         return SCPE_NXM;
     M[pa] = val & DMASK;
-//    sim_printf("\nMemory now contains: %#010x\n", M[pa]);
+    sim_printf("\nMemory now contains: %#010x\n", M[pa]);
     return SCPE_OK;
 }
 
@@ -578,8 +582,10 @@ t_stat cpu_set_size(UNIT * uptr, int32 val, CONST char * cptr, void * desc) {
     if (mc != 0 && !get_yn("Really truncate memory [N]?", FALSE))
         return SCPE_OK;
     MEMsize = val;
-    for (i = MEMsize; i < MAX_MEM_WORDS; i++)
-        M[i] = 0;
+    for (i = MEMsize; i < MAX_MEM_WORDS;) {
+        M[i] = 0; // M is a 16 bits array
+        i = i + 2 ;
+        }
     return SCPE_OK;
 }
 

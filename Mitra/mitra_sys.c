@@ -113,52 +113,14 @@ const char *sim_stop_messages[SCPE_BASE] = {
 
 /* ========== Binary Loader ========== */
 
-/* Binary loader for Mitra 15 paper tape format
- * Format: 4 6-bit bytes per word (24 bits), but Mitra-15 is 16-bit.
- * The loader reads 6-bit groups and packs them into 16-bit words.
- * The first word loaded goes to address 0, then increments.
+/*
+If the VM responds to the LOAD (or DUMP) command, the load routine (dump routine) is implemented by routine sim_load.  Its calling sequence is:
+t_stat sim_load (FILE *fptr, const char *buf, const char *fnam, t_bool flag) - If flag = 0, load data from binary file fptr.  If flag = 1, dump data to binary file fptr.  For either command, buf contains any VM-specific arguments, and fnam contains the file name.  
+If LOAD or DUMP is not implemented, sim_load should simply return SCPE_ARG.  The LOAD and DUMP commands open the specified file before calling sim_load, and close it on return.
+sim_load may optionally load or dump data in different formats based on flag options specified in the sim_switches variable.  If or how this is done or what any switches mean are completely up to the simulator’s implementation in the sim_load function.
  */
 t_stat sim_load(FILE *fileref, CONST char *cptr, CONST char *fnam, int flag) {
-    int c;
-    uint16 addr = 0;
-    uint16 data = 0;
-    int nibble_count = 0;
-    t_stat r;
-    
-    sim_printf("\n[LOAD] Loading binary file: %s\n", fnam ? fnam : "(unnamed)");
-    
-    /* Paper tape format: 4 6-bit bytes per word */
-    while ((c = fgetc(fileref)) != EOF) {
-        if (c == 0) continue;  /* Null bytes are padding */
-        
-        data = (data << 6) | (c & 0x3F);
-        nibble_count++;
-        
-        if (nibble_count == 4) {
-            if (addr < MAX_MEM_WORDS) {
-                M[addr] = data & 0xFFFF;
-                sim_printf("[LOAD] addr=%04o data=%06o\n", addr, data & 0xFFFF);
-                addr++;
-            } else {
-                sim_printf("[LOAD] Warning: address %04o exceeds memory limit\n", addr);
-            }
-            data = 0;
-            nibble_count = 0;
-        }
-    }
-    
-    /* Set PC to start address from memory word 2 (address 2 in word addressing) */
-    /* In Mitra-15, address 2 contains the entry point for the loaded program */
-    if (addr > 0) {
-        cpu_state.reg_P = M[2] & 0x7FFF;
-        sim_printf("[LOAD] Entry point set to P=%04o (from M[2]=%06o)\n", 
-               cpu_state.reg_P, M[2]);
-    } else {
-        sim_printf("[LOAD] Warning: No data loaded, P not set\n");
-    }
-    
-    sim_printf("[LOAD] Load complete: %d words loaded\n", addr);
-    return SCPE_OK;
+    return SCPE_ARG;
 }
 
 /* ========== Symbolic Decode (for disassembly) ========== */
@@ -293,8 +255,9 @@ t_stat fprint_sym(FILE *of, t_addr addr, t_value *val, UNIT *uptr, int32 sw) {
     
     /* If val is NULL, read from memory at addr */
     if (val == NULL) {
-        if (addr >= MAX_MEM_WORDS) return SCPE_NXM;
-        inst = M[addr];
+        if (addr >= MAX_MEM_WORDS) 
+        	return SCPE_NXM;
+        inst = read_word(addr); // The address is given for bytes, but M[] is a 16 bits array
     } else {
         inst = *val & 0xFFFF;
     }

@@ -2,6 +2,7 @@
 #define MITRA_CPU_H
 
 #include <stdio.h>
+#include <stdbool.h>
 #include "mitra_defs.h"
 
 /* ========== Constants and Definitions ========== */
@@ -92,8 +93,10 @@ typedef struct {
 	    uint16 saved_bloc; /* Saved register block */
 	} SuspContext;
 
-/* Memory - word addressable */
-extern t_value M[MAX_MEM_WORDS]; // SIMH uses t_addr for addresses and t_value for values.
+/* Memory but byte addressable */
+extern uint16 M[MAX_MEM_WORDS]; // SIMH uses t_addr for addresses and t_value for values.
+/* Memory protection */
+extern bool MP[MAX_MEM_WORDS]; // One bit for each address
 
 /* Single structure holds ALL CPU state - for REG table */
 #define REG_BLOCS 8 // Number of register blocks

@@ -491,13 +491,15 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
     int32 c;
     uint32 addr;
 
- sim_printf("\n[asr33_boot() 1] unit_num = %#05x", unit_num);
+    sim_printf("\n[asr33_boot() 1] unit_num = %#05x", unit_num);
+    
     if (unit_num != 0)
         return SCPE_NXDEV;              /* ASR33 only has one unit */
 
     uptr = &dptr->units[unit_num];
 
- sim_printf("\n[asr33_boot() 2] (uptr->flags & UNIT_ATT) = %#05x uptr->fileref = %#05x", (uptr->flags & UNIT_ATT), uptr->fileref);
+    sim_printf("\n[asr33_boot() 2] (uptr->flags & UNIT_ATT) = %#05x uptr->fileref = %#05x", (uptr->flags & UNIT_ATT), uptr->fileref);
+    
     if ((uptr->flags & UNIT_ATT) == 0)
         return SCPE_UNATT;              /* no tape image attached */
 
@@ -516,9 +518,11 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
     if (fseek(asr_state.image, 0, SEEK_SET) != 0)
         return SCPE_IOERR;
 
- sim_printf("\n[asr33_boot() 3]");
+    sim_printf("\n[asr33_boot() 3]");
+    
     while ((c = fgetc(asr_state.image)) == ASR33_LEADER_BYTE) {
- sim_printf("\n[asr33_boot() 4] c = %#05x", c);
+    
+    sim_printf("\n[asr33_boot() 4] c = %#05x", c);
         ;	// <- not a glitch!
         }
 
@@ -527,17 +531,18 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
 
     /* Load the rest of the tape into memory, one byte per at a time, starting at cpu_state.reg_block[1][2] + 1.
        */
-//    addr = cpu_state.reg_block[1][2] ; // byte address - 1
+    //    addr = cpu_state.reg_block[1][2] ; // byte address - 1
     addr = ASR33_BOOT_LOAD_ADDR;                 /* fixed: 0 */    
  
-sim_printf("\n[asr33_boot() 5] addr = %#05x", addr);
+    sim_printf("\n[asr33_boot() 5] addr = %#05x", addr);
 
     write_byte(addr++, (uint8)c);
 
-//    while (addr < cpu_state.reg_block[1][1]) { // byte count
-    while (addr < ASR33_BOOT_LOAD_ADDR + ASR33_BOOT_MAX_BYTES) {        c = fgetc(asr_state.image);
+    //    while (addr < cpu_state.reg_block[1][1]) { // byte count
+    while (addr < ASR33_BOOT_LOAD_ADDR + ASR33_BOOT_MAX_BYTES) {        
+        c = fgetc(asr_state.image);
  
-sim_printf("\n[asr33_boot() 6] c = %#05x", c);
+	sim_printf("\n[asr33_boot() 6] c = %#05x", c);
 
         if (c == EOF)
             break;
@@ -548,8 +553,6 @@ sim_printf("\n[asr33_boot() 6] c = %#05x", c);
        would, then transfer control to the freshly loaded code. */
     asr33_reset(dptr);
     cpu_reset(&cpu_dev);
-//    cpu_state.MS = 1;                   /* master/privileged mode */
-//    cpu_state.PR = 0;                   /* no protected-area restriction yet */
     asr_interrupt();
     get_BOOT_ENTRY_ADDR(); // get registers and condition codes from task context
     cpu_state.cpu_running = 1;

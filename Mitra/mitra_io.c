@@ -78,7 +78,7 @@ uint8 chan_cnt[NUM_CHAN];                               /* char count */
 uint16 chan_mode[NUM_CHAN];                             /* mode */
 uint16 chan_flag[NUM_CHAN];                             /* flags */
 
-extern t_value M[MAX_MEM_WORDS];                            /* memory */
+extern uint16 M[MAX_MEM_WORDS];                            /* memory */
 extern uint32 int_req;                                  /* int req */
 extern uint32 xfr_req;                                  /* xfer req */
 extern uint32 alert;                                    /* pin/pot alert */

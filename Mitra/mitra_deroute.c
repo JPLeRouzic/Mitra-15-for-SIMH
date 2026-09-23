@@ -6,7 +6,7 @@
 extern int susp_stack_ptr;
 extern UNIT cpu_unit ;
 extern t_addr cpt_base;
-extern t_value M[];
+extern uint16 M[];
 extern int susp_stack_ptr;
 
 static int get_highest_interrupt(void);
@@ -86,15 +86,13 @@ t_stat cpt_lookup(uint16 level, uint16 *ctx_ptr_out) {
 
     base = read_word(10);
     if (base >= MAX_MEM_WORDS) {
-        sim_printf("\n[cpt_lookup] ** FATAL ** CPT base %#05x (from M[10]) out of range (MAX_MEM_WORDS=%#05x)\n",
-                 base, MAX_MEM_WORDS);
+        sim_printf("\n[cpt_lookup] ** FATAL ** CPT base %#05x (from M[10]) out of range (MAX_MEM_WORDS=%#05x)\n", base, MAX_MEM_WORDS);
         return SCPE_STOP;
     }
 
     ptr = read_word(base + level);
     if (ptr >= MAX_MEM_WORDS) {
-        sim_printf("\n[cpt_lookup] ** FATAL ** context pointer CPT[%d]=%#05x out of range (MAX_MEM_WORDS=%#05x)\n",
-                 level, ptr, MAX_MEM_WORDS);
+        sim_printf("\n[cpt_lookup] ** FATAL ** context pointer CPT[%d]=%#05x out of range (MAX_MEM_WORDS=%#05x)\n", level, ptr, MAX_MEM_WORDS);
         return SCPE_STOP;
     }
     if (ptr == 0) {
