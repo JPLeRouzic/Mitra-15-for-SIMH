@@ -373,9 +373,6 @@ t_stat sim_instr(void) {
  sim_printf("\nsim_instr(void) 11\n");
             if (reason != SCPE_OK) break;
             
-/*            if (pa != VEC_RTCP && rtc_pie) {
-                cpu_state.intrpt_mask |= INT_RTCP;
-            } FIXME probably a remnant of SDS940*/
         } else {
             /* Normal instruction fetch */
             if (sim_brk_summ) {
@@ -447,8 +444,15 @@ int get_highest_interrupt(void) {
 }
 
 /* ========== Memory Access Functions ========== */
+// read_word() receives an address in bytes and returns a 16bits word
 t_value read_word(t_addr va) {
-    uint16 pa1 = VA_TO_PA(va);
+    if (va & 1) { // Addresses should be even
+        sim_printf("\n[read_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
+        cpu_state.trp_req_bits |= (1u << TRAP_AI);
+        cpu_state.trap_pending = TRUE;
+        return 0;
+    }
+    uint16 pa1 = VA_TO_PA(va); // Prepare the code for Mitra-125, 225, etc that have virtual memory
     uint16 pa = pa1 >> 1;	// The address is given for bytes, but M[] is a 16 bits array
     if (pa >= MAX_MEM_WORDS) {
         /* Trigger address invalid trap (TRAP_AI) */
@@ -461,7 +465,14 @@ t_value read_word(t_addr va) {
     sim_printf("\n[MEM] read_word  pa=%#05x, value: %#05x, sizeof value: %#05x\n", pa, M[pa], sizeof(M[pa]));
     return M[pa];
 }
+
 void write_word(t_addr va, t_value val) {
+    if (va & 1) {
+        sim_printf("\n[write_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
+        cpu_state.trp_req_bits |= (1u << TRAP_AI);
+        cpu_state.trap_pending = TRUE;
+        return;
+    }
     uint16 pa1 = VA_TO_PA(va);
     uint16 pa = pa1 >> 1;	// The address is given for bytes, but M[] is a 16 bits array
 sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, val);
@@ -483,18 +494,20 @@ sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, va
     sim_printf("\n[MEM] write_word pa=%#010x val=%#010x (was %#010x)\n", pa, val, M[pa]);
     M[pa] = val;
 }
+
 uint8 read_byte(t_addr va) {
     // The address is given for bytes, but M[] is a 16 bits array
-    uint16 word_addr = va;
+    uint16 word_addr = VA_TO_PA(va);
     uint16 word = read_word(word_addr);
     uint8 b = (va & 1) ? (word & 0xFF) : ((word >> 8) & 0xFF);
     sim_printf("\n    [MEM] read_byte  va=%#010x (word %#010x, %#010x byte) -> %#010x",
              va, word_addr, (va & 1) ? "low" : "high", b);
     return b;
 }
+
 void write_byte(t_addr va, uint8 val) {
     // The address is given for bytes, but M[] is a 16 bits array
-    uint16 word_addr = va;
+    uint16 word_addr = VA_TO_PA(va);
     uint16 word = read_word(word_addr);
     if (va & 1)
         word = (word & 0xFF00) | val;
@@ -554,7 +567,7 @@ t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 	if (vptr != NULL) {
 	    *vptr = M[pa] & DMASK;
 	    }
-	sim_printf("\nAddress at: %#010x contains: %#010x\n", pa, M[pa] & DMASK);
+	sim_printf("\nAddress at: %#010x contains: %#010x\n", addr, M[pa] & DMASK);
 	return SCPE_OK;
 }
 
@@ -562,11 +575,11 @@ t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 t_stat cpu_dep(t_value val, t_addr addr, UNIT * uptr, int32 sw) {
     uint16 pa = addr >> 1;	// The address is given for bytes, but M[] is a 16 bits array
 
-    sim_printf("\nDeposit: %#010x to: %#010x", val & DMASK, pa);
+    sim_printf("\nDeposit: %#010x to: %#010x\n", val & DMASK, addr);
     if (pa >= MAX_MEM_WORDS)
         return SCPE_NXM;
     M[pa] = val & DMASK;
-    sim_printf("\nMemory now contains: %#010x\n", M[pa]);
+//    sim_printf("\nMemory now contains: %#010x\n", M[pa]);
     return SCPE_OK;
 }
 

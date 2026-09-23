@@ -62,6 +62,7 @@
 /* Fixed GPRIME macro to correctly reference the G register in the current block */
 #define GPRIME ((cpu_state.MS) ? cpu_state.reg_G : 0)
 
+/* Make code ready for virtual memory as in Mitra-125 and following models */
 #define VA_TO_PA(va) ((va) & 0x7FFF)
 
 /* ========== Trap and Suspension Constants ========== */
