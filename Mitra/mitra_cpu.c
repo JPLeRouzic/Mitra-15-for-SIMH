@@ -497,25 +497,40 @@ sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, va
 
 uint8 read_byte(t_addr va) {
     // The address is given for bytes, but M[] is a 16 bits array
-    uint16 word_addr = VA_TO_PA(va);
+    uint16 pa1 = VA_TO_PA(va);
+    uint16 word_addr = pa1 & 0x7FFE;	// The address is given for bytes, but M[] is a 16 bits array
     uint16 word = read_word(word_addr);
-    uint8 b = (va & 1) ? (word & 0xFF) : ((word >> 8) & 0xFF);
+    uint8 byte = 0;
+
+    if (va & 1) {
+	// Odd should be right byte, so we erase the left byte
+	byte = word & 0x00FF;
+	}
+    else {
+    	// Even should be left byte, so we erase the right byte and shift to left
+	byte = (word & 0xFF00) >> 8;
+    	}
+
     sim_printf("\n    [MEM] read_byte  va=%#010x (word %#010x, %#010x byte) -> %#010x",
-             va, word_addr, (va & 1) ? "low" : "high", b);
-    return b;
+             va, word_addr, (va & 1) ? "low" : "high", byte);
+    return byte;
 }
 
 void write_byte(t_addr va, uint8 val) {
     // The address is given for bytes, but M[] is a 16 bits array
-    uint16 word_addr = VA_TO_PA(va);
+    uint16 pa1 = VA_TO_PA(va);
+    uint16 word_addr = pa1 & 0x7FFE;	// The address is given for bytes, but M[] is a 16 bits array
     uint16 word = read_word(word_addr);
-    if (va & 1)
-        word = (word & 0xFF00) | val;
-    else
-        word = (word & 0x00FF) | (val << 8);
+    uint16 wordReass;
+    if (va & 1) {
+        wordReass = (word & 0xFF00) | (val & 0x0FF); // Odd should be right byte, so we erase the right byte before writing it
+        }
+    else {
+        wordReass = (word & 0x00FF) | (val << 8); // Even should be left byte, so we erase the left byte before writing it
+        }
     sim_printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
-             va, word_addr, (va & 1) ? "low" : "high", val);
-    write_word(word_addr, word);
+             va, word_addr, (va & 1) ? "right byte" : "left byte", val);
+    write_word(word_addr, wordReass);
 }
 
 /* ========== CPU Reset and Management ========== */

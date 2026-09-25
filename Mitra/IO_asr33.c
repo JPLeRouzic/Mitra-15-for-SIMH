@@ -548,7 +548,7 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
             break;
         write_byte(addr++, (uint8)c);
     }
-
+// exit(-1);
     /* Reset the controller and CPU exactly as a hardware reset/boot
        would, then transfer control to the freshly loaded code. */
     asr33_reset(dptr);
