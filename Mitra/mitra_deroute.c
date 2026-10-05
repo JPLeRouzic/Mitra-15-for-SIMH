@@ -148,10 +148,11 @@ t_stat mitra_trap(int trap, uint16 pc) {
      *   word 1 (at PRTS_base - 4*N+2) = L-base of section
      * Section 0 entry is at PRTS_base itself (N=0). 
      */
-    prts_ptr = read_word(6);  /* PRTS pointer at address 6 */
+    prts_ptr = read_word(12);  /* PRTS pointer at address 12 */
     if (prts_ptr >= MAX_MEM_WORDS) {
         sim_printf("\n[mitra_trap] ** FATAL ** PRTS pointer %#05x out of range (MAX_MEM_WORDS=%#05x), cannot dispatch trap %d\n",
                  prts_ptr, MAX_MEM_WORDS, trap);
+        exit(-1);
         return SCPE_STOP;  /* Fatal: no PRTS */
     }
     

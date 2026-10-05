@@ -14,6 +14,10 @@
  * - Interrupt, fast interrupt, suspension, and trap support
  *
  * Inspired the SDS 940 CPU and other SDS sigma simulators
+ * CII employed many SDS engineers as it sold SDS' Sigma 7 under the name 10070, SDS 940 CPU look enough similar to the Mitra-15.
+ * Yet Mitra-15 has original features like interruption branching in microcode and multiprocessing, it uses TTL CIs and indeed it's a 16 bits not 24 bits computer.
+ * Another streakingly similar computer to the Mitra-15 is the Honeywell 316 computer, Honeywell bought SDS's computer line and CII a few years after Mitra's design.
+ * 
 
    Copyright (c) 2001-2017, Robert M. Supnik
    Copyright (c) 2026, Jean-Pierre Le Rouzic contact@padiracinnovation.org
@@ -156,31 +160,38 @@ REG cpu_reg[] = {
     { HRDATA(X, cpu_state.reg_X, 16) },
     { HRDATA(V, cpu_state.reg_V, 16) },
     { HRDATA(W, cpu_state.reg_W, 16) },
-    { ORDATA(reg_8, cpu_state.reg_8, 16) },
+    
+    { HRDATA(reg_8, cpu_state.reg_8, 16) },
+    
     { FLDATA(C, cpu_state.C, 0) },
     { FLDATA(OV, cpu_state.OV, 0) },
     { FLDATA(MS, cpu_state.MS, 0) },
     { FLDATA(MA, cpu_state.MA, 0) },
     { FLDATA(PR, cpu_state.PR, 0) },
-    { ORDATA(MREG, cpu_state.MREG, 18) },
-    { ORDATA(S, cpu_state.S, 16) }, // FIXME or 15?
-    { ORDATA(U, cpu_state.U, 16) },
+    
+    { HRDATA(MREG, cpu_state.MREG, 18) },
+    { HRDATA(S, cpu_state.S, 16) },
+    { HRDATA(U, cpu_state.U, 16) },
+    
     /* Use separate variables for interrupt state instead of struct member */
-    { ORDATA(INT_REQ, cpu_state.intrpt_mask, 32) },
-    { ORDATA(INT_LVL, cpu_state.curr_int_lvl, 5) },
-    { ORDATA(SUSP_REQ, cpu_state.susp_req_bits, 32) },
-    { ORDATA(SUSP_LVL, cpu_state.susp_active_level, 5) },
-    { ORDATA(TRP_REQ, cpu_state.trp_req_bits, 16) },
-    { ORDATA(CPU_MODE, cpu_state.cpu_mode, 2) },
+    { HRDATA(INT_REQ, cpu_state.intrpt_mask, 32) },
+    { HRDATA(INT_LVL, cpu_state.curr_int_lvl, 5) },
+    { HRDATA(SUSP_REQ, cpu_state.susp_req_bits, 32) },
+    { HRDATA(SUSP_LVL, cpu_state.susp_active_level, 5) },
+    { HRDATA(TRP_REQ, cpu_state.trp_req_bits, 16) },
+    { HRDATA(CPU_MODE, cpu_state.cpu_mode, 2) },
+    
     { DRDATA(INDLIM, ind_lim, 8), REG_NZ + PV_LEFT },
     { DRDATA(EXULIM, exu_lim, 8), REG_NZ + PV_LEFT },
-    { ORDATA(WRU, sim_int_char, 8) },
-    { ORDATA(PANEL_ADDR, cpu_state.panel_addr_lights, 16) },
-    { ORDATA(PANEL_DATA, cpu_state.panel_data_lights, 16) },
+    
+    { HRDATA(WRU, sim_int_char, 8) },
+    { HRDATA(PANEL_ADDR, cpu_state.panel_addr_lights, 16) },
+    { HRDATA(PANEL_DATA, cpu_state.panel_data_lights, 16) },
+    
     { FLDATA(CPU_RUNNING, cpu_state.cpu_running, 0) },
     { FLDATA(INT_ENABLED, cpu_state.interrupts_enabled, 0) },
     { NULL }
-};
+    };
 
 /* 
  * Link these wrappers to your device's MTAB (modifier table) to integrate with the SIMH command parser.
@@ -344,13 +355,7 @@ t_stat sim_instr(void) {
         */
         cpu_state.int_reqhi = get_highest_interrupt();
         
-        
-        
         sim_printf("cpu_state.MA = %#05x, cpu_state.int_reqhi = %#05x, cpu_state.curr_int_lvl = %#05x", cpu_state.MA, cpu_state.int_reqhi, cpu_state.curr_int_lvl);
-        
-        
-        
-        
         
 // FIXME Why a master program sHould not be interrupted?        
         if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > cpu_state.curr_int_lvl)) {
@@ -406,7 +411,7 @@ t_stat sim_instr(void) {
             // Normal case, instruction execution 
             cpu_state.trap_P = save_P = cpu_state.reg_P;
             inst = read_word(cpu_state.reg_P);
-            cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+            cpu_state.reg_P = (cpu_state.reg_P + 2);
             if (inst != 0) {
                 sim_printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x ---\n", inst, save_P);
                 
@@ -450,17 +455,17 @@ t_value read_word(t_addr va) {
         sim_printf("\n[read_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
         cpu_state.trp_req_bits |= (1u << TRAP_AI);
         cpu_state.trap_pending = TRUE;
-        return 0;
+        exit(-1);
     }
     uint16 pa1 = VA_TO_PA(va); // Prepare the code for Mitra-125, 225, etc that have virtual memory
-    uint16 pa = pa1 >> 1;	// The address is given for bytes, but M[] is a 16 bits array
+    uint16 pa = pa1  >> 1;	// The address is given for bytes, but M[] is a 16 bits array
     if (pa >= MAX_MEM_WORDS) {
         /* Trigger address invalid trap (TRAP_AI) */
         sim_printf("\n    [MEM] trap in read_word  va=%#010x pa=%#010x  ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
                  va, pa, MAX_MEM_WORDS);
         cpu_state.trp_req_bits |= (1 << TRAP_AI);
         cpu_state.trap_pending = TRUE;
-        return 0;
+        exit(-1);
     }
     sim_printf("\n[MEM] read_word  pa=%#05x, value: %#05x, sizeof value: %#05x\n", pa, M[pa], sizeof(M[pa]));
     return M[pa];
@@ -471,17 +476,17 @@ void write_word(t_addr va, t_value val) {
         sim_printf("\n[write_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
         cpu_state.trp_req_bits |= (1u << TRAP_AI);
         cpu_state.trap_pending = TRUE;
-        return;
+        exit(-1);
     }
     uint16 pa1 = VA_TO_PA(va);
-    uint16 pa = pa1 >> 1;	// The address is given for bytes, but M[] is a 16 bits array
+    uint16 pa = pa1  >> 1;	// The address is given for bytes, but M[] is a 16 bits array
 sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, val);
     if (pa >= MAX_MEM_WORDS) {
         sim_printf("\n    [MEM] write_word va=%#010x pa=%d val=%#010x ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
                  va, pa, val, MAX_MEM_WORDS);
         cpu_state.trp_req_bits |= (1 << TRAP_AI);
         cpu_state.trap_pending = TRUE;
-        return;
+        exit(-1);
     }
     /* Check memory protection */
     if (!cpu_state.PR && MP[pa]) {  /* Protection bit set and cpu_state.PR=0 */

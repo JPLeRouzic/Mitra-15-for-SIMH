@@ -55,16 +55,16 @@ of
  * Addressing mode formulae (D = 8-bit displacement, G' = G in slave mode / 0
  * in master mode):
  *
- *   DL  – Direct Local          : Y = (L + D) & 0x7FFF
+ *   DL  – Direct Local          : Y = (L + D) & 0x0FFFF
  *   P   – Parameter/Immediate   : Y = D            (no memory indirection)
  *   PX  – Parameter Indexed     : Y = D            (Class 1, same as P for EA)
- *   DG  – Direct General        : Y = (G + D) & 0x7FFF
- *   IL  – Indirect Local        : Y = (G' + mem[L + D]) & 0x7FFF
- *   IGX – Indirect General Idx  : Y = (G' + mem[G + D] + X) & 0x7FFF
- *   ILX – Indirect Local Idx    : Y = (G' + mem[L + D] + X) & 0x7FFF
- *   RP  – Relative Plus  (br)   : Y = (P + 2*D) & 0x7FFF
- *   RM  – Relative Minus (br)   : Y = (P - 2*D) & 0x7FFF
- *   IG  – Indirect General (br) : Y = (G' + mem[G + D]) & 0x7FFF
+ *   DG  – Direct General        : Y = (G + D) & 0x0FFFF
+ *   IL  – Indirect Local        : Y = (G' + mem[L + D]) & 0x0FFFF
+ *   IGX – Indirect General Idx  : Y = (G' + mem[G + D] + X) & 0x0FFFF
+ *   ILX – Indirect Local Idx    : Y = (G' + mem[L + D] + X) & 0x0FFFF
+ *   RP  – Relative Plus  (br)   : Y = (P + 2*D) & 0x0FFFF
+ *   RM  – Relative Minus (br)   : Y = (P - 2*D) & 0x0FFFF
+ *   IG  – Indirect General (br) : Y = (G' + mem[G + D]) & 0x0FFFF
  *
  * Opcodes 34, 3E, 3F, E4, EE, EF, FE, FF are not implemented; this
  * function returns 0 for them (the caller is responsible for rejection).
@@ -165,13 +165,11 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
              (opcode == 0x0A || opcode == 0x0B || opcode == 0x0D)) ||
             (hexcode == 0xE000 && opcode == 0x0A) ||				// EAxx
             (hexcode == 0xF000 && opcode == 0x04) ||				// F4xx SYS instructions
-            (inst == 0xEC06 || inst == 0xFC06) ||				// DITR at 0xEC06 or 0xFC06
+            (inst == 0xEC20 || inst == 0xFC20) ||				// DITR at 0xEC20 or 0xFC20
             (hexcode == 0xF000 && opcode == 0x01 && ((inst & 0x000F) == 0x0C)))	// RSV is at 0xF10C
              {
             /* Check if it's a privileged SYS function */
             if (hexcode == 0xF000 && opcode == 0x04) { /* SYS */
-//                if (disp == 0x01 || disp == 0x03 || disp == 0x08 || FIXME actually all 0xF4 SYS are privilegied
-//                    disp == 0x0C || disp == 0x20) {
                     /* DIT, RD, WD, STM, CLM, DITR are privileged, so they trap in
                      * slave mode */
                     sim_printf(
@@ -179,7 +177,6 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
                         "in SLAVE mode -> TRAP_VM **\n",
                         disp);
                     return mitra_trap(TRAP_VM, pc);
-//                }
             } else {
                 sim_printf(
                     "\n** privileged instruction (opcode=%#010x) attempted in "
@@ -265,7 +262,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
             ret_code = group_3_PX(inst, mode);
             break;
         case 0xF000:
-    sim_printf("\n[case_instr_xDR #1] inst: %#010x\n", inst);
+//    sim_printf("\n[one_inst case_instr_xDR #1] inst: %#010x\n", inst);
     
             ret_code = group_3_P(inst, mode);
             break;
@@ -298,7 +295,7 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
             return mitra_trap(cause, pc);
         }
     }
-    return SCPE_OK;
+    return ret_code;
 }
 
 /*
@@ -323,7 +320,7 @@ uint16 group_1_DL(uint16 inst) {
 
     sim_printf("\nL = %#010x \n", cpu_state.reg_L);
 
-    target_address = (cpu_state.reg_L + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_L + disp) & 0x0FFFF;
 
     sim_printf("\ntarget_address = %#010x \n", target_address);
 
@@ -357,22 +354,22 @@ uint16 group_2_DL(uint16 inst, uint32 mode) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    target_address = (cpu_state.reg_L + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_L + disp) & 0x0FFFF;
 
     if(opcode == 0x10) {
             /* DLD - Double Load */
             cpu_state.reg_E = read_word(target_address);
-            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x0FFFF);
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if(opcode == 0x1A) {
-            // FAD DL, Floating ADd (option)
+    else if( (opcode == 0x1A) || (opcode == 0x1B) || (opcode == 0x1C) || (opcode == 0x1D) ) {
+            // FAD, FSU, FMU, FDV DL, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
     	}
     else if(opcode == 0x1F) {
-            // MVS DL, Floating ADd (option)
+            // MVS DL, 
     	    string_proc(inst, mode, target_address);
     	    return ret_code;
     	}
@@ -405,10 +402,10 @@ uint16 group_1_P(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    target_address = (cpu_state.reg_P - 2);
     /* The operand IS the displacement field itself (zero-extended), not the
      * word at target_address -- target_address is only passed through for
      * instructions like LEA that need the instruction's own location. */
+    target_address = (cpu_state.reg_P - 2);
     t_value target_value = read_word(target_address);
     Mem_OP_Reg_To_Reg((t_value)disp, target_address, inst);
 
@@ -437,7 +434,7 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
     uint16 target_address;
     uint16 ret_code =0;
     uint16 count;
-    target_address = (cpu_state.reg_L + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_L + disp) & 0x0FFFF;
 
     switch (opcode) {
         case 0x30:
@@ -447,33 +444,36 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
         case 0x32:  // ICX DL, reg_X is incremented by the content of (reg_L
                     // added to displacement)
             cpu_state.reg_X =
-                (cpu_state.reg_X + read_word(target_address)) & 0x7FFF;
+                (cpu_state.reg_X + read_word(target_address)) & 0x0FFFF;
             set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0x33:  // DCX DL, reg_X is incremented by the content of (reg_L
                     // added to displacement)
             cpu_state.reg_X =
-                (cpu_state.reg_X - read_word(target_address)) & 0x7FFF;
+                (cpu_state.reg_X - read_word(target_address)) & 0x0FFFF;
             set_condition_codes_load(cpu_state.reg_X);
             break;
-        case 0x34:
+        case 0x34: // Not a valid opcode
             break;
         case 0x35:  // ICL DL, reg_L is incremented by the content of (reg_L
                     // added to displacement)
             cpu_state.reg_L =
-                (cpu_state.reg_L + read_word(target_address)) & 0x7FFF;
+                (cpu_state.reg_L + read_word(target_address)) & 0x0FFFF;
             break;
         case 0x36:  // DCL DL, reg_X is decremented by the content of (reg_L
                     // added to displacement)
+    sim_printf("\n[DCL DL before] L = %#05x", cpu_state.reg_L);
+    sim_printf("\n[DCL DL before] target_address: %#05x", target_address);
             cpu_state.reg_L =
-                (cpu_state.reg_L - read_word(target_address)) & 0x7FFF;
+                (cpu_state.reg_L - read_word(target_address)) & 0x0FFFF;
+    sim_printf("\n[DCL DL after] L = %#05x", cpu_state.reg_L);
             break;
         case 0x37:
-            /* CSV */
-            CSV_instr(target_address);
+            /* CSV in DL mode */
+            CSV_instr(read_word(target_address));
             break;
-        case 0x38: /* CLS */ 
-            call_section(target_address);
+        case 0x38: /* CLS in DL mode */ 
+            call_section(read_word(target_address));
             break;
         case 0x39:  // LDR DL
             case_instr_xDR(inst);
@@ -491,7 +491,7 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
             shift_instr(inst, mode, target_address);
             break;
         case 0x3D:
-            test_and_set(mode, target_address);
+            test_and_set(0x03, target_address); // 0x03 is DL
             break;
         case 0x3E:
         case 0x3F:
@@ -515,7 +515,7 @@ void group_3_shift_DL(uint16 inst, uint32 mode) {
     uint16 count;
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
     uint16 disp = inst & I_DISP_MASK;
-    t_addr target_address = (cpu_state.reg_L + disp) & 0x7FFF;
+    t_addr target_address = (cpu_state.reg_L + disp) & 0x0FFFF;
     switch (opcode) {
 	    case 0x30: {
 		/* SHR - Shift Register (DL mode: shift word read from memory) */
@@ -580,7 +580,7 @@ uint16 group_1_DG(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    target_address = (cpu_state.reg_G + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_G + disp) & 0x0FFFF;
     t_value target_value = read_word(target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
@@ -608,11 +608,11 @@ uint16 group_2_DG(uint16 inst, uint32 mode) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    target_address = (cpu_state.reg_G + disp) & 0x7FFF;
+    target_address = (cpu_state.reg_G + disp) & 0x0FFFF;
     if(opcode == 0x50) {
             /* DLD - Double Load */
             cpu_state.reg_E = read_word(target_address);
-            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x0FFFF);
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
@@ -644,7 +644,7 @@ uint16 group_1_IL(uint16 inst) {
      *    "LDA", "LDE", "LDX", "EOR", "LEA", "ADD", "SUB", "IOR",
      *    "DIV", "AND", "CPS", "CMP", "MUL", "LBL", "LBR", "LBX",
      *
-     *  Y = (G' + mem[L + D]) & 0x7FFF
+     *  Y = (G' + mem[L + D]) & 0x0FFFF
      *  Byte, word or double-word located anywhere and pointed at through the
      * local segment.
      */
@@ -654,7 +654,7 @@ uint16 group_1_IL(uint16 inst) {
     uint16 ret_code =0;
 
     tmp = read_word(cpu_state.reg_L + disp);
-    target_address = (GPRIME + tmp) & 0x7FFF;
+    target_address = (GPRIME + tmp) & 0x0FFFF;
     t_value target_value = read_word(target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
@@ -674,7 +674,7 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
      *    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
      *    "SPA", "STS", "FAD", "FSU", "FMU", "FDV", "TRS", "MVS",
      *
-     *  Y = (G' + mem[L + D]) & 0x7FFF
+     *  Y = (G' + mem[L + D]) & 0x0FFFF
      *  Byte, word or double-word located anywhere and pointed at through the
      * local segment.
      */
@@ -685,11 +685,11 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    target_address = (GPRIME + tmp) & 0x7FFF;
+    target_address = (GPRIME + tmp) & 0x0FFFF;
     if(opcode == 0x70) {
             /* DLD - Double Load */
             cpu_state.reg_E = read_word(target_address);
-            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x0FFFF);
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
@@ -710,6 +710,7 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
 
 /*
  * Find effective address for instructions in 8XXX form
+ * IGX: Y=(D+(G)) +(G) +(X)
  */
 uint16 group_1_IGX(uint16 inst) {
     /*
@@ -729,8 +730,8 @@ uint16 group_1_IGX(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    tmp = read_word(cpu_state.reg_G + disp);
-    target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x7FFF;
+    tmp = read_word(cpu_state.reg_G + disp); // tmp = (D+(G))
+    target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x0FFFF; // IGX = tmp +(G) +(X)
     t_value target_value = read_word(target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
@@ -739,6 +740,7 @@ uint16 group_1_IGX(uint16 inst) {
 
 /*
  * Find effective address for instructions in 9XXX form
+ * IGX: Y=(D+(G)) +(G) +(X)
  */
 uint16 group_2_IGX(uint16 inst, uint32 mode) {
     /*
@@ -759,12 +761,12 @@ uint16 group_2_IGX(uint16 inst, uint32 mode) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    tmp = read_word(cpu_state.reg_G + disp);
-    target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x7FFF;
+    tmp = read_word(cpu_state.reg_G + disp); // tmp = (D+(G))
+    target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x0FFFF; // IGX = tmp +(G) +(X)
     if(opcode == 0x90) {
             /* DLD - Double Load */
             cpu_state.reg_E = read_word(target_address);
-            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x0FFFF);
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
@@ -806,7 +808,7 @@ uint16 group_1_ILX(uint16 inst) {
     uint16 ret_code =0;
 
     tmp = read_word(cpu_state.reg_L + disp);
-    target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x7FFF;
+    target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x0FFFF;
     t_value target_value = read_word(target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
     return ret_code;
@@ -835,11 +837,11 @@ uint16 group_2_ILX(uint16 inst, uint32 mode) {
     uint16 ret_code =0;
 
     tmp = read_word(cpu_state.reg_L + disp);
-    target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x7FFF;
+    target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x0FFFF;
     if(opcode == 0xB0) {
             /* DLD - Double Load */
             cpu_state.reg_E = read_word(target_address);
-            cpu_state.reg_A = read_word((target_address + 2) & 0x7FFF);
+            cpu_state.reg_A = read_word((target_address + 2) & 0x0FFFF);
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
@@ -885,10 +887,14 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    target_address = (disp) & 0x0FF;
+    sim_printf("\n[group_3_PX] X: %#05x", cpu_state.reg_X);
+    target_address = (disp + cpu_state.reg_X); // without  & 0x0FFFF because it breaks PX
     switch (opcode) {
-        case 0xE0:
-        case 0xE1:
+        case 0xE0: // Shift variants in PX mode
+            group_3_shift_PX(inst, mode);
+            break;
+
+        case 0xE1: // SRG variants in PX mode
             group_3_shift_PX(inst, mode);
             break;
 
@@ -896,32 +902,38 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
          * (Y) = D+(reg_X)
          *  Y = (P)
          */
-        case 0xE2:  // ICX PX, reg_X register contents is incremented by the
-                    // content of memory pointed by reg_X
-            value = read_word(cpu_state.reg_X);
-            cpu_state.reg_X = (cpu_state.reg_X + value) & 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_X);
-            break;
-        case 0xE3:  // DCX PX, reg_X register contents is decremented by the
-                    // content of memory pointed by reg_X
-            value = read_word(cpu_state.reg_X);
-            cpu_state.reg_X = (cpu_state.reg_X - value) & 0x7FFF;
-            set_condition_codes_load(cpu_state.reg_X);
-            break;
-        case 0xE4:
-            break;
-        case 0xE5:  // ICL PX, reg_L register contents is incremented by the
-                    // content of memory pointed by reg_X
-            value = read_word(cpu_state.reg_X);
-            cpu_state.reg_L = (cpu_state.reg_L + value) & 0x7FFF;
-            break;
-        case 0xE6:  // DCL PX, reg_L register contents is decremented by the
-                    // content of memory pointed by reg_X
-            value = read_word(cpu_state.reg_X);
-            cpu_state.reg_L = (cpu_state.reg_L - value) & 0x7FFF;
-            break;
+	case 0xE2: // ICX PX
+    sim_printf("\n[ICX PX before] X: %#05x", cpu_state.reg_X);
+    sim_printf("\n[ICX PX before] target_address: %#05x", target_address);
+	    cpu_state.reg_X = (cpu_state.reg_X + target_address) & 0x0FFFF;
+    sim_printf("\n[ICX PX after] X: %#05x", cpu_state.reg_X);
+	    set_condition_codes_load(cpu_state.reg_X);
+	    break;
+	    
+	case 0xE3: // DCX PX
+    sim_printf("\n[DCX PX before] X = %#05x", cpu_state.reg_X);
+    sim_printf("\n[DCX PX before] target_address: %#05x", target_address);
+	    cpu_state.reg_X = (cpu_state.reg_X - target_address); // Removed  & 0x0FFFF because arithmetic is on all 16 bits
+    sim_printf("\n[DCX PX after] X = %#05x", cpu_state.reg_X);
+	    set_condition_codes_load(cpu_state.reg_X);
+	    break;
+	    
+	case 0xE4: // opcode not implemented
+	    break;
+
+	case 0xE5: // ICL PX
+	    cpu_state.reg_L = (cpu_state.reg_L + target_address) & 0x0FFFF;
+	    break;
+	    
+	case 0xE6: // DCL PX
+    sim_printf("\n[DCL PX before] L = %#05x", cpu_state.reg_L);
+    sim_printf("\n[DCL PX before] target_address: %#05x", target_address);
+	    cpu_state.reg_L = (cpu_state.reg_L - target_address); // Removed  & 0x0FFFF because arithmetic is on all 16 bits
+    sim_printf("\n[DCL PX after] X = %#05x", cpu_state.reg_X);
+	    break;
+	    
         case 0xE7:
-            /* CSV */
+            /* CSV in PX mode */
             CSV_instr(target_address);
             break;
 
@@ -933,6 +945,10 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
             case_instr_xDR(inst);
             break;
 
+	case 0xEA:  // STR PX
+	    case_instr_xDR(inst);
+	    break;
+    
         case 0xEB:
             /* LDP LoaD memory Protection */
             load_mem_protect(mode, target_address);
@@ -941,6 +957,17 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
         case 0xEC:  // Shift special
             shift_instr(inst, mode, target_address);
             break;
+            
+	case 0xED: // TES PX
+            test_and_set(0x0E, target_address); // 0x0E is PX
+	    break;
+
+	case 0xEE: // opcode not implemented
+	    break;
+
+	case 0xEF: // opcode not implemented
+	    break;
+
     }
     return ret_code;
 }
@@ -955,12 +982,12 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
 void group_3_Shift_P(uint16 inst, uint32 mode) {
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
     uint16 disp = inst & I_DISP_MASK;
-    uint8 count = disp & 0x1F;
 
-    srg_op_t srg_op = disp & 0xE0;
     switch (opcode) {
-        case 0xF0:
-            switch (srg_op) {
+        case 0xF0: {
+            shift_type_t type = (disp >> 5) & 0x07;
+            uint8 count = disp & 0x1F;
+            switch (type) {
                 case SHIFT_SLLS:
                     cpu_state.reg_A = shift_lls(cpu_state.reg_A, count);
                     break;
@@ -987,23 +1014,39 @@ void group_3_Shift_P(uint16 inst, uint32 mode) {
                     break;
             }
             set_condition_codes_load(cpu_state.reg_A);
-            break;
+        } break;
 
         case 0xF1:
             set_register(inst, mode);
             break;
+
+        /* 0xF2..0xFF are handled by group_3_P directly, not here. */
     }
 }
 
+// Use a word located at Y2 memory address to specify the shift type and the number of shift steps.
+// (Y}=D+(X)
+    /*
+     *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *      |1  1  1 | 0| x x  x  x |     displacement      |	instruction word
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *	    +
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *      | x  x  x  x  x x  x  x |  type  |     count    |   word at target 
+     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+     *    (Class 1 - PX addressing mode)
+     *    "SHR", "SRG", "ICX", "DCX", "",    "ICL", "DCL", "CSV",
+     */
 void group_3_shift_PX(uint16 inst, uint32 mode) {
-    uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
-    uint16 disp = inst & I_DISP_MASK;
-    srg_op_t srg_op = disp & 0x1E;
+	uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF; uint16 disp = inst 
+	& I_DISP_MASK; uint16 param = (disp + cpu_state.reg_X) & 0xFF; 
+	// specify the shift type and the number of shift steps.
 
     switch (opcode) {
 	    case 0xE0: {
-		shift_type_t type = (disp >> 5) & 0x07;
-		uint8 count = disp & 0x1F;
+		shift_type_t type = (param >> 5) & 0x07;
+		uint8 count = param & 0x1F;
 		switch (type) {
 		    case SHIFT_SLLS:
 		        cpu_state.reg_A = shift_lls(cpu_state.reg_A, count);
@@ -1041,7 +1084,6 @@ void group_3_shift_PX(uint16 inst, uint32 mode) {
 }
 
 /* ========== P Mode System Instructions (F0-FF) ========== */
-// FIXME many bugs
 /*
  * Find effective address for instructions in FXXX form
  */
@@ -1135,23 +1177,23 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
             group_3_Shift_P(inst, mode);
             break;
         case 0xF2:  // ICX P, reg_X register contents is incremented by disp
-            cpu_state.reg_X = (cpu_state.reg_X + target_address) & 0x7FFF;
+            cpu_state.reg_X = (cpu_state.reg_X + target_address) & 0x0FFFF;
             set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0xF3:  // DCX P, reg_X register contents is decremented by disp
-            cpu_state.reg_X = (cpu_state.reg_X - target_address) & 0x7FFF;
+            cpu_state.reg_X = (cpu_state.reg_X - target_address) & 0x0FFFF;
             set_condition_codes_load(cpu_state.reg_X);
             break;
         case 0xF4:
             break;
         case 0xF5:  // ICL P, reg_L register contents is incremented by disp
-            cpu_state.reg_L = (cpu_state.reg_L + target_address) & 0x7FFF;
+            cpu_state.reg_L = (cpu_state.reg_L + target_address) & 0x0FFFF;
             break;
         case 0xF6:  // DCL P, reg_L register contents is decremented by disp
-            cpu_state.reg_L = (cpu_state.reg_L - target_address) & 0x7FFF;
+            cpu_state.reg_L = (cpu_state.reg_L - target_address) & 0x0FFFF;
             break;
         case 0xF7:
-            /* CSV */
+            /* CSV in P mode */
             CSV_instr(target_address);
             break;
 
@@ -1176,7 +1218,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
             shift_instr(inst, mode, target_address);
             break;
         case 0xFD:
-            test_and_set(mode, target_address);
+            test_and_set(0x0F, target_address); // 0x0F is P
             break;
         case 0xFE:
         case 0xFF:
@@ -1205,8 +1247,8 @@ uint16 group_4_RP(uint16 inst) {
     uint16 ret_code =0;
 
     // The PC is already 2 steps ahead, so we substract 2
-    cpu_state.reg_P = cpu_state.reg_P - 2;
-    target_address = cpu_state.reg_P + (disp << 1); // (reg_P) + (2 * disp),'2 *' is << 1, not << 2
+//    cpu_state.reg_P = cpu_state.reg_P - 2;
+    target_address = ((cpu_state.reg_P - 2) + (disp << 1)) & 0x0FFFF; // (reg_P) + (2 * disp),'2 *' is << 1, not << 2
     switch (opcode) {
         case 0xC0:
             /* 
@@ -1216,14 +1258,17 @@ uint16 group_4_RP(uint16 inst) {
             if (cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF; // If Carry indicator is reset (O), execution proceeds in sequence.
+                ; // If Carry indicator is reset (O), execution proceeds in sequence.
             break;
         case 0xC1:
             /* BRX
             * Y-address is loaded into P-register and execution proceeds at Y-address.
             * (P) + (2 * disp) + (2 * (X)) -> (P)
 	    */
-            cpu_state.reg_P = (target_address + (cpu_state.reg_X << 2)) & 0x7FFF;
+    sim_printf("\n[group_4_RP] target_address: %#05x\n", target_address);
+    sim_printf("\n[group_4_RP] X: %#05x\n", cpu_state.reg_X);
+            cpu_state.reg_P = (target_address + (cpu_state.reg_X << 1)) & 0x0FFFF;
+    sim_printf("\n[group_4_RP] P: %#05x\n", cpu_state.reg_P);
             break;
         case 0xC2:
             /* BOT - Branch on Overflow True (RP mode) */
@@ -1231,35 +1276,35 @@ uint16 group_4_RP(uint16 inst) {
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xC3:
             /* BCF - Branch on Carry False (RP mode) */
             if (!cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xC4:
             /* BAN - Branch on cpu_state.reg_A Negative (RP mode) */
             if (cpu_state.reg_A & 0x8000)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xC5:
             /* BAZ - Branch on cpu_state.reg_A Zero (RP mode) */
             if (cpu_state.reg_A == 0)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xC6:
             /* BOF - Branch on Overflow False (RP mode) */
             if (!cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xC7:
             /* 
@@ -1290,8 +1335,8 @@ uint16 group_4_RM(uint16 inst) {
     uint16 target_address;
 
     // The PC is already 2 steps ahead, so we substract 2
-    cpu_state.reg_P = cpu_state.reg_P - 2;
-    target_address = cpu_state.reg_P - (disp << 1);
+//    cpu_state.reg_P = cpu_state.reg_P - 2;
+    target_address = ((cpu_state.reg_P - 2) - (disp << 1)) & 0x0FFFF;
     switch (opcode) {
         case 0xC8:
             /* 
@@ -1302,14 +1347,20 @@ uint16 group_4_RM(uint16 inst) {
             if (cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF; // If Carry indicator is reset (O), execution proceeds in sequence.
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xC9:
             /* BRX
             * Y-address is loaded into P-register and execution proceeds at Y-address.
             * (P) - (2 * disp) - (2 * (X)) -> (P)
-	    */
-            cpu_state.reg_P = (target_address - (cpu_state.reg_X << 2)) & 0x7FFF;
+            * 710 - (2 * 1) - (2 * 2)
+			*/
+    sim_printf("\n[group_4_RM] target_address: %#05x\n", target_address);
+    sim_printf("\n[group_4_RM] P: %#05x\n", cpu_state.reg_P);
+    sim_printf("\n[group_4_RM] disp: %#05x\n", disp);
+    sim_printf("\n[group_4_RM] X: %#05x\n", cpu_state.reg_X);
+            cpu_state.reg_P = (cpu_state.reg_P - (disp << 1) - (cpu_state.reg_X << 1) -2) & 0x0FFFF; // minus 2 because P is already at P+2
+    sim_printf("\n[group_4_RM] P: %#05x\n", cpu_state.reg_P);
             break;
         case 0xCA:
             /* BOT */
@@ -1317,34 +1368,34 @@ uint16 group_4_RM(uint16 inst) {
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xCB:
             /* BCF RM mode */
             if (!cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xCC:
             if (cpu_state.reg_A & 0x8000)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xCD:
             /* BAN */
             if (cpu_state.reg_A == 0)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xCE:
             /* BOF */
             if (!cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ; // Test fails, execution proceeds in sequence.
             break;
         case 0xCF:
             /* 
@@ -1377,18 +1428,22 @@ uint16 group_5_IL(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    tmp = (cpu_state.reg_L + disp) & 0x7FFF;
-    target_address = GPRIME + tmp;
-    
+    // The formula is Y = G' + M[(L)+D], not Y = M[G' + (L) + D]
+//    tmp = (cpu_state.reg_L + disp) & 0x0FFFF;
+//    target_address = GPRIME + tmp;
+    tmp = read_word(cpu_state.reg_L + disp);
+    target_address = (GPRIME + tmp) & 0xFFFF;
     switch (opcode) {
         case 0xD0:
             /* 
             * BCT - Branch on Carry True (IL mode)
             */
+    sim_printf("\n[group_5_IL] BCT 1 target_address: %#05x", target_address);
             if (cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
+    sim_printf("\n[group_5_IL] BCT 2 target_address: %#05x", target_address);
             break;
         case 0xD1:
             /* 
@@ -1397,7 +1452,7 @@ uint16 group_5_IL(uint16 inst) {
             * IL: (disp + (L) + (X)) + G' -> (P)
             */
             t_addr ind_pointer = read_word(cpu_state.reg_L + cpu_state.reg_X + disp);
-            cpu_state.reg_P = (GPRIME + ind_pointer) & 0x7FFF;
+            cpu_state.reg_P = (GPRIME + ind_pointer) & 0x0FFFF;
             break;
         case 0xD2:
             /* BOT */
@@ -1405,40 +1460,41 @@ uint16 group_5_IL(uint16 inst) {
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xD3:
             /* BCF IL mode */
             if (!cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xD4:
             /* BAN */
             if (cpu_state.reg_A & 0x8000)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xD5:
             /* BAZ */
             if (cpu_state.reg_A == 0)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xD6:
             /* BOF */
             if (!cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xD7:
             /* 
             * BRU - Branch Unconditional (IL mode) 
             */
+    sim_printf("\n[group_5_IL] BRU target_address: %#05x", target_address);
             cpu_state.reg_P = target_address;
             break;
     }
@@ -1466,7 +1522,7 @@ uint16 group_5_IG(uint16 inst) {
     uint16 ret_code =0;
 
     tmp = read_word(cpu_state.reg_G + disp);
-    target_address = (GPRIME + tmp) & 0x7FFF;
+    target_address = (GPRIME + tmp) & 0x0FFFF;
     switch (opcode) {
         case 0xD8:
             /* 
@@ -1475,7 +1531,7 @@ uint16 group_5_IG(uint16 inst) {
             if (cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xD9:
             /* 
@@ -1484,7 +1540,7 @@ uint16 group_5_IG(uint16 inst) {
             * IG: (disp + (G) + (X)) + G' -> (P)
             */
             t_addr ind_pointer = read_word(cpu_state.reg_G + cpu_state.reg_X + disp);
-            cpu_state.reg_P = (GPRIME + ind_pointer) & 0x7FFF;
+            cpu_state.reg_P = (GPRIME + ind_pointer) & 0x0FFFF;
             break;
         case 0xDA:
             /* BOT */
@@ -1492,35 +1548,35 @@ uint16 group_5_IG(uint16 inst) {
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xDB:
             /* BCF IG mode */
             if (!cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xDC:
             /* BAN */
             if (cpu_state.reg_A & 0x8000)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xDD:
             /* BAZ */
             if (cpu_state.reg_A == 0)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xDE:
             /* BOF */
             if (!cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
-                cpu_state.reg_P = (cpu_state.reg_P + 2) & 0x7FFF;
+                ;
             break;
         case 0xDF:
             /* 

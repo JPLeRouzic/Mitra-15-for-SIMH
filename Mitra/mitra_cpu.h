@@ -83,6 +83,16 @@
 #define SUSP_INTERNAL_PWR   3
 
 /* ========== Type Definitions ========== */
+/* double_to_mitra() reports whether the conversion from standard double float to Mitra-15's float format succeeded, 
+* and if not, in which direction it failed.
+*/
+typedef enum {
+    MITRA_FP_OK        = 0,   /* representable, non-zero */
+    MITRA_FP_ZERO      = 1,   /* value is zero */
+    MITRA_FP_OVERFLOW  = 2,   /* |v| too large */
+    MITRA_FP_UNDERFLOW = 3   /* |v| too small but non-zero */
+} fp_status_t;
+
 typedef struct {
 	    uint16 U_reg;     /* Universal register */
 	    uint8 J_reg;     /* J register (bits 0-4 block selector: bits 5 to 7 register, MITRA 15S_15M/15 Manuel de microprogrammation) */
@@ -210,7 +220,7 @@ static void set_condition_codes_compare(uint16 a, uint16 b, uint16 result);
 static void set_condition_codes_arithmetic(uint16 result, uint16 carry, uint16 overflow);
 static void mul32(uint16 a, uint16 b, uint16 * high, uint16 * low);
 static int div32(uint16 high, uint16 low, uint16 divisor, uint16 * quot, uint16 * rem);
-static t_bool double_to_mitra(double v, uint16 * A, uint16 * E);
+static fp_status_t double_to_mitra(double v, uint16 *A, uint16 *E);
 static double mitra_to_double(uint16 A, uint16 E);
 const char *mitra_trap_name(int trap);
 int mitra_resolve_trap_cause(uint32 trp_req_bits);
@@ -263,6 +273,8 @@ void shift_rld(uint16* E, uint16* A, int count);
 void shift_sad(uint16* E, uint16* A, int count);
 void shift_lcd(uint16* E, uint16* A, int count);
 void shift_rcd(uint16* E, uint16* A, int count);
+void instr_LDR(uint16 reg_block, uint16 reg_num);
+void instr_STR(uint16 reg_block, uint16 reg_num);
 
 
 #endif
