@@ -128,8 +128,8 @@ Bits 0-2 do not completely specify the address mode:
 7	111:	DG, IL, PX, P,
 */
 t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
-//    sim_printf(
-//        "\none_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, modeSIMH, *trappc);
+    sim_printf(
+        "\none_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, modeSIMH, *trappc);
 
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0xFF;
     uint16 disp = inst & I_DISP_MASK;
@@ -268,13 +268,13 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
             break;
     }
 
-    /*
+    
     sim_printf(
         "\nregs-after : P=%#010x A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x "
         "L=%#010x G=%#010x\n",
         cpu_state.reg_P, cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
         cpu_state.C, cpu_state.OV, cpu_state.reg_L, cpu_state.reg_G);
-    */
+    
     sim_printf(
         "\nregs-after : A=%#010x E=%#010x\n", cpu_state.reg_A, cpu_state.reg_E);
     /* Check for traps after instruction execution */
@@ -357,7 +357,7 @@ uint16 group_2_DL(uint16 inst, uint32 mode) {
     target_address = (cpu_state.reg_L + disp) & 0x0FFFF;
 
     if(opcode == 0x10) {
-            /* DLD - Double Load */
+            /* DLD DL - Double Load */
             cpu_state.reg_E = read_word(target_address);
             cpu_state.reg_A = read_word((target_address + 2) & 0x0FFFF);
             set_condition_codes_load(cpu_state.reg_E);
@@ -616,8 +616,8 @@ uint16 group_2_DG(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if(opcode == 0x5A) {
-            // FAD DG, Floating ADd (option)
+    else if((opcode == 0x5A) || (opcode == 0x5B) || (opcode == 0x5C) || (opcode == 0x5D) {
+            // FAD, FSU, FMU, FDV in DG mode, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
     	}
@@ -655,6 +655,7 @@ uint16 group_1_IL(uint16 inst) {
 
     tmp = read_word(cpu_state.reg_L + disp);
     target_address = (GPRIME + tmp) & 0x0FFFF;
+    
     t_value target_value = read_word(target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
@@ -693,12 +694,12 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if(opcode == 0x7A) {
-            // FAD IL, Floating ADd (option)
+    else if((opcode == 0x7A) || (opcode == 0x7B) || (opcode == 0x7C) || (opcode == 0x7D) {
+            // FAD, FSU, FMU, FDV in DG mode, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
     	}
-    else if(opcode == 0x7F) {
+     else if(opcode == 0x7F) {
             // MVS IL, Floating ADd (option)
     	    string_proc(inst, mode, target_address);
     	    return ret_code;
@@ -770,8 +771,8 @@ uint16 group_2_IGX(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if(opcode == 0x9A) {
-            // FAD IGX, Floating ADd (option)
+    else if((opcode == 0x9A) || (opcode == 0x9B) || (opcode == 0x9C) || (opcode == 0x9D) {
+            // FAD, FSU, FMU, FDV in DG mode, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
     	}
@@ -845,8 +846,8 @@ uint16 group_2_ILX(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if(opcode == 0xBA) {
-            // FAD ILX, Floating ADd (option)
+    else if((opcode == 0xBA) || (opcode == 0xBB) || (opcode == 0xBC) || (opcode == 0xBD) {
+            // FAD, FSU, FMU, FDV in DG mode, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
     	}
@@ -1119,7 +1120,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
                 cpu_state.MA = 0;
                 break;
 
-            case 0x01: /* DIT - Deactivate Interrupt */
+            case 0x01: /* DIT - Deactivate normal Interrupt */
                 return mitra_interrupt_return(FALSE);
                 break;
 
@@ -1521,8 +1522,18 @@ uint16 group_5_IG(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
+    sim_printf("\n[group_5_IG] reg_P = %d", cpu_state.reg_P);        
     tmp = read_word(cpu_state.reg_G + disp);
+    sim_printf("\n[group_5_IG] reg_G = %d", cpu_state.reg_G);
+    sim_printf("\n[group_5_IG] target_address = %d", disp);
+    sim_printf("\n[group_5_IG] tmp = %d", tmp);
     target_address = (GPRIME + tmp) & 0x0FFFF;
+    sim_printf("\n[group_5_IG] target_address = %d", target_address);
+    
+    tmp = read_word(cpu_state.reg_L + disp);
+    target_address = (GPRIME + tmp) & 0xFFFF;
+    
+    
     switch (opcode) {
         case 0xD8:
             /* 
@@ -1533,6 +1544,7 @@ uint16 group_5_IG(uint16 inst) {
             else
                 ;
             break;
+            
         case 0xD9:
             /* 
             * BRX 
@@ -1542,6 +1554,7 @@ uint16 group_5_IG(uint16 inst) {
             t_addr ind_pointer = read_word(cpu_state.reg_G + cpu_state.reg_X + disp);
             cpu_state.reg_P = (GPRIME + ind_pointer) & 0x0FFFF;
             break;
+            
         case 0xDA:
             /* BOT */
             sim_printf("\nDA, Overflow: %#010x\n", cpu_state.OV);
@@ -1550,6 +1563,7 @@ uint16 group_5_IG(uint16 inst) {
             else
                 ;
             break;
+            
         case 0xDB:
             /* BCF IG mode */
             if (!cpu_state.C)
@@ -1557,6 +1571,7 @@ uint16 group_5_IG(uint16 inst) {
             else
                 ;
             break;
+            
         case 0xDC:
             /* BAN */
             if (cpu_state.reg_A & 0x8000)
@@ -1564,6 +1579,7 @@ uint16 group_5_IG(uint16 inst) {
             else
                 ;
             break;
+            
         case 0xDD:
             /* BAZ */
             if (cpu_state.reg_A == 0)
@@ -1571,6 +1587,7 @@ uint16 group_5_IG(uint16 inst) {
             else
                 ;
             break;
+            
         case 0xDE:
             /* BOF */
             if (!cpu_state.OV)
@@ -1578,10 +1595,13 @@ uint16 group_5_IG(uint16 inst) {
             else
                 ;
             break;
+            
         case 0xDF:
             /* 
             * BRU - Branch Unconditional (IG mode) 
             */
+            sim_printf("\n[group_5_IG] target_address = %d", target_address);
+            sim_printf("\n[group_5_IG] 1 reg_P = %d", cpu_state.reg_P);        
             cpu_state.reg_P = target_address;
             break;
     }

@@ -1,6 +1,7 @@
 #include "mitra_cpu.h"
 #include "mitra_defs.h"
 #include "mitra_io.h"
+#include <stdint.h>
 
 int get_highest_interrupt(void);
 
@@ -240,7 +241,12 @@ static int div32(uint16 high, uint16 low, uint16 divisor, uint16* quot,
                  uint16* rem) {
     int32_t dividend = ((int32_t)(int16_t)high << 16) | (uint16_t)low;
     int16_t dvsr = (int16_t)divisor;
-    if (dvsr == 0) return -1;
+    // test for division by zero
+    if (dvsr == 0) 
+		return -1;
+	// test for overflow
+	if (q < INT16_MIN || q > INT16_MAX)
+		return -2;
     *quot = (uint16_t)(dividend / dvsr);
     *rem = (uint16_t)(dividend % dvsr);
     return 0;
@@ -395,20 +401,44 @@ static int normalize(uint16* E, uint16* A, uint16* X, int max_steps) {
     return steps;
 }
 
-/* Compute parity (PTY) - count set bits shifted out */
+/* Compute parity (PTY) - count set bits shifted out 
+ * 
+ *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+ *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *      | x  x  x  x| 1 1  0  0 | 0  1  0|    count     |
+ *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *
+ * Function: 
+ * (A) = shifted (A)
+ * (E) = number of set bits shifted out of (A)
+ * A register contents shifted circularly in positions to the left. 
+ * When the instruction is over, E register contains the number of set bits which have been shifted out of A.
+ */
 static uint16 compute_parity(uint16* A, int count) {
-	uint16 result = *A; uint16 parity_count = 0; int i; for (i = 0; i < 
-	count; i++) {
-		uint16 shifted_out = (result >> 15) & 1;
+	uint16 result = *A;
+	uint16 parity_count = 0;
+	uint16 shifted_out = 0;
+	
+	for (int i = 0; i < count; i++) {
+        /* Bit shifted out from the left */
+        shifted_out = (result & 0x8000) >> 15;
+		result = result << 1;
+        /* As it is a circular shift left shifted out must be reintroduced at right */
+        result = result | shifted_out;
 
-		if (shifted_out)
-			parity_count++;
+        /* Count set bits */
+        if (shifted_out)
+            parity_count++;
+    }
 
-		result = (result << 1) | shifted_out;    
-		}
     *A = result;
-    cpu_state.C = (result & 0x8000) ? 1 : 0;
-    cpu_state.OV = 0;
+
+    /* C = last bit shifted out */
+    cpu_state.C = shifted_out;
+
+    /* OV = parity of number of 1 bits shifted out */
+    cpu_state.OV = parity_count & 1;
+
     return parity_count;
 }
 
@@ -692,21 +722,17 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
             sim_printf("\nshc_type: %#010x\n", shc_type);
             count = shc_word & 0x1F;
             switch (shc_type) {
-                case 0:
+                case 0: // SLLD
                     shift_lld(&cpu_state.reg_E, &cpu_state.reg_A, count);
                     break;
-                case 1: // DITR
-                    if (mode != 1) 
-                    	return MM_PRVINS;
-                    if (!(cpu_unit.flags & UNIT_HSINT)) 
-                    	return MM_INVINS;
-                    cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
-                    mitra_interrupt_return(true);
+                case 1: // ???
                     break;
-                case 2:
+                case 2:  // PTY, ParitY check in A
                     cpu_state.reg_E = compute_parity(&cpu_state.reg_A, count);
-                    break;
-                case 3:
+                    // no break as it would execute set_condition_codes_load()
+                    return 0;
+
+                case 3: // ???
                     if (mode != 1) return MM_PRVINS;
                     cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
                     cpu_state.curr_int_lvl = 0;
@@ -714,13 +740,21 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                 case 4:  // SRLD
                     shift_rld(&cpu_state.reg_E, &cpu_state.reg_A, count);
                     break;
-                case 5:
+                case 5: // ???
                     break;
-                case 6:
+                case 6: // NLZ
                     normalize(&cpu_state.reg_E, &cpu_state.reg_A, &cpu_state.reg_X, count);
+                    // no break as it would execute set_condition_codes_load()
+                    return 0;
+
+                case 7: // ???
                     break;
-                case 7:
-                    break;
+                    
+                default:
+					sim_printf("\n[shift_instr] case 0x3C unknown opcode %#04x, inst %#06x\n",
+						   opcode, inst);
+					return TRAP_II;
+                    
             }
             set_condition_codes_load(cpu_state.reg_A);
         }
@@ -734,14 +768,17 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                 case 0:
                     shift_lld(&cpu_state.reg_E, &cpu_state.reg_A, count);
                     break;
-                case 1:
-                    if (mode != 1) return MM_PRVINS;
-                    cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
-                    cpu_state.curr_int_lvl = 0;
+                case 1: // DITR PX, deactivate high-speed interrupt 
+                    if (mode != 1) 
+						return MM_PRVINS;
+//                    cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
+//                    cpu_state.curr_int_lvl = 0;
+					mitra_interrupt_return(FALSE);
                     break;
                 case 2:  // PTY, ParitY check in A
-                    cpu_state.reg_A = compute_parity(&cpu_state.reg_A, count);
-                    break;
+                    cpu_state.reg_E = compute_parity(&cpu_state.reg_A, count);
+                    // no break as it would execute set_condition_codes_load()
+                    return 0;
                 case 3:
                     if (mode != 1) return MM_PRVINS;
                     cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
@@ -760,9 +797,17 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                     number of shift steps.
                     */
                     normalize(&cpu_state.reg_E, &cpu_state.reg_A, &cpu_state.reg_X, count);
-                    break;
+                    // no break as it would execute set_condition_codes_load()
+                    return 0;
+
                 case 7:
                     break;
+                    
+                default:
+					sim_printf("\n[shift_instr] case 0xEC unknown opcode %#04x, inst %#06x\n",
+						   opcode, inst);
+					return TRAP_II;
+                    
             }
             set_condition_codes_load(cpu_state.reg_A); // reg_A
         }
@@ -774,14 +819,19 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                 case 0:
                     shift_lld(&cpu_state.reg_E, &cpu_state.reg_A, count);
                     break;
-                case 1:
-                    if (mode != 1) return MM_PRVINS;
-                    cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
-                    cpu_state.curr_int_lvl = 0;
+                case 1: // DITR P, deactivate high-speed interrupt
+                    if (mode != 1) 
+						return MM_PRVINS;
+//                    cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
+//                    cpu_state.curr_int_lvl = 0;
+					mitra_interrupt_return(FALSE);
                     break;
-                case 2:
-                    cpu_state.reg_A = compute_parity(&cpu_state.reg_A, count);
-                    break;
+                    
+                case 2:  // PTY, ParitY check in A
+                    cpu_state.reg_E = compute_parity(&cpu_state.reg_A, count);
+                    // no break as it would execute set_condition_codes_load()
+                    return 0;
+                    
                 case 3:
                     if (mode != 1) return MM_PRVINS;
                     cpu_state.intrpt_mask &= ~(1u << cpu_state.curr_int_lvl);
@@ -800,9 +850,17 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                     number of shift steps.
                     */
                     normalize(&cpu_state.reg_E, &cpu_state.reg_A, &cpu_state.reg_X, count);
-                    break;
+                    // no break as it would execute set_condition_codes_load()
+                    return 0;
+
                 case 7:
                     break;
+                    
+                default:
+					sim_printf("\n[shift_instr] case 0xFC unknown opcode %#04x, inst %#06x\n",
+						   opcode, inst);
+					return TRAP_II;
+
             }
             set_condition_codes_load(cpu_state.reg_A);
         }
@@ -1164,8 +1222,9 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst) 
             if (div32(cpu_state.reg_E, cpu_state.reg_A, mem_value,
                       &cpu_state.reg_A, &cpu_state.reg_E) != 0) {
                 cpu_state.OV = 1;
-            }
-            set_condition_codes_load(cpu_state.reg_A);
+            } else {
+				set_condition_codes_load(cpu_state.reg_A);
+			}
             break;
 
         case 0x09:
@@ -1182,8 +1241,8 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst) 
             /* CMP - Compare 
             	C	|OV	|	
             	0	|0	|	(A)> Y2
-		0	|1	|	(A)< Y2
-		1	|0	|	(A)= Y2
+				0	|1	|	(A)< Y2
+				1	|0	|	(A)= Y2
             */
 //    sim_printf("\n[CMP] carry = %#05x \n", cpu_state.C);
 //    sim_printf("\n[CMP] overflow = %#010x \n", cpu_state.OV);
@@ -1194,7 +1253,7 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst) 
 
         case 0x0C:
             /* MUL - Multiply */
-            if (!(cpu_unit.flags)) 
+            if (!(cpu_unit.flags & UNIT_MULDIV))
             	return MM_INVINS;
             mul32(cpu_state.reg_A, mem_value, &cpu_state.reg_E,
                   &cpu_state.reg_A);
@@ -1254,7 +1313,7 @@ uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst, t_addr target_addres
             sim_printf("\n[Complex_Mem_OP_Reg_To_Reg] opcode: %#010x\n", opcode);
     switch (opcode) {
         case 0x04:  // "LEA"
-            cpu_state.reg_A = (target_address - GPRIME) & 0x0FFFF;
+            cpu_state.reg_A = (target_address - cpu_state.reg_G) & 0x0FFFF;
             set_condition_codes_load(cpu_state.reg_A);
             break;
 
@@ -1569,7 +1628,8 @@ uint16 string_proc(uint16 inst, uint32 mode, t_addr target_address) {
                     uint8 b_moved = read_byte(cpu_state.reg_G + cpu_state.reg_A + alpha);
                     write_byte(target_address + alpha, b_moved);
                 }
-            cpu_state.reg_E = -1;
+        cpu_state.reg_E = -1;
+        break;
     
 	default:
 	    sim_printf("\n[string_proc] unknown opcode %#04x, inst %#06x\n",
@@ -1734,10 +1794,12 @@ uint16 test_and_set(uint32 mode, t_addr target_address) {
 /*
 * LDP
 *
-* - a 1-bit protection "lock" is associated with each memory word and may be set by a LDP instruction (LoaD Protection).
-* - the program status includes a PR-indicator which acts as a "key".
-* If the key value is 1 (override key), the program may gain access to all memory locatiom.
-* If the key value is 0, the program may only gain access to memory locations whose lock value is O
+* This feature provides full protection to any memory area against unwanted attemps to alter its contents.
+* The protection its assigned on a dynamic basis (LDP instruction): A protection "lock" is associated with every memory word. 
+* Besides, an indicator of the program status (PR) acts as a "key" : 
+* - when this indicator is set to I, the program is able to gain access to all memory locations; 
+* - otherwise the program can only gain access to unprotected areas whose lock value is O.
+* 
 * Function:
 For X varying 0 and (E)-1 {
 	N15 -> bp((A) + 2X)
@@ -1759,12 +1821,14 @@ Modified elements:
 uint16 load_mem_protect(uint32 mode, t_addr target_address) {
 	if (mode != 1) 
             	return MM_PRVINS;
-        int i = 0;
-	for (; i < cpu_state.reg_E; i=i+2) {
+    int i = 0;
+	for (; i < cpu_state.reg_E; i++) {
             // Load protection lock bit for this address
-            // The protection bit comes from target_address & 0x8000
+            MP[target_address] = read_word(cpu_state.reg_A) & 0x0001;
+            cpu_state.reg_A++;
+            target_address++;
             }
-        cpu_state.reg_A = i + cpu_state.reg_A;
-        cpu_state.reg_E = -1;
-        return 0;
+    cpu_state.reg_A = i + cpu_state.reg_A;
+    cpu_state.reg_E = -1;
+    return 0;
 }
