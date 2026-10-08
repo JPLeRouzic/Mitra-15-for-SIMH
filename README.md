@@ -4,31 +4,39 @@ https://ajovomultja.hu/mitra-15
 
 ## A Mitra-15 Simulator for SIMH
 
-This is a preliminary version. For now, my code compiles, but it is still not a true Mitra-15 simulator; rather, it is a tentative effort. Many thanks to Pascal Chour for the very useful documentation available on his website: https://www.pascalchour.fr/ressources/cii/mitra15.htm
+This is still a preliminary version, but it passes more than 200 tests on instruction set. Many thanks to Pascal Chour for the very useful documentation available on his website: https://www.pascalchour.fr/ressources/cii/mitra15.htm
 
-As my C is rusty (pun is intended) I started with an existing SDS 940 simulator for SIMH and slowly modified it towards Mitra-15's characteristics.
+As my C is rusty (pun is intended) I started with an existing SDS 940 simulator for SIMH and slowly modified it towards Mitra-15's characteristics. I did not used AI agents but I used the usual free chatbots Claude, ChatGPT, DeepSeek to analyze bugs and compare code and documentation. In roughly half the cases I agreed with the chatbots proposals.
 
-The Mitra-15 is a microcomputer that features interesting concepts, such as the ability to program input/output peripherals using microcode, instead of using an external mechanism such as DMA.
+The Mitra-15 is a 16-bit microcomputer that features interesting concepts, such as the ability to program input/output peripherals using microcode, instead of using an external mechanism such as DMA or tightly-coupled multiprocessor system (4 CPU at max) with shared memory. This was unusual on (relatively) low cost computers.
+But the Mitra-15 has no concept of virtual memory, this was offered on subsequent models such as the Mitra-125. I guess the usual memory size was 8 or 16K bytes and that 64K bytes was unusual. Memory was of tore type but ICs in CPUs were of the TTL family. The ALU used 74S181.
+The instruction set looks like its older sibling the CII 10070/SDS Sigma 7, but the small memory and few registers made the task of writing software much more difficult. The few registers, lack of stack and need to use base and indirection registers to access the full memory do not help.
 https://en.wikipedia.org/wiki/Mitra_15
 
-The Mitra-15 was a 16-bit minicomputer developed by **CII (Compagnie Internationale pour l'Informatique)** in the early 1970s. It was widely used in industrial automation, scientific computing, education, and military applications.
+The Mitra-15 was developed by **CII (Compagnie Internationale pour l'Informatique)** in the early 1970s. It was widely used in France and Hungary in industrial automation, scientific computing, education, and military applications.
+It seems that users easily developed many usual IO devices for the Mitra, including a tank simulator!
+https://youtu.be/AcQifPHcMLE?si=Ii36QjcK0Kx5ZTXY
+
+CII company did not lived long, in 1975 it was bought by Honeywell probably because CII had good knowledge of SDS hardware. Honeywell had a strong interest in the Sigma computer family. Honeywell did develop a computer very similar to the Mitra-15 in the same time line: The H316. Mitra family was then developed by another French company the SEMS.
+
 I never programmed on Mitra-15, but I learned CS on a CII 10070 and later I worked at France Telecom which had telephone exchanges piloted with the Mitra family.
 
-Although it was once widespread in France, very little software and documentation has survived. This project contributes to the preservation of this important part of computing history. 
+Although it was once widespread in France, very little software and documentation has survived. I guess it is because most user software were developed by customers and those companies were indeed reluctant to share trade secrets. 
+This project contributes to the preservation of this important part of computing history. 
 
 This Mitra-15 simulator is intended to eventually include:
 ```
-- System and optional instructions
+- System and optional instructions (done)
 - Extensive comments describing the original hardware behavior
-- SIMH console support
-- Memory management
-- Interrupt, fast interrupt, suspensions and trap systems
-* printer
+- SIMH console support (done)
+- Memory management (partly, memory protection is still lacking)
+- Interrupt, fast interrupt, suspensions and trap systems (done)
+* printer (done)
 * analogic interface
-* punched_tape
-* DRI fixed disk
+* punched_tape (done)
+* DRI fixed disk (done)
 * sagem fixed disk
-* card reader
+* card reader (done)
 * magnetic tape reader
 - Various I/O devices, but I lack documentation for many of those peripherals:
 * asynchronous channels 
@@ -44,9 +52,9 @@ To this day I did:
 - create code for common Mitra and CII devices
 - create a convincing (not tested) code for RD and WD instructions for simple communication with devices such as ASR33 or line printer.
 - create a convincing (not tested) code for DRI disks (UK's Data Recording Instrument) that uses the suspension system, the CII invention that aims at a similar goal as modern DMA.
-- create a test program.
-- test the branch instructions in RP (immediate in modern parlance) addressing mode, so at least this part should be correct.
-- I have also set out to reconstruct CII's MTR (Real-Time Monitor) from a hexadecimal dump found in a PDF file; however, as the OCR output is abysmal, I have to visually verify every single byte. This will likely be the only piece of original CII code against which my simulator is tested, as everything else will have to be inferred from the documentation. It is therefore crucial that this test be successful.
+- create a test program with around 250 instruction tests.
+
+I am planning to reconstruct CII's MTR (Real-Time Monitor) from a hexadecimal dump found in a PDF file; however, as the OCR output is abysmal, I have to visually verify every single byte. This will likely be the only piece of original CII code against which my simulator is tested, as everything else will have to be inferred from the documentation. It is therefore crucial that this test be successful.
 - It's not useful but I have also created a rudimentary assembler (not tested).
 
 On the long term I have plans to port RSX280 (RSX-11 clone) to the Mitra. Z80's BC and DE are similar to L and G registers, IX is an index register as Mitra's X, A and HL resemble to A and E. Main problems: Mitra has less registers, less addressing modes than the Z80, and it lacks a concept of a stack, which makes managing reentrancy complicated.
