@@ -19,7 +19,6 @@
  * Another streakingly similar computer to the Mitra-15 is the Honeywell 316 computer, Honeywell bought SDS's computer line and CII a few years after Mitra's design.
  * 
 
-   Copyright (c) 2001-2017, Robert M. Supnik
    Copyright (c) 2026, Jean-Pierre Le Rouzic contact@padiracinnovation.org
 
    Permission is hereby granted, free of charge, to any person obtaining a
@@ -138,8 +137,9 @@ extern t_stat op_sks (uint32 inst, uint32 *skp);
 */
 
 UNIT cpu_unit = {
-//    UDATA(NULL, UNIT_FIX + UNIT_BINK, MAX_MEM_WORDS)
-    UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV, MAX_MEM_WORDS) // Has optional divide
+//   UDATA(NULL, UNIT_FIX + UNIT_BINK, MAX_MEM_WORDS)
+   UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV, MAX_MEM_WORDS) // Has optional divide
+//     UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV + UNIT_EXTINS + UNIT_FP, MAX_MEM_WORDS) // Has instruction extended set plus floating point
 };
 
 /*
@@ -503,7 +503,7 @@ sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, va
 uint8 read_byte(t_addr va) {
     // The address is given for bytes, but M[] is a 16 bits array
     uint16 pa1 = VA_TO_PA(va);
-    uint16 word_addr = pa1 & 0x7FFE;	// The address is given for bytes, but M[] is a 16 bits array
+    uint16 word_addr = pa1 & 0xFFFE;	// The address is given for bytes, but M[] is a 16 bits array
     uint16 word = read_word(word_addr);
     uint8 byte = 0;
 
@@ -524,7 +524,7 @@ uint8 read_byte(t_addr va) {
 void write_byte(t_addr va, uint8 val) {
     // The address is given for bytes, but M[] is a 16 bits array
     uint16 pa1 = VA_TO_PA(va);
-    uint16 word_addr = pa1 & 0x7FFE;	// The address is given for bytes, but M[] is a 16 bits array
+    uint16 word_addr = pa1 & 0xFFFE;	// The address is given for bytes, but M[] is a 16 bits array
     uint16 word = read_word(word_addr);
     uint16 wordReass;
     if (va & 1) {

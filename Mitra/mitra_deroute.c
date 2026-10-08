@@ -1,3 +1,26 @@
+/* mitra_sys.c: CII Mitra 15/30 Simulator SCP Interface
+ * adapted from sds_sys.c
+ * 
+ * Copyright (c) 2026, Jean-Pierre Le Rouzic
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
 
 #include "mitra_defs.h"
 #include "mitra_io.h"
@@ -152,12 +175,11 @@ t_stat mitra_trap(int trap, uint16 pc) {
     if (prts_ptr >= MAX_MEM_WORDS) {
         sim_printf("\n[mitra_trap] ** FATAL ** PRTS pointer %#05x out of range (MAX_MEM_WORDS=%#05x), cannot dispatch trap %d\n",
                  prts_ptr, MAX_MEM_WORDS, trap);
-        exit(-1);
         return SCPE_STOP;  /* Fatal: no PRTS */
     }
     
     sect0_Pbase = read_word(prts_ptr);
-    sect0_Lbase = read_word(prts_ptr + 1);
+    sect0_Lbase = read_word(prts_ptr + 2);
     
     /* Force master mode with protection override */
     cpu_state.MS = 1;
@@ -286,6 +308,45 @@ void io_suspension_dispatch(uint16 susp_level) {
 
 
 /* ========== Interrupt System (Section II-8.1) ========== */
+
+uint16 set_indicators() {
+	return (
+		((cpu_state.C  ? 1 : 0) << 11) |
+		((cpu_state.OV ? 1 : 0) << 12) |
+		((cpu_state.MA ? 1 : 0) << 14) |
+		((cpu_state.PR ? 1 : 0) << 15) |
+		((cpu_state.MS ? 1 : 0) << 13));	
+}
+
+/* Load indicators and shim registers from reserved block */
+void load_indicators_from_block(uint16 ind_word) {
+        /* Load indicators from reserved block */
+	    cpu_state.PR = (ind_word >> 15) & 1;
+        cpu_state.MA = (ind_word >> 14) & 1;
+        cpu_state.MS = (ind_word >> 13) & 1;
+        cpu_state.OV = (ind_word >> 12) & 1;
+        cpu_state.C = (ind_word >> 11) & 1;
+}
+
+void load_from_reserved_block(uint16 block) {
+         /* Load from reserved block */
+        cpu_state.reg_P = cpu_state.reg_block[block][0]; // P
+        cpu_state.reg_L = cpu_state.reg_block[block][1]; // L
+        cpu_state.reg_G = cpu_state.reg_block[block][2]; // G
+        cpu_state.reg_A = cpu_state.reg_block[block][3]; // A
+        cpu_state.reg_E = cpu_state.reg_block[block][4]; // E
+        cpu_state.reg_X = cpu_state.reg_block[block][5]; // X
+}
+
+void load_from_memory(uint16 ctx_ptr) {
+	    cpu_state.reg_X = read_word(ctx_ptr + 1);
+        cpu_state.reg_E = read_word(ctx_ptr + 2);
+        cpu_state.reg_A = read_word(ctx_ptr + 3);
+        cpu_state.reg_G = read_word(ctx_ptr + 4);
+        cpu_state.reg_L = read_word(ctx_ptr + 5);
+        cpu_state.reg_P = read_word(ctx_ptr + 6);
+}
+
 /*
 The Mitra-15 does not simply save a few registers on the stack when an interrupt occurs as most microprocessors do.
 Instead, every interrupt level owns one or more complete execution contexts.
@@ -352,21 +413,12 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         /* Switch to reserved block */
         cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 6;
         
-        /* Load indicators from reserved block */
+        /* Load indicators and shim registers from reserved block */
         uint16 ind_word = cpu_state.reg_block[cpu_state.reg_12][6];
-        cpu_state.PR = (ind_word >> 15) & 1;
-        cpu_state.MA = (ind_word >> 14) & 1;
-        cpu_state.MS = (ind_word >> 13) & 1;
-        cpu_state.OV = (ind_word >> 12) & 1;
-        cpu_state.C = (ind_word >> 11) & 1;
+        load_indicators_from_block(ind_word);
         
-        /* Load shim registers from reserved block */
-        cpu_state.reg_A = cpu_state.reg_block[cpu_state.reg_12][3]; // A
-        cpu_state.reg_E = cpu_state.reg_block[cpu_state.reg_12][4]; // E
-        cpu_state.reg_X = cpu_state.reg_block[cpu_state.reg_12][5]; // X
-        cpu_state.reg_L = cpu_state.reg_block[cpu_state.reg_12][1]; // L
-        cpu_state.reg_G = cpu_state.reg_block[cpu_state.reg_12][2]; // G
-        cpu_state.reg_P = cpu_state.reg_block[cpu_state.reg_12][0]; // P
+        /* Load from reserved block */
+        load_from_reserved_block(cpu_state.reg_12);
 
         sim_printf("int-fast-out\n");
         
@@ -418,17 +470,10 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
 
         /* Now ctx_ptr points to the new context */
         ind_word = read_word(new_ctx_ptr);
-        cpu_state.PR = (ind_word >> 15) & 1;
-        cpu_state.MA = (ind_word >> 14) & 1;
-        cpu_state.MS = (ind_word >> 13) & 1;
-        cpu_state.OV = (ind_word >> 12) & 1;
-        cpu_state.C = (ind_word >> 11) & 1;
-        cpu_state.reg_X = read_word(new_ctx_ptr + 1);
-        cpu_state.reg_E = read_word(new_ctx_ptr + 2);
-        cpu_state.reg_A = read_word(new_ctx_ptr + 3);
-        cpu_state.reg_G = read_word(new_ctx_ptr + 4);
-        cpu_state.reg_L = read_word(new_ctx_ptr + 5);
-        cpu_state.reg_P = read_word(new_ctx_ptr + 6);
+        load_indicators_from_block(ind_word);
+        
+        load_from_memory(new_ctx_ptr);
+        
         sim_printf("\n[mitra_interrupt_accept] program launched at level %d: P=%#05x L=%#05x (from CPT[%d]=%#05x)\n",
                  int_level, cpu_state.reg_P, cpu_state.reg_L, int_level, new_ctx_ptr);
         sim_printf("int-out\n");
@@ -469,19 +514,10 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         
         /* Restore indicators from block 0, register 6 */
         ind_word = cpu_state.reg_block[0][6];
-        cpu_state.PR = (ind_word >> 15) & 1;
-        cpu_state.MA = (ind_word >> 14) & 1;
-        cpu_state.MS = (ind_word >> 13) & 1;
-        cpu_state.OV = (ind_word >> 12) & 1;
-        cpu_state.C = (ind_word >> 11) & 1;
+        load_indicators_from_block(ind_word);
         
         /* Restore shim registers from block 0 */
-        cpu_state.reg_A = cpu_state.reg_block[0][3]; // A
-        cpu_state.reg_E = cpu_state.reg_block[0][4]; // E
-        cpu_state.reg_X = cpu_state.reg_block[0][5]; // X
-        cpu_state.reg_L = cpu_state.reg_block[0][1]; // L
-        cpu_state.reg_G = cpu_state.reg_block[0][2]; // G
-        cpu_state.reg_P = cpu_state.reg_block[0][0]; // P
+        load_from_reserved_block(0);
               
         sim_printf("\n[mitra_interrupt_return] DITR complete, register block switched back to 0\n");
         sim_printf("ditret-fast-out\n");
@@ -531,17 +567,10 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
 		}
             
             ind_word = read_word(ctx_ptr);
-            cpu_state.PR = (ind_word >> 15) & 1;
-            cpu_state.MA = (ind_word >> 14) & 1;
-            cpu_state.MS = (ind_word >> 13) & 1;
-            cpu_state.OV = (ind_word >> 12) & 1;
-            cpu_state.C = (ind_word >> 11) & 1;
-            cpu_state.reg_X = read_word(ctx_ptr + 1);
-            cpu_state.reg_E = read_word(ctx_ptr + 2);
-            cpu_state.reg_A = read_word(ctx_ptr + 3);
-            cpu_state.reg_G = read_word(ctx_ptr + 4);
-            cpu_state.reg_L = read_word(ctx_ptr + 5);
-            cpu_state.reg_P = read_word(ctx_ptr + 6);
+            load_indicators_from_block(ind_word);
+            
+            load_from_memory(ctx_ptr);
+
             sim_printf("\n[mitra_interrupt_return] program resumed at level %d: P=%#05x L=%#05x\n",
                      next_lvl, cpu_state.reg_P, cpu_state.reg_L);
         } else {
@@ -589,17 +618,10 @@ t_stat get_BOOT_ENTRY_ADDR(void)
             ctx_ptr = read_word(cpt_base + cpu_state.curr_int_lvl);
             
             uint16 ind_word = read_word(ctx_ptr);
-            cpu_state.PR = (ind_word >> 15) & 1;
-            cpu_state.MA = (ind_word >> 14) & 1;
-            cpu_state.MS = (ind_word >> 13) & 1;
-            cpu_state.OV = (ind_word >> 12) & 1;
-            cpu_state.C = (ind_word >> 11) & 1;
-            cpu_state.reg_X = read_word(ctx_ptr + 1);
-            cpu_state.reg_E = read_word(ctx_ptr + 2);
-            cpu_state.reg_A = read_word(ctx_ptr + 3);
-            cpu_state.reg_G = read_word(ctx_ptr + 4);
-            cpu_state.reg_L = read_word(ctx_ptr + 5);
-            cpu_state.reg_P = read_word(ctx_ptr + 6);
+            load_indicators_from_block(ind_word);
+            
+            load_from_memory(ctx_ptr);
+
             sim_printf("\n[get_BOOT_ENTRY_ADDR] program resumed at level %d: P=%#05x L=%#05x\n",
                      next_lvl, cpu_state.reg_P, cpu_state.reg_L);
       }

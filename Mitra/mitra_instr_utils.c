@@ -1,3 +1,26 @@
+/* mitra_sys.c: CII Mitra 15/30 Simulator SCP Interface
+ * adapted from sds_sys.c
+ * 
+ * Copyright (c) 2026, Jean-Pierre Le Rouzic
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
 #include "mitra_cpu.h"
 #include "mitra_defs.h"
 #include "mitra_io.h"
@@ -7,6 +30,7 @@ int get_highest_interrupt(void);
 
 uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address, uint16 inst);
 uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr address, uint32 mode);
+t_stat io_rwd(uint16 inst, t_bool is_write);                 /* the public entry point */
 
 extern UNIT cpu_unit;
 extern int susp_stack_ptr;
@@ -89,7 +113,12 @@ SUB, AND, IOR, etc. Double word: DLD (Double Load): loads two words → E and A
 
 /* ========== Condition Code Functions (per manual section II-6) ========== */
 
-/* For LOAD instructions: C=1 if result=0, O=1 if result negative */
+/* For LOAD instructions: 
+ *   C | OV | test
+ *   0 |  0 | result > 0
+ *   0 |  1 | result < 0
+ *   1 |  0 | result = 0
+ */
 void set_condition_codes_load(uint16 result) {
     cpu_state.C = (result == 0) ? 1 : 0;
     cpu_state.OV = (result & 0x8000) ? 1 : 0;
@@ -244,10 +273,10 @@ static int div32(uint16 high, uint16 low, uint16 divisor, uint16* quot,
     // test for division by zero
     if (dvsr == 0) 
 		return -1;
-	// test for overflow
-	if (q < INT16_MIN || q > INT16_MAX)
-		return -2;
     *quot = (uint16_t)(dividend / dvsr);
+	// test for overflow
+	if (*quot < INT16_MIN || *quot > INT16_MAX)
+		return -2;
     *rem = (uint16_t)(dividend % dvsr);
     return 0;
 }
@@ -550,6 +579,78 @@ static fp_status_t double_to_mitra(double v, uint16_t *A, uint16_t *E)
     *A = (uint16_t)(raw & 0xFFFF);
     return MITRA_FP_OK;
 }
+
+uint16 F4MasterInst(uint16 mode, uint16 inst) {
+    uint16 ret_code =0;
+        // Bits 12, 14, 15 decode 5 intructions: STM, CLM, DIT, RD, WD
+        uint16 MasterInst = inst & 0x000F;
+        if (mode != 1) // These four instructions are privilegied
+            	return MM_PRVINS;
+        switch (MasterInst) {
+            case 0x00: 
+            /* 
+            * CLM - clear Interrupt Mask
+            * As a consequence, a II interrupt levels are masked. 
+            */
+                cpu_state.MA = 0;
+                break;
+
+            case 0x01: /* DIT - Deactivate normal Interrupt */
+                return mitra_interrupt_return(FALSE);
+                break;
+
+            /*
+             * RD et WD sont des instructions synchrones : le processeur attend
+             * la réponse du périphérique. On fait souvent du polling (boucle de
+             * RD) pour attendre un résultat ou un statut. Ces instructions ne déclenchent
+             * pas elles-mêmes une interruption pour livrer un résultat différé.
+             *
+             * Les interruptions restent un mécanisme séparé, utilisé en
+             * parallèle pour les événements asynchrones (fin d’opération
+             * longue, signal externe, etc.). C’est le mode d’E/S le plus simple
+             * et le plus direct des mini-ordinateurs des années 1960-70, par
+             * opposition aux transferts par canal (IOP) qui sont eux
+             * asynchrones et pilotés par interruptions + chaînage de commandes.
+             *
+             * La documentation ne mentionne pas de changement de contenu des registres ou des codes conditions
+             */
+            case 0x02:
+                /*** RD
+                bits 8 to 13 undefined
+                bits 14, 14 = 10
+                The opcode is 0xF402
+
+                E register:
+                Bits 3 to 6 and 12 to 15 are the I/O address
+                Bits 10 and 11, are reading mode
+                ***/
+                ret_code = io_rwd(inst, false);
+                break;
+
+            case 0x03:
+                /**** WD
+                bits 8 to 13 undefined
+                bits 14, 15 = 11
+                The opcode is 0xF403
+
+                E register:
+                Bits 3 to 6 and 12 to 15 are the I/O address
+                Bits 10 and 11, are writing mode
+                ***/
+                ret_code = io_rwd(inst, true);
+                break;
+                
+            case 0x08: /* STM - Set Interrupt Mask */
+                cpu_state.MA = 1;
+                break;
+
+			default:
+				sim_printf("\n[group_3_P] 0xF4 unknown MasterInst %#04x", MasterInst);
+				return TRAP_II;
+				
+				}
+    return ret_code;
+    }
 
 // LDR or STR
 uint16 case_instr_xDR(uint16 inst) {
@@ -875,13 +976,15 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
     return 0;
 }
 
-    /*
-     *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
-     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-     *      | x  x  x  x| 0 0  0  1 |        |    type   |  |
-     *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-     */
-    uint16 set_register(uint16 inst, uint32 mode) {
+/*
+* SRG instruction group
+* 
+*        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*      | x  x  x  x| 0 0  0  1 |        |    type   |  |
+*      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+*/
+uint16 set_register(uint16 inst, uint32 mode) {
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
             sim_printf("\n[set_register] opcode: %#010x\n", opcode);
     uint16 disp = inst & I_DISP_MASK;
@@ -916,10 +1019,17 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                     break;
                 case SRG_ACE:
                     cpu_state.reg_E = (cpu_state.reg_E + cpu_state.C) & 0xFFFF;
+                    /*
+                     * Manual p. VII-59 says ACE modifies E and the C/O indicators..
+                     */
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CCA:
                     cpu_state.reg_A = ~cpu_state.reg_A & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_A);
+                    /*
+                     * Manual p. VII-60 lists only A as modified for CCA; unlike AEE/AIE/AAE/CNA, it does not list condition codes as modified.
+                     */
+                    // set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AEE:
                     cpu_state.reg_A ^= cpu_state.reg_E;
@@ -985,10 +1095,17 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                     break;
                 case SRG_ACE:
                     cpu_state.reg_E = (cpu_state.reg_E + cpu_state.C) & 0xFFFF;
+                    /*
+                     * Manual p. VII-59 says ACE modifies E and the C/O indicators..
+                     */
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CCA:
                     cpu_state.reg_A = ~cpu_state.reg_A & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_A);
+                    /*
+                     * Manual p. VII-60 lists only A as modified for CCA; unlike AEE/AIE/AAE/CNA, it does not list condition codes as modified.
+                     */
+                    // set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AEE:
                     cpu_state.reg_A ^= cpu_state.reg_E;
@@ -1085,11 +1202,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                     
                         // ((G) + 4) -> Indicators
                         uint16 saved_flags = read_word(cpu_state.reg_G + 4);
-                        cpu_state.C = (saved_flags >> 14) & 1;
-                        cpu_state.OV = (saved_flags >> 13) & 1;
-                        cpu_state.MA = (saved_flags >> 12) & 1;
-                        cpu_state.PR = (saved_flags >> 11) & 1;
-                        cpu_state.MS = (saved_flags >> 10) & 1; // FIXME or cpu_state.MS = 0?
+                        load_indicators_from_block(saved_flags);
                     
                     cpu_state.reg_L = // (G) + ((G) + 2)
                         (cpu_state.reg_G + read_word(cpu_state.reg_G + 2)) &
@@ -1098,16 +1211,20 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
                         (cpu_state.reg_G + 2 + read_word(cpu_state.reg_G)) &
                         0x7FFF;
 					sim_printf("\n[RSV_instr] P = %#05x", cpu_state.reg_P);
-		//		    if(cpu_state.reg_P != 0x0104) {
-		//		    	exit(-1);
-		//		    } 
                     break;
                 case SRG_ACE:
                     cpu_state.reg_E = (cpu_state.reg_E + cpu_state.C) & 0xFFFF;
+                    /*
+                     * Manual p. VII-59 says ACE modifies E and the C/O indicators..
+                     */
+                    set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_CCA:
                     cpu_state.reg_A = ~cpu_state.reg_A & 0xFFFF;
-                    set_condition_codes_load(cpu_state.reg_A);
+                    /*
+                     * Manual p. VII-60 lists only A as modified for CCA; unlike AEE/AIE/AAE/CNA, it does not list condition codes as modified.
+                     */
+                    // set_condition_codes_load(cpu_state.reg_A);
                     break;
                 case SRG_AEE:
                     cpu_state.reg_A ^= cpu_state.reg_E;
@@ -1355,10 +1472,10 @@ uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst, t_addr target_addres
 }
 
 /*
- * DG mode with memory operation on register and is stored in memory
+ * All address modes with memory operation on register and is stored in memory
  *        0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
  *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
- *      | 0 1  0 | 1| x x  x  x |     displacement      |
+ *      | y y  y | y| x x  x  x |     displacement      |
  *      +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
  *
  *    "DLD", "STA", "STE", "STX", "SBL", "SBR", "DST", "ADM",
@@ -1374,22 +1491,22 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
     uint16* trappc = &cpu_state.reg_P;
     switch (opcode) {
         case 0x01:
-            /* STA - Store A DG */
+            /* STA - Store A */
             write_word(target_address, cpu_state.reg_A);
             break;
 
         case 0x02:
-            /* STE - Store E DG */
+            /* STE - Store E */
             write_word(target_address, cpu_state.reg_E);
             break;
 
         case 0x03:
-            /* STX - Store X DG */
+            /* STX - Store X */
             write_word(target_address, cpu_state.reg_X);
             break;
 
         case 0x04:
-            /* SBL - Store Byte Left DG
+            /* SBL - Store Byte Left
              * Store A register's left byte in memory's left byte
              */
             data = read_word(target_address);
@@ -1401,7 +1518,7 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
 
         case 0x05:
             /*
-             * SBR DG - Store Byte Right
+             * SBR - Store Byte Right
              * Rightmost byte of register A is stored in memory
              */
             data = read_word(target_address);
@@ -1419,7 +1536,7 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
             break;
 
         case 0x07:
-            /* ADM DG - Add to Memory */
+            /* ADM - Add to Memory */
             data = read_word(target_address);
             carry = 0;
             result = add16(data, cpu_state.reg_A, &carry, &overflow);
@@ -1429,13 +1546,13 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
             break;
 
         case 0x08:
-            /* SPA DG - Store Program Address */
+            /* SPA - Store Program Address */
             cpu_state.reg_A = (cpu_state.reg_P + 4 - 2 + GPRIME) & 0x0FFFF; // minus 2 because we preincrement P before simulating the instruction
             write_word(target_address, cpu_state.reg_A);
             break;
 
         case 0x09:
-            /* STS DG - Store Selective */
+            /* STS - Store Selective */
             data = read_word(target_address);
             result =
                 (data & ~cpu_state.reg_E) | (cpu_state.reg_A & cpu_state.reg_E);
@@ -1445,7 +1562,7 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
 
         case 0x0E:
             /* 
-            * TRS DG - Translate String (optional) 
+            * TRS - Translate String (optional) 
             * A string beginning at an address defined with respect to G-base by the contents of A-register and 
             * 	whose length is specified in E-register 
             * 	is translated byte per byte through the translation table by TRS instruction.
@@ -1453,18 +1570,23 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
             * Starting from Y calculated address, the origin string is overwritten byte per byte by the result string.
             * Translation table creation is obviously the user's responsibility.
             */
-            if (!(cpu_unit.flags & UNIT_EXTINS)) 
-            	return MM_INVINS;
-            {
-                uint16 table = target_address; // a 256 consecutive byte translation table starting at Y-calculated address
-                for (i = 0; i < cpu_state.reg_E; i++) {
-                    // (Y + ((A) + (G) +i) e) -> ((A) + (G) + i)
-                    uint8 b = read_byte(cpu_state.reg_G + cpu_state.reg_A + i);
+            
+            uint16 table = target_address; // a 256 consecutive byte translation table starting at Y-calculated address
+    sim_printf("\n[TRS 1] table: %#05x", table);
+    sim_printf("\n[TRS 2] E: %#05x", cpu_state.reg_E);
+            for (i = 0; i < cpu_state.reg_E; i++) {
+                    // ((A) + (G) + i) = (Y + ((A) + (G) +i)e)
+                    // b = ((A) + (G) +i)
+                    uint8 b = read_byte(cpu_state.reg_A + cpu_state.reg_G + i);
+    sim_printf("\n[TRS 3] b: %#05x", b);
                     uint8 t = read_byte(table + (b & 0xFF));
-                    write_byte(cpu_state.reg_G + cpu_state.reg_A + i, t);
+    sim_printf("\n[TRS 4] t: %#05x", t);
+                    // ((A) + (G) + i) = t
+    sim_printf("\n[TRS 5] target: %#05x", cpu_state.reg_A + cpu_state.reg_G + i);
+                    write_byte(cpu_state.reg_A + cpu_state.reg_G + i, t);
                 }
-                cpu_state.reg_E = 0;
-            }
+            cpu_state.reg_E = 0;
+            
             break;
 
         case 0x0F:
@@ -1729,12 +1851,7 @@ void CSV_instr(t_addr target_address) {
             
             // Indicators -> ((G) + 4)
 	    /* Indicateurs sur les bits 14..10 — format identique à RSV */
-	    write_word(cpu_state.reg_G + 4,
-		((cpu_state.C  ? 1 : 0) << 14) |
-		((cpu_state.OV ? 1 : 0) << 13) |
-		((cpu_state.MA ? 1 : 0) << 12) |
-		((cpu_state.PR ? 1 : 0) << 11) |
-		((cpu_state.MS ? 1 : 0) << 10));
+	    write_word(cpu_state.reg_G + 4, set_indicators());
 
 	    /* ---- Forçage des indicateurs ---- */
             cpu_state.MS = 1;
@@ -1747,9 +1864,6 @@ void CSV_instr(t_addr target_address) {
 	    cpu_state.reg_L = read_word(srdn_addr);              /* ((&C) - 4N)     */
 	    cpu_state.reg_P = read_word(srdn_addr + 2);          /* ((&C) - 4N + 2) */
 	    sim_printf("\n[CSV_instr] P = %#05x", cpu_state.reg_P);
-/*	    if(cpu_state.reg_P != 0x0552) {
-	    	exit(-1);
-	    } */
 }
 
 uint16 test_and_set(uint32 mode, t_addr target_address) {
@@ -1782,8 +1896,19 @@ uint16 test_and_set(uint32 mode, t_addr target_address) {
             cpu_state.intrpt_mask = 0xFFFF;
             
             cpu_state.reg_A = read_word(target_address);
-            write_word(target_address, 0);
-            set_condition_codes_load(cpu_state.reg_A);
+            
+            // Manual p. VII-102 says TES clears the tested word and its protection bit.
+            write_word((target_address & 0xFFFE), 0);           
+            MP[VA_TO_PA((target_address & 0xFFFE))] = false;
+            
+            /* Weird condition codes setup: Manual VII-l02
+            *   C | OV | test
+			*   0 |  1 | target_address > 0
+			*   0 |  0 | target_address < 0
+			*   1 |  0 | target_address = 0
+			*/
+			cpu_state.C = (target_address == 0) ? 1 : 0;
+			cpu_state.OV = (target_address > 0) ? 1 : 0;
             
             // restore interrupt mask
             cpu_state.intrpt_mask = intmask;
@@ -1825,10 +1950,10 @@ uint16 load_mem_protect(uint32 mode, t_addr target_address) {
 	for (; i < cpu_state.reg_E; i++) {
             // Load protection lock bit for this address
             MP[target_address] = read_word(cpu_state.reg_A) & 0x0001;
-            cpu_state.reg_A++;
-            target_address++;
+            cpu_state.reg_A += 2;
+            target_address += 2;
             }
-    cpu_state.reg_A = i + cpu_state.reg_A;
+    // reg_A points already to next address
     cpu_state.reg_E = -1;
     return 0;
 }

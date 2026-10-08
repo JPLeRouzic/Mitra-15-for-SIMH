@@ -1,4 +1,27 @@
-
+/* mitra_sys.c: CII Mitra 15/30 Simulator SCP Interface
+ * adapted from sds_sys.c
+ * 
+ * Copyright (c) 2026, Jean-Pierre Le Rouzic
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
+// The bug is that the code doesn't handle the RSV instruction's privileged chec
 #include "mitra_cpu.h"
 #include "mitra_defs.h"
 #include "mitra_io.h"
@@ -375,8 +398,7 @@ uint16 group_2_DL(uint16 inst, uint32 mode) {
     	}
 
     /* else */
-    Reg_OP_Mem_To_Mem(inst, target_address, mode);
-    return ret_code;
+    return Reg_OP_Mem_To_Mem(inst, target_address, mode);
 }
 
 /*
@@ -555,7 +577,7 @@ void group_3_shift_DL(uint16 inst, uint32 mode) {
 	    } break;
 
 	    case 0x31: {
-		set_register(inst, mode);
+			set_register(inst, mode);
 	    } break;
 	}
 }
@@ -616,7 +638,7 @@ uint16 group_2_DG(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if((opcode == 0x5A) || (opcode == 0x5B) || (opcode == 0x5C) || (opcode == 0x5D) {
+    else if((opcode == 0x5A) || (opcode == 0x5B) || (opcode == 0x5C) || (opcode == 0x5D)) {
             // FAD, FSU, FMU, FDV in DG mode, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -627,8 +649,7 @@ uint16 group_2_DG(uint16 inst, uint32 mode) {
     	    return ret_code;
     	}
     /* else */
-    Reg_OP_Mem_To_Mem(inst, target_address, mode);
-    return ret_code;
+    return Reg_OP_Mem_To_Mem(inst, target_address, mode);
 }
 
 /*
@@ -694,7 +715,7 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if((opcode == 0x7A) || (opcode == 0x7B) || (opcode == 0x7C) || (opcode == 0x7D) {
+    else if((opcode == 0x7A) || (opcode == 0x7B) || (opcode == 0x7C) || (opcode == 0x7D)) {
             // FAD, FSU, FMU, FDV in DG mode, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -705,8 +726,7 @@ uint16 group_2_IL(uint16 inst, uint32 mode) {
     	    return ret_code;
     	}
     /* else */
-    Reg_OP_Mem_To_Mem(inst, target_address, mode);
-    return ret_code;
+    return Reg_OP_Mem_To_Mem(inst, target_address, mode);
 }
 
 /*
@@ -771,7 +791,7 @@ uint16 group_2_IGX(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if((opcode == 0x9A) || (opcode == 0x9B) || (opcode == 0x9C) || (opcode == 0x9D) {
+    else if((opcode == 0x9A) || (opcode == 0x9B) || (opcode == 0x9C) || (opcode == 0x9D)) {
             // FAD, FSU, FMU, FDV in DG mode, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -782,8 +802,7 @@ uint16 group_2_IGX(uint16 inst, uint32 mode) {
     	    return ret_code;
     	}
     /* else */
-    Reg_OP_Mem_To_Mem(inst, target_address, mode);
-    return ret_code;
+    return Reg_OP_Mem_To_Mem(inst, target_address, mode);
 }
 
 /*
@@ -846,7 +865,7 @@ uint16 group_2_ILX(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_E);
     	    return ret_code;
     	}
-    else if((opcode == 0xBA) || (opcode == 0xBB) || (opcode == 0xBC) || (opcode == 0xBD) {
+    else if((opcode == 0xBA) || (opcode == 0xBB) || (opcode == 0xBC) || (opcode == 0xBD)) {
             // FAD, FSU, FMU, FDV in DG mode, Floating operations (option)
     	    floating_inst(inst, mode, target_address);
     	    return ret_code;
@@ -857,8 +876,7 @@ uint16 group_2_ILX(uint16 inst, uint32 mode) {
     	    return ret_code;
     	}
     /* else */
-    Reg_OP_Mem_To_Mem(inst, target_address, mode);
-    return ret_code;
+    return Reg_OP_Mem_To_Mem(inst, target_address, mode);
 }
 
 /*
@@ -985,7 +1003,7 @@ void group_3_Shift_P(uint16 inst, uint32 mode) {
     uint16 disp = inst & I_DISP_MASK;
 
     switch (opcode) {
-        case 0xF0: {
+        case 0xF0: { // SHR group
             shift_type_t type = (disp >> 5) & 0x07;
             uint8 count = disp & 0x1F;
             switch (type) {
@@ -1017,7 +1035,7 @@ void group_3_Shift_P(uint16 inst, uint32 mode) {
             set_condition_codes_load(cpu_state.reg_A);
         } break;
 
-        case 0xF1:
+        case 0xF1: // SRG group
             set_register(inst, mode);
             break;
 
@@ -1078,7 +1096,7 @@ void group_3_shift_PX(uint16 inst, uint32 mode) {
 	    } 
 	    break;
 	    case 0xE1: {
-		set_register(inst, mode);
+			set_register(inst, mode);
 	    } 
 	    break;
 	}
@@ -1106,75 +1124,9 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
 
     uint16 data;
 
-    if (opcode == 0xF4) {
-        // Bits 12, 14, 15 decode 5 intructions: STM, CLM, DIT, RD, WD
-        uint16 MasterInst = inst & 0x000F;
-        if (mode != 1) // These four instructions are privilegied
-            	return MM_PRVINS;
-        switch (MasterInst) {
-            case 0x00: 
-            /* 
-            * CLM - clear Interrupt Mask
-            * As a consequence, a II interrupt levels are masked. 
-            */
-                cpu_state.MA = 0;
-                break;
-
-            case 0x01: /* DIT - Deactivate normal Interrupt */
-                return mitra_interrupt_return(FALSE);
-                break;
-
-            /*
-             * RD et WD sont des instructions synchrones : le processeur attend
-             * la réponse du périphérique. On fait souvent du polling (boucle de
-             * RD) pour attendre un résultat ou un statut. Ces instructions ne déclenchent
-             * pas elles-mêmes une interruption pour livrer un résultat différé.
-             *
-             * Les interruptions restent un mécanisme séparé, utilisé en
-             * parallèle pour les événements asynchrones (fin d’opération
-             * longue, signal externe, etc.). C’est le mode d’E/S le plus simple
-             * et le plus direct des mini-ordinateurs des années 1960-70, par
-             * opposition aux transferts par canal (IOP) qui sont eux
-             * asynchrones et pilotés par interruptions + chaînage de commandes.
-             *
-             * La documentation ne mentionne pas de changement de contenu des registres ou des codes conditions
-             */
-            case 0x02:
-                /*** RD
-                bits 8 to 13 undefined
-                bits 14, 14 = 10
-                The opcode is 0xF402
-
-                E register:
-                Bits 3 to 6 and 12 to 15 are the I/O address
-                Bits 10 and 11, are reading mode
-                ***/
-                ret_code = io_rwd(inst, false);
-                break;
-
-            case 0x03:
-                /**** WD
-                bits 8 to 13 undefined
-                bits 14, 15 = 11
-                The opcode is 0xF403
-
-                E register:
-                Bits 3 to 6 and 12 to 15 are the I/O address
-                Bits 10 and 11, are writing mode
-                ***/
-                ret_code = io_rwd(inst, true);
-                break;
-                
-            case 0x08: /* STM - Set Interrupt Mask */
-                cpu_state.MA = 1;
-                break;
-
-        }
-    }
-
     switch (opcode) {
-        case 0xF0:
-        case 0xF1:
+        case 0xF0: // SHR group
+        case 0xF1: // SRG group
             group_3_Shift_P(inst, mode);
             break;
         case 0xF2:  // ICX P, reg_X register contents is incremented by disp
@@ -1185,7 +1137,8 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
             cpu_state.reg_X = (cpu_state.reg_X - target_address) & 0x0FFFF;
             set_condition_codes_load(cpu_state.reg_X);
             break;
-        case 0xF4:
+        case 0xF4: // 
+			ret_code = F4MasterInst(mode, inst);
             break;
         case 0xF5:  // ICL P, reg_L register contents is incremented by disp
             cpu_state.reg_L = (cpu_state.reg_L + target_address) & 0x0FFFF;
@@ -1198,7 +1151,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
             CSV_instr(target_address);
             break;
 
-        case 0xF8: /* CLS */
+        case 0xF8: /* CLS in P mode */
             call_section(target_address);
             break;
 
@@ -1207,7 +1160,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
             break;
 
         case 0xFA:  // STR P
-    sim_printf("\n[case_instr_xDR #2] inst: %#010x\n", inst);
+			sim_printf("\n[case_instr_xDR #2] inst: %#010x\n", inst);
             case_instr_xDR(inst);
             break;
 
@@ -1530,8 +1483,8 @@ uint16 group_5_IG(uint16 inst) {
     target_address = (GPRIME + tmp) & 0x0FFFF;
     sim_printf("\n[group_5_IG] target_address = %d", target_address);
     
-    tmp = read_word(cpu_state.reg_L + disp);
-    target_address = (GPRIME + tmp) & 0xFFFF;
+//    tmp = read_word(cpu_state.reg_L + disp);
+//    target_address = (GPRIME + tmp) & 0xFFFF;
     
     
     switch (opcode) {

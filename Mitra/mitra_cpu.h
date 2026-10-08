@@ -1,3 +1,26 @@
+/* mitra_sys.c: CII Mitra 15/30 Simulator SCP Interface
+ * adapted from sds_sys.c
+ * 
+ * Copyright (c) 2026, Jean-Pierre Le Rouzic
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE.
+ */
 #ifndef MITRA_CPU_H
 #define MITRA_CPU_H
 
@@ -232,6 +255,10 @@ t_stat mitra_suspension_process(void);
 t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed);
 t_stat mitra_interrupt_return(t_bool high_speed);
 t_stat cpt_lookup(uint16 level, uint16 *ctx_ptr_out);
+uint16 set_indicators();
+void load_indicators_from_block(uint16 ind_word);
+void load_from_reserved_block(uint16 block);
+void load_from_memory(uint16 ctx_ptr);
 
 t_stat set_cc(void);
 t_stat cpu_ex(t_value * vptr, t_addr addr, UNIT * uptr, int32 sw);
@@ -275,6 +302,6 @@ void shift_lcd(uint16* E, uint16* A, int count);
 void shift_rcd(uint16* E, uint16* A, int count);
 void instr_LDR(uint16 reg_block, uint16 reg_num);
 void instr_STR(uint16 reg_block, uint16 reg_num);
-
+uint16 F4MasterInst(uint16 mode, uint16 opcode);
 
 #endif

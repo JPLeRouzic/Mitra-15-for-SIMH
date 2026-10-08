@@ -1,6 +1,7 @@
 /* mitra_io,c derived from sds_io.c: SDS 940 I/O simulator
 
    Copyright (c) 2001-2020, Robert M. Supnik
+ * Copyright (c) 2026, Jean-Pierre Le Rouzic
 
    Permission is hereby granted, free of charge, to any person obtaining a
    copy of this software and associated documentation files (the "Software"),
