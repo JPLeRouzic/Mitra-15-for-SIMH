@@ -32,7 +32,7 @@ extern t_addr cpt_base;
 extern uint16 M[];
 extern int susp_stack_ptr;
 
-static int get_highest_interrupt(void);
+int get_highest_interrupt(void) ;
 
 /* ========== Trap mechanism (manual section II-8.3) ========== *
  *
@@ -107,19 +107,21 @@ t_stat cpt_lookup(uint16 level, uint16 *ctx_ptr_out) {
     if (level >= 32)
         return SCPE_ARG;
 
-    base = read_word(10);
+    base = read_word(10);       /* CPT base, in decimal */
     if (base >= MAX_MEM_WORDS) {
         sim_printf("\n[cpt_lookup] ** FATAL ** CPT base %#05x (from M[10]) out of range (MAX_MEM_WORDS=%#05x)\n", base, MAX_MEM_WORDS);
         return SCPE_STOP;
     }
 
-    ptr = read_word(base + level);
+    ptr = read_word(base + (2 * level)); /* one word per level */
     if (ptr >= MAX_MEM_WORDS) {
         sim_printf("\n[cpt_lookup] ** FATAL ** context pointer CPT[%d]=%#05x out of range (MAX_MEM_WORDS=%#05x)\n", level, ptr, MAX_MEM_WORDS);
         return SCPE_STOP;
     }
     if (ptr == 0) {
-        sim_printf("\n[cpt_lookup] error level");
+        sim_printf("\n[cpt_lookup] level %d has no context "
+                   "(CPT[%d] at %#05x is 0)\n",
+                   level, level, base + 2 * level);
         return STOP_ILLVEC;   /* no program connected to this level */
         }
 
@@ -147,22 +149,21 @@ t_stat mitra_trap(int trap, uint16 pc) {
     sim_printf("trap-in\n");
 
     /* Step 1: Set trap cause bit in absolute memory word 1 (byte address 2) */
-    trap_word = read_word(1);
+    trap_word = read_word(2);
     trap_word |= (0x8000u >> trap); //  the bit layout is "bit 0 = VM, bit 1 = PM, bit 2 = AI, bit 3 = PA, bit 4 = II, bit 5 = ES". 
-    write_word(1, trap_word); // FIXME IS IT 0 OR 1?
+    write_word(2, trap_word);
 
     /* Step 2: 
      *Protect bytes 4-9 with faulting context
-     * Save faulting context in words 2, 3, 4 
-     * "bytes 4-9" = word addresses 2, 3, 4 (2 bytes per word) 
+     * Save faulting context in words 2, 3, 4, so addresses 4, 6, 8 in byte addresses  (2 bytes per word) 
      */
-    write_word(2, (pc - GPRIME) & 0x7FFF); // 
-    write_word(3, (cpu_state.reg_L - GPRIME) & 0x7FFF);
+    write_word(4, (pc - GPRIME) & 0x7FFF); // 
+    write_word(6, (cpu_state.reg_L - GPRIME) & 0x7FFF);
     /* Indicators word: cpu_state.PR, cpu_state.MA, cpu_state.MS, OV, C */
     ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
         ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) | ((cpu_state.C &
             1) << 11);
-    write_word(4, ind_word);
+    write_word(8, ind_word);
 
     /* Step 3: Call supervisor section 0
      * Absolute address 12 (decimal) holds the PRTS pointer.
@@ -321,30 +322,46 @@ uint16 set_indicators() {
 /* Load indicators and shim registers from reserved block */
 void load_indicators_from_block(uint16 ind_word) {
         /* Load indicators from reserved block */
-	    cpu_state.PR = (ind_word >> 15) & 1;
+	cpu_state.PR = (ind_word >> 15) & 1;
         cpu_state.MA = (ind_word >> 14) & 1;
         cpu_state.MS = (ind_word >> 13) & 1;
         cpu_state.OV = (ind_word >> 12) & 1;
         cpu_state.C = (ind_word >> 11) & 1;
 }
 
+/* High-speed interrupts *
+Normally the CPU store registers in memory, then loads the new context from memory, which costs time.
+Instead, the optional high-speed interrupt uses another hardware register block.
+When this "high-speed task" is acknowledged, the control is returned to the interrupted task through a special OITR instruction by-passing the usual context swapping in block O.
+For this SIMH simulator, the cpu_state.reg_* always points to the current register block, this routine implements this requirement 
+*/
 void load_from_reserved_block(uint16 block) {
-         /* Load from reserved block */
+        /* Load from reserved block */
         cpu_state.reg_P = cpu_state.reg_block[block][0]; // P
         cpu_state.reg_L = cpu_state.reg_block[block][1]; // L
         cpu_state.reg_G = cpu_state.reg_block[block][2]; // G
         cpu_state.reg_A = cpu_state.reg_block[block][3]; // A
         cpu_state.reg_E = cpu_state.reg_block[block][4]; // E
         cpu_state.reg_X = cpu_state.reg_block[block][5]; // X
-}
+        }
 
-void load_from_memory(uint16 ctx_ptr) {
-	    cpu_state.reg_X = read_word(ctx_ptr + 1);
-        cpu_state.reg_E = read_word(ctx_ptr + 2);
-        cpu_state.reg_A = read_word(ctx_ptr + 3);
-        cpu_state.reg_G = read_word(ctx_ptr + 4);
-        cpu_state.reg_L = read_word(ctx_ptr + 5);
-        cpu_state.reg_P = read_word(ctx_ptr + 6);
+/*
+* Load CTX table to bloc 0 registers
+*
+* The level points to a CTX pointeur
+* The CTX pointeur points to the CTX
+* reg_G points to the start of PRT
+* L and P point to the initial section of a program
+* The PRT is made up of all the SRD of the program sections. It is stored in the locations immediately preceding G-address, thus the SRD of section #n has an address given by : G - 4n
+*/
+void load_CTX_from_mem(uint16 ctx_ptr) {
+	// ctx_ptr + 0 is indicators (code conditions)
+	cpu_state.reg_X = read_word(ctx_ptr + 2);
+        cpu_state.reg_E = read_word(ctx_ptr + 4);
+        cpu_state.reg_A = read_word(ctx_ptr + 6);
+        cpu_state.reg_G = read_word(ctx_ptr + 8);
+        cpu_state.reg_L = read_word(ctx_ptr + 10);
+        cpu_state.reg_P = read_word(ctx_ptr + 12);
 }
 
 /*
@@ -387,6 +404,24 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         return SCPE_ARG;
     }
 
+    /* are interrupts enabled? */
+    if (cpu_state.MA == true) {
+        sim_printf("\n[mitra_interrupt_accept] accept level=%d ** REJECTED (out of 0..31 range) as cpu_state.MA == true\n", int_level);
+        return SCPE_ARG;
+    }
+    
+    /* is an interrupt pending? */
+    if(!(cpu_state.intrpt_pending & (0x01 << int_level))) {
+        sim_printf("\n[mitra_interrupt_accept] accept level=%d ** REJECTED (out of 0..31 range) as no interrupt pending\n", int_level);
+        return SCPE_ARG;
+    }
+
+    /* is the new interrupt priority higher than the current level? */
+    if (int_level <= cpu_state.curr_int_lvl) {
+        sim_printf("\n[mitra_interrupt_accept] accept level=%d ** REJECTED (out of 0..31 range) as new interrupt priority NOT higher than the current level\n", int_level);
+        return SCPE_ARG;
+    }
+
     sim_printf("\n[mitra_interrupt_accept] accept level=%d high_speed_requested=%d HSINT_unit_flag=%d\n",
              int_level, cpu_state.high_speed, (cpu_unit.flags & UNIT_HSINT) ? 1 : 0);
     sim_printf("int-in\n");
@@ -403,7 +438,7 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         sim_printf("\n[mitra_interrupt_accept] taking FAST/high-speed path: register-block switch %d -> 6\n", cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
         
         /* Save current indicators in block 0, register 6 */
-        cpu_state.reg_block[0][6] = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
+        cpu_state.reg_V = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
                          ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
                          ((cpu_state.C & 1) << 11);
         
@@ -448,12 +483,12 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
                          ((cpu_state.C & 1) << 11);
         
         write_word(old_ctx_ptr, ind_word);
-        write_word(old_ctx_ptr + 1, cpu_state.reg_X);
-        write_word(old_ctx_ptr + 2, cpu_state.reg_E);
-        write_word(old_ctx_ptr + 3, cpu_state.reg_A);
-        write_word(old_ctx_ptr + 4, cpu_state.reg_G);
-        write_word(old_ctx_ptr + 5, cpu_state.reg_L);
-        write_word(old_ctx_ptr + 6, cpu_state.reg_P);
+        write_word(old_ctx_ptr + 2, cpu_state.reg_X);
+        write_word(old_ctx_ptr + 4, cpu_state.reg_E);
+        write_word(old_ctx_ptr + 6, cpu_state.reg_A);
+        write_word(old_ctx_ptr + 8, cpu_state.reg_G);
+        write_word(old_ctx_ptr + 10, cpu_state.reg_L);
+        write_word(old_ctx_ptr + 12, cpu_state.reg_P);
         
         /* Switch to new interrupt level */
         sim_printf("\n[mitra_interrupt_accept] switching current level %d -> %d\n", cpu_state.curr_int_lvl, int_level);
@@ -472,16 +507,16 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         ind_word = read_word(new_ctx_ptr);
         load_indicators_from_block(ind_word);
         
-        load_from_memory(new_ctx_ptr);
+        load_CTX_from_mem(new_ctx_ptr);
         
         sim_printf("\n[mitra_interrupt_accept] program launched at level %d: P=%#05x L=%#05x (from CPT[%d]=%#05x)\n",
                  int_level, cpu_state.reg_P, cpu_state.reg_L, int_level, new_ctx_ptr);
         sim_printf("int-out\n");
     }
     
-    /* Clear interrupt request */
-    cpu_state.intrpt_mask &= ~(1u << int_level);
-    sim_printf("\n[mitra_interrupt_accept] cleared request bit for level=%d, remaining pending mask=%08X\n", int_level, cpu_state.intrpt_mask);
+    /* Clear interrupt request in 32-bit bit map of pending interrupts*/
+    cpu_state.intrpt_pending = cpu_state.intrpt_pending & ~(1u << int_level);
+    sim_printf("\n[mitra_interrupt_accept] cleared request bit for level=%d\n", int_level);
     
     return SCPE_OK;
 }
@@ -489,6 +524,8 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
 /*
  * DIT - De-activate Interrupt (Section VII-12)
  * Returns from interrupt subroutine
+ *
+ * DITR also
  *
  • Acknowledgment of the high-speed interrupt is performed by the final DITR instruction of the interrupt
 subroutine and includes the following operations:
@@ -513,7 +550,7 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         cpu_state.reg_12 = 0;
         
         /* Restore indicators from block 0, register 6 */
-        ind_word = cpu_state.reg_block[0][6];
+        ind_word = cpu_state.reg_V;
         load_indicators_from_block(ind_word);
         
         /* Restore shim registers from block 0 */
@@ -532,33 +569,23 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
 	}
         sim_printf("\n[mitra_interrupt_return] leaving level=%d, saving its context to CPT[%d]=%#05x\n", cpu_state.curr_int_lvl, cpu_state.curr_int_lvl, ctx_ptr);
         
-        /* Save current context */
-        uint16 ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
-                         ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
-                         ((cpu_state.C & 1) << 11);
-        
-        write_word(ctx_ptr, ind_word); // FIXME we should restore context, this looks suspiciously as saving context
-        write_word(ctx_ptr + 1, cpu_state.reg_X);
-        write_word(ctx_ptr + 2, cpu_state.reg_E);
-        write_word(ctx_ptr + 3, cpu_state.reg_A);
-        write_word(ctx_ptr + 4, cpu_state.reg_G);
-        write_word(ctx_ptr + 5, cpu_state.reg_L);
-        write_word(ctx_ptr + 6, cpu_state.reg_P);
+        load_indicators_from_block(ctx_ptr);
+
+        cpu_state.reg_X, ctx_ptr + 2;
+        cpu_state.reg_E, ctx_ptr + 4;
+        cpu_state.reg_A, ctx_ptr + 6;
+        cpu_state.reg_G, ctx_ptr + 8;
+        cpu_state.reg_L, ctx_ptr + 10;
+        cpu_state.reg_P, ctx_ptr + 12;
         
         /* Find next highest pending interrupt */
-        int next_lvl = -1;
-        for (int i = 31; i >= 0; i--) {
-            if (cpu_state.intrpt_mask & (1u << i)) {
-                next_lvl = i;
-                break;
-            }
-        }
+        int next_lvl = get_highest_interrupt();
         
         if (next_lvl >= 0) {
             /* Accept next interrupt */
             sim_printf("\n[mitra_interrupt_return] another interrupt pending, resuming level=%d\n", next_lvl);
             cpu_state.curr_int_lvl = next_lvl;
-            cpu_state.intrpt_mask &= ~(1u << next_lvl);
+            cpu_state.MA = false;
             t_stat lk = cpt_lookup(cpu_state.curr_int_lvl, &ctx_ptr);
 		if (lk != SCPE_OK) {
 		    sim_printf("\n[mitra_interrupt_return] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n",
@@ -566,10 +593,10 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
 		    return lk;
 		}
             
-            ind_word = read_word(ctx_ptr);
+            uint16 ind_word = read_word(ctx_ptr);
             load_indicators_from_block(ind_word);
             
-            load_from_memory(ctx_ptr);
+            load_CTX_from_mem(ctx_ptr);
 
             sim_printf("\n[mitra_interrupt_return] program resumed at level %d: P=%#05x L=%#05x\n",
                      next_lvl, cpu_state.reg_P, cpu_state.reg_L);
@@ -584,46 +611,38 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
     return SCPE_OK;
 }
 
-// get registers and condition codes from task contextt_stat
+// get registers and condition codes from task context
 t_stat get_BOOT_ENTRY_ADDR(void)
 {
-	uint16 ctx_ptr;
-	t_stat lk = cpt_lookup(cpu_state.curr_int_lvl, &ctx_ptr);
-	if (lk != SCPE_OK) {
-	    sim_printf("\n[get_BOOT_ENTRY_ADDR] #1 ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", cpu_state.curr_int_lvl, lk);
-	    return lk;
-	}
-        sim_printf("\n[get_BOOT_ENTRY_ADDR] leaving level=%d", cpu_state.curr_int_lvl);
-        
-        /* Find next highest pending interrupt */
-        int next_lvl = -1;
-        for (int i = 31; i >= 0; i--) {
-            if (cpu_state.intrpt_mask & (1u << i)) {
-                next_lvl = i;
-                break;
-            }
-        }
-        
-        if (next_lvl >= 0) {
-            /* Accept next interrupt */
-            sim_printf("\n[get_BOOT_ENTRY_ADDR] another interrupt pending, resuming level=%d\n", next_lvl);
-            cpu_state.curr_int_lvl = next_lvl;
-            t_stat lk = cpt_lookup(cpu_state.curr_int_lvl, &ctx_ptr);
-		if (lk != SCPE_OK) {
-		    sim_printf("\n[get_BOOT_ENTRY_ADDR] #2 ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n",
-			       cpu_state.curr_int_lvl, lk);
-		    return lk;
-		}
-            
-            ctx_ptr = read_word(cpt_base + cpu_state.curr_int_lvl);
-            
-            uint16 ind_word = read_word(ctx_ptr);
-            load_indicators_from_block(ind_word);
-            
-            load_from_memory(ctx_ptr);
+    int next_lvl = get_highest_interrupt();
 
-            sim_printf("\n[get_BOOT_ENTRY_ADDR] program resumed at level %d: P=%#05x L=%#05x\n",
-                     next_lvl, cpu_state.reg_P, cpu_state.reg_L);
-      }
+    if (next_lvl < 0) {
+        sim_printf("\n[get_BOOT_ENTRY_ADDR] no pending interrupt, nothing to load\n");
+        return SCPE_OK;
+    }
+
+    uint16 ctx_ptr;
+    t_stat r = cpt_lookup((uint16)next_lvl, &ctx_ptr);
+    if (r != SCPE_OK) {
+        sim_printf("\n[get_BOOT_ENTRY_ADDR] cpt_lookup(%d) failed: %d\n",
+                   next_lvl, r);
+        return r;
+    }
+
+    sim_printf("\n[get_BOOT_ENTRY_ADDR] level=%d ctx_ptr=%#05x\n",
+               next_lvl, ctx_ptr);
+
+    cpu_state.curr_int_lvl = next_lvl;
+
+    uint16 ind_word = read_word(ctx_ptr);
+    load_indicators_from_block(ind_word);
+    load_CTX_from_mem(ctx_ptr);
+
+    /* Consume the pending interrupt now that its context is loaded. */
+    cpu_state.intrpt_pending &= ~(1u << next_lvl);
+
+    sim_printf("\n[get_BOOT_ENTRY_ADDR] loaded P=%#05x L=%#05x G=%#05x MS=%d\n",
+               cpu_state.reg_P, cpu_state.reg_L, cpu_state.reg_G, cpu_state.MS);
+    return SCPE_OK;
 }
 

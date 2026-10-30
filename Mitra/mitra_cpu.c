@@ -72,7 +72,6 @@ uint32 xfr_req = 0;                                     /* xfr req */
 uint32 ion = 0;                                         /* int enable */
 uint32 ion_defer = 0;                                   /* int defer */
 uint32 int_req = 0;                                     /* int requests */
-// int32 int_reqhi = 0;                                   /* highest int request, not uint32 */
 uint32 cpu_mode = NML_MODE;                             /* normal mode */
 uint32 mon_usr_trap = 0;                                /* mon-user trap */
 uint32 bpt;                                             /* breakpoint switches */
@@ -138,8 +137,9 @@ extern t_stat op_sks (uint32 inst, uint32 *skp);
 
 UNIT cpu_unit = {
 //   UDATA(NULL, UNIT_FIX + UNIT_BINK, MAX_MEM_WORDS)
-   UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV, MAX_MEM_WORDS) // Has optional divide
-//     UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV + UNIT_EXTINS + UNIT_FP, MAX_MEM_WORDS) // Has instruction extended set plus floating point
+//   UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV, MAX_MEM_WORDS) // Has optional divide
+//   UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV + UNIT_EXTINS + UNIT_FP, MAX_MEM_WORDS) // Has instruction extended set plus floating point
+     UDATA(NULL, UNIT_FIX + UNIT_BINK + UNIT_MULDIV + UNIT_EXTINS + UNIT_FP, MAX_MEM_WORDS)
 };
 
 /*
@@ -174,7 +174,6 @@ REG cpu_reg[] = {
     { HRDATA(U, cpu_state.U, 16) },
     
     /* Use separate variables for interrupt state instead of struct member */
-    { HRDATA(INT_REQ, cpu_state.intrpt_mask, 32) },
     { HRDATA(INT_LVL, cpu_state.curr_int_lvl, 5) },
     { HRDATA(SUSP_REQ, cpu_state.susp_req_bits, 32) },
     { HRDATA(SUSP_LVL, cpu_state.susp_active_level, 5) },
@@ -207,6 +206,18 @@ MTAB cpu_mod[] = {
 	{ 0 }
 };
 
+// For CPU (dummy)
+t_stat io_rwd_m0(uint16 inst, t_bool is_write) {
+	return 0;
+}
+
+dib_t cpu_dib = {
+    0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
+    NULL,               // disp (not used for RD/WD)
+    0x0,               // dio: The "Mode" this device claims
+    io_rwd_m0     	// dio_disp: The handler function
+};
+
 DEVICE cpu_dev = {
 	"CPU", 			// device name
 	&cpu_unit, 		// pointer to array of UNIT structures
@@ -224,7 +235,7 @@ DEVICE cpu_dev = {
 	NULL, 			// address of bootstrap routine
 	NULL, 			// address of attach routine
 	NULL, 			// address of detach routine
-	NULL, 			// address of VM-specific device context table
+	&cpu_dib, 			// ctxt: address of VM-specific device context table
 	0,			// device flags
 	0,			// debug control flags
 //	NULL,			// pointer to array of DEBTAB structures
@@ -301,7 +312,7 @@ uint32 trp_reqhi = 0; 		// Highest trap request
 t_stat sim_instr(void) {
     uint16 inst, save_P;
     t_stat reason = 0;
-    cpu_state.intrpt_mask = cpu_state.intrpt_mask & ~1;
+
     while (reason == 0) {
     sim_printf("\ncpu_state.reg_P: %#010x\n", cpu_state.reg_P);
         if (cpu_astop) {
@@ -357,7 +368,7 @@ t_stat sim_instr(void) {
         
         sim_printf("cpu_state.MA = %#05x, cpu_state.int_reqhi = %#05x, cpu_state.curr_int_lvl = %#05x", cpu_state.MA, cpu_state.int_reqhi, cpu_state.curr_int_lvl);
         
-// FIXME Why a master program sHould not be interrupted?        
+// FIXME Why a master program should not be interrupted?        
         if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > cpu_state.curr_int_lvl)) {
 //        if (true) {
  sim_printf("\nsim_instr(void) 17\n");
@@ -438,18 +449,28 @@ t_stat sim_instr(void) {
 
 /* Helper to get highest pending interrupt */
 int get_highest_interrupt(void) {
-    int i;
-    for (i = 31; i >= 0; i--) {
-        if (cpu_state.intrpt_mask & (1u << i)) {
-            sim_printf("[get_highest_interrupt] priority scan: highest pending=%d (mask=%08X)\n", i, cpu_state.intrpt_mask);
-            return i;
-        }
+    int int_level;
+    if (cpu_state.MA == false) {
+	for (int_level = 31; int_level >= 0; int_level--) {
+		/* 
+		* intrpt_pending is a 32-bit bit map of pending interrupts, set by devices, cleared when the interrupt is taken
+		* This is better than having a 'cpu_state.int_level' because it lower level interrupts of enables devices to be 
+		* remembered after a higher level interrupt has been processed
+		*/
+		    sim_printf("[get_highest_interrupt]  int level=%d, cpu_state.intrpt_pending=%#09x, 1u << int_level=%#09x\n", int_level, cpu_state.intrpt_pending, (0x01 << int_level));
+		if(cpu_state.intrpt_pending & (0x01 << int_level)) {
+		    sim_printf("[get_highest_interrupt] priority scan: found int level=%d, cpu_state.intrpt_pending=%#05x\n", int_level, cpu_state.intrpt_pending);
+		    return int_level;
+		    }
+	    }
     }
     return -1;   /* nothing pending */
 }
 
 /* ========== Memory Access Functions ========== */
-// read_word() receives an address in bytes and returns a 16bits word
+// The address is given for bytes, even if memory is a 16 bits array
+// And it's forbidden to write a word at a odd address
+// read_word() returns a 16bits word
 t_value read_word(t_addr va) {
     if (va & 1) { // Addresses should be even
         sim_printf("\n[read_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
@@ -471,6 +492,8 @@ t_value read_word(t_addr va) {
     return M[pa];
 }
 
+// The address is given for bytes, even if memory is a 16 bits array
+// And it's forbidden to write a word at a odd address
 void write_word(t_addr va, t_value val) {
     if (va & 1) {
         sim_printf("\n[write_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
@@ -547,7 +570,6 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.MS = 1; // We boot in master mode
     cpu_state.MA = cpu_state.PR = 0;
     cpu_state.cpu_mode = 0;
-    cpu_state.intrpt_mask = 0;
     cpu_state.curr_int_lvl = 0;
     cpu_state.susp_req_bits = 0;
     susp_stack_ptr = 0;
@@ -557,8 +579,10 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.interrupts_enabled = 0;
     cpu_state.panel_addr_lights = 0;
     cpu_state.panel_data_lights = 0;
-//    uint16 ctx_table = M[10]; // FIXME how to assign an address in Mitra's simulated space to ctx_table?
     panel_reset();
+    if (io_init())              /* build dio_disp[] so devices are usable */
+        return SCPE_IERR;
+//    uint16 ctx_table = M[10]; // FIXME how to assign an address in Mitra's simulated space to ctx_table?
     /* At cpu_reset(), the simulator does not need to initialize its own CPT in memory. 
     Every interrupt has an associated pointer indicating a memory area in which the context may be saved on occurence of an interrupt at this level. 
     The memory area for saving the context at a given level is actually reserved only if a program is connected to this level. 

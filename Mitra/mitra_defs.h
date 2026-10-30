@@ -166,7 +166,7 @@
 */
 
 /* I/O device definition block */
-#define DIO_N_MOD       (128)                 /* FIXME # DIO "modes" */
+#define DIO_N_MOD       (128)                 /* FIXME # DIO "modes" at 256? */
 
 typedef struct {
     uint32      dva;                                    /* dev addr (chan+dev) */

@@ -23,7 +23,7 @@
  */
 /*
 3. ASR 33 :
-Registres
+Registres de controleur
 
 z:
 	0 arrêt sur compte nul
@@ -107,6 +107,25 @@ All devices will follow the same integration pattern, they provide:
  * On read stop (compare character reached), R9 gets number of unread bytes,
  * R11 bits 7-15 get the last character.
  */
+ 
+/*
+Simulated program executes WD (E=1, A=command)
+        ↓
+asr_dio_handler() → asr33_wd()
+        ↓
+sets asr_state.mode / active / mem_addr / bytes_left
+        ↓
+sim_activate(&asr_unit, …)
+        ↓
+asr_svc() runs periodically
+        ↓
+asr33_poll()
+   • mode 3 → sim_putchar()          (printer)
+   • mode 1 → sim_poll_kbd()         (keyboard)
+   • mode 2 → fgetc(image)           (paper tape)
+        ↓
+when transfer ends → asr_interrupt() → sets interrupt request
+*/
 
 #include "mitra_defs.h"
 #include "mitra_cpu.h"
@@ -116,12 +135,14 @@ All devices will follow the same integration pattern, they provide:
 #include <stdlib.h>
 #include <stdbool.h>
 
+#include "sim_console.h"   /* sim_poll_kbd, sim_putchar, ... */
+
 t_stat asr_dio_handler(uint16 inst, t_bool is_write); // RD and WD wrapper
 
-/* ASR-33 Register Addresses are located in cpu_state.reg_block[1][1] to cpu_state.reg_block[1][3]
-cpu_state.reg_block[1][1] z bit (bit15) + byte count (bits 0-14)
-cpu_state.reg_block[1][2] byte address - 1
-cpu_state.reg_block[1][3] compare char (bits 8-15) + data (bits 0-7)
+/* ASR-33 Register Addresses are located in cpu_state.reg_cnt_MAE to cpu_state.reg_Work_MAE
+cpu_state.reg_cnt_MAE z bit (bit15) + byte count (bits 0-14)
+cpu_state.reg_curr_MAE byte address - 1
+cpu_state.reg_Work_MAE compare char (bits 8-15) + data (bits 0-7)
 */
 
 /* Command codes */
@@ -144,8 +165,6 @@ cpu_state.reg_block[1][3] compare char (bits 8-15) + data (bits 0-7)
 
 /* Interrupt level for ASR33 */
 #define ASR33_INT_LEVEL      6 // From MESTRALLET's thesis
-
-extern uint32 intrpt_mask;  /* interrupt request bits */
 
 /* Memory Access Functions (defined in mitra_cpu.h) */
 extern t_value read_word(t_addr va);
@@ -174,6 +193,7 @@ typedef struct {
 } ASR33_DEV;
 
 static ASR33_DEV asr_state = {0};
+UNIT asr_unit;
 
 /* ====================================================================== */
 /* Attach / Detach                                                        */
@@ -227,9 +247,9 @@ t_stat asr33_detach(UNIT *unit)
 
 static void asr_interrupt(void)
 {
-//    uint32 int_req = (1 << ASR33_INT_LEVEL);   /* no mask for interruption (source Mestrellet's thesis) */
-    uint32 int_req = ASR33_INT_LEVEL;   /* typical interrupt level for ASR33 */
-    io_interrupt_dispatch(int_req, false);
+    // Set bitmap for pending interruptions for interrupt 6 (typical interrupt level for ASR33)
+    cpu_state.intrpt_pending |= 1u << ASR33_INT_LEVEL;
+    io_interrupt_dispatch(cpu_state.intrpt_pending, false);
 }
 
 /* ====================================================================== */
@@ -262,9 +282,9 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
     uint8 cmd = a_val & 0xFF;
 
     /* Read R9 (z and count), R10 (address-1) and R11 compare char */
-    uint16 r9  = cpu_state.reg_block[1][1]; // Byte count
-    uint16 r10 = cpu_state.reg_block[1][2]; // Current address
-    uint16 r11 = cpu_state.reg_block[1][3]; // Working register
+    uint16 r9  = cpu_state.reg_cnt_MAE; // Byte count
+    uint16 r10 = cpu_state.reg_curr_MAE; // Current address
+    uint16 r11 = cpu_state.reg_Work_MAE; // Working register
             sim_printf("\n[asr33_wd 1] r9 = %#05x, r10 = %#05x, r11 = %#05x", r9, r10, r11);
 
     asr_state.stop_on_compare = (r9 >> 15) & 1;
@@ -285,6 +305,7 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
             asr_state.mem_addr  = r10 + 1;             /* R10 = addr - 1 */
             asr_state.bytes_left = (r9 & 0x7FFF) + 1;  /* count in low 15 bits */
             asr_state.status = 0x02;                   /* ecriture */
+	    sim_activate(&asr_unit, 0);
             break;
 
         case ASR_CMD_LEC_CLAV:   /* Lecture clavier */
@@ -297,6 +318,7 @@ t_stat asr33_wd(uint16 e_reg, uint16 a_val)
             asr_state.status = 0x03;                   /* lecture */
             /* Kick off the transfer engine; it will run asynchronously
                via asr_svc (called by SIMH). */
+	    sim_activate(&asr_unit, 0);
             break;
 
         case ASR_CMD_SUPPR:
@@ -366,24 +388,70 @@ int asr33_poll(void)
     if (!asr_state.active)
         return 0;
     
-    sim_printf("[asr33_poll], cpu_state.reg_block[1][0] = %#05x, cpu_state.reg_block[1][1] = %#05x, cpu_state.reg_block[1][2] = %#05x", cpu_state.reg_block[1][0], cpu_state.reg_block[1][1], cpu_state.reg_block[1][2]);
+    sim_printf("[asr33_poll], cpu_state.reg_8 = %#05x, cpu_state.reg_cnt_MAE = %#05x, cpu_state.reg_curr_MAE = %#05x", 
+    					cpu_state.reg_8, cpu_state.reg_cnt_MAE, cpu_state.reg_curr_MAE);
 
     if (asr_state.bytes_left == 0) {
         /* Transfer complete */
         asr_state.active = 0;
         asr_state.status = (asr_state.mode == 3) ? 0x02 : 0x03;
         /* Update R9 with remaining count (0) */
-        cpu_state.reg_block[1][1] = 0; // cpu_state.reg_block[1][1] is R9
+        cpu_state.reg_cnt_MAE = 0; // cpu_state.reg_cnt_MAE is R9
         asr_interrupt();
         return 1;
     }
 
-    if (asr_state.mode == 2 || asr_state.mode == 1) {
-        /* ---------- READ path (tape reader / keyboard) ---------- */
+    if (asr_state.mode == 1) {
+    	t_stat c = sim_poll_kbd();
+
+        if (c == SCPE_OK)
+            return 0;                           /* nothing typed yet */
+
+        if (c == SCPE_STOP) {                   /* Ctrl-E → stop simulator */
+            asr_state.active = 0;
+            return 0;
+        }
+        
+        /* ---------- READ path (keyboard) ---------- */
+        if (c == EOF) {
+            /* End of tape: stop with error */
+            asr_state.active = 0;
+            asr_state.status = 0x07;
+            asr_interrupt();
+            return 1;
+        }
+
+	if (c & SCPE_KFLAG) {
+		uint8 ch = c & 0xFF;
+		asr_state.last_char = ch;
+
+        	sim_printf("[asr33_poll] write this byte:  %#05x, at address = %#05x", c, asr_state.mem_addr);
+		write_byte(asr_state.mem_addr, ch);
+		asr_state.mem_addr++;
+		asr_state.bytes_left--;
+
+		/* update R11 low byte */
+		uint16 r11 = cpu_state.reg_Work_MAE;
+		r11 = (r11 & 0xFF00) | ch;
+		cpu_state.reg_Work_MAE = r11;
+
+		/* stop-on-compare? */
+		if (asr_state.stop_on_compare && ch == (uint8)asr_state.compare_char) {
+		        asr_state.active = 0;
+		        asr_state.status = 0x03;
+		        cpu_state.reg_cnt_MAE =
+		            (asr_state.bytes_left & 0x7FFF) | (asr_state.stop_on_compare << 15);
+		        asr_interrupt();
+		        return 1;
+		    }
+		}
+    } else if(asr_state.mode == 2 ) {
+        /* ---------- READ path (tape reader) ---------- */
         int c;
         if (asr_state.image == NULL) {
             asr_state.active = 0;
             asr_state.status = 0x07;   /* error */
+            cpu_state.reg_cnt_MAE = 0;   /* unblock polling loop */
             asr_interrupt();
             return 1;
         }
@@ -393,6 +461,7 @@ int asr33_poll(void)
             /* End of tape: stop with error */
             asr_state.active = 0;
             asr_state.status = 0x07;
+            cpu_state.reg_cnt_MAE = 0;   /* unblock polling loop */
             asr_interrupt();
             return 1;
         }
@@ -405,9 +474,9 @@ int asr33_poll(void)
 
         /* Update R11 low byte with the last character */
         {
-            uint16 r11 = cpu_state.reg_block[1][3];
+            uint16 r11 = cpu_state.reg_Work_MAE;
             r11 = (r11 & 0xFF00) | (c & 0xFF);
-            cpu_state.reg_block[1][3] = r11;
+            cpu_state.reg_Work_MAE = r11;
         }
 
         /* Stop-on-compare? */
@@ -416,7 +485,7 @@ int asr33_poll(void)
             asr_state.active = 0;
             asr_state.status = 0x03;
             /* R9 gets number of unread bytes */
-            cpu_state.reg_block[1][3] = (asr_state.bytes_left & 0x7FFF) | (asr_state.stop_on_compare << 15);
+            cpu_state.reg_Work_MAE = (asr_state.bytes_left & 0x7FFF) | (asr_state.stop_on_compare << 15);
             asr_interrupt();
             return 1;
         }
@@ -426,22 +495,24 @@ int asr33_poll(void)
         asr_state.last_char = ch;
         asr_state.mem_addr++;
         asr_state.bytes_left--;
+        
+	/* Go through SIMH console layer as it handles logging, Telnet, serial, etc.*/
+	sim_putchar(ch);
 
+	/* also echo to an attached capture file */
         if (asr_state.image) {
             /* Echo the character to the attached file (e.g. a log
                or console capture). Real hardware would drive the
                teletype's printer; SIMH can map this to stdout as well. */
             fputc(ch, asr_state.image);
             fflush(asr_state.image);
-        }
-        fputc(ch, stdout);
-        fflush(stdout);
-    }
+            }
+    	}
 
     if (asr_state.bytes_left == 0) {
         asr_state.active = 0;
         asr_state.status = (asr_state.mode == 3) ? 0x02 : 0x03;
-        cpu_state.reg_block[1][1] = 0;
+        cpu_state.reg_cnt_MAE = 0;
         asr_interrupt();
     }
 
@@ -465,16 +536,16 @@ t_stat asr_svc(UNIT *uptr)
     if (!asr_state.active)
         return SCPE_OK;
 
+    sim_printf("[asr_svc]");
     /* Perform one character of the transfer. */
-	    	sim_printf("[asr_svc]");
     asr33_poll();
 
     /* If the transfer is still active, reschedule ourselves so that
        the transfer progresses even without further WD commands. */
     if (asr_state.active) {
-        /* Schedule a short delay before the next character. In real
-           hardware the ASR-33 runs at ~10 chars/sec; SIMH's
-           sim_activate_after gives us a fine-grained timer. */
+        /* Schedule a short delay before the next character. 
+           In real hardware the ASR-33 runs at ~10 chars/sec; 
+           SIMH's sim_activate_after gives us a fine-grained timer. */
         sim_activate_after(uptr, 1000);   /* 1 ms */
     }
 
@@ -506,6 +577,20 @@ t_stat asr33_reset(DEVICE *dptr)
  *
  * This uses the WD/RD instruction path (asr33_wd / asr33_rd)
  * not front panel's INI microprogram.
+ 
+ Why this makes the boot succeed
+
+Traced step by step against your log and the mitra_boot.txt image:
+Step	After patch
+asr33_boot() loads 128 bytes	bytes 0x00–0x7F written, incl. CPT[6]=0x0014 at 0x06/0x0C and M[5]=0 at 0x0A
+cpu_reset()	P=0, MS=1, MA=0, level=0, intrpt_pending=0
+asr_interrupt()	intrpt_pending = 0x40, io_interrupt_dispatch sets reg_8 = 12
+get_BOOT_ENTRY_ADDR()	get_highest_interrupt() → 6, cpt_lookup(6) → 0x0014 (via byte 0x0C), context load yields P=0x0022, L=0, G=0, MS=1, curr_int_lvl=6, intrpt_pending=0
+cpu_running = 1	SIMH starts executing at 0x0022 (LDA DG #0x0E)
+Primary runs its poll loop (LDR R9 / BAZ / BRU)	WD starts ASR‑33 tape read; reg_cnt_MAE decrements via asr_state.bytes_left and becomes 0 at completion → A becomes 0 → BAZ to 0x36 (BRU SEC_ENTRY) → jumps to 0x0100
+Secondary	F408 (STM) masks interrupts; then prints the greeting, LISTEN loop, etc.
+
+After boot, when a subsequent tape read completes, asr_interrupt() re‑raises level 6, but curr_int_lvl is already 6 so 6 > 6 is false and sim_instr() does not re‑accept it — the primary/secondary polling code (LDR R9; BAZ/BCF …) is what terminates the transfer, exactly as the boot image intends.
  *
  */
 t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
@@ -552,20 +637,20 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
     if (c == EOF)
         return SCPE_FMT;
 
-    /* Load the rest of the tape into memory, one byte per at a time, starting at cpu_state.reg_block[1][2] + 1.
+    /* Load the rest of the tape into memory, one byte per at a time, starting at cpu_state.reg_curr_MAE + 1.
        */
-    //    addr = cpu_state.reg_block[1][2] ; // byte address - 1
+    //    addr = cpu_state.reg_curr_MAE ; // byte address - 1
     addr = ASR33_BOOT_LOAD_ADDR;                 /* fixed: 0 */    
  
     sim_printf("\n[asr33_boot() 5] addr = %#05x", addr);
 
     write_byte(addr++, (uint8)c);
 
-    //    while (addr < cpu_state.reg_block[1][1]) { // byte count
+    //    while (addr < cpu_state.reg_cnt_MAE) { // byte count
     while (addr < ASR33_BOOT_LOAD_ADDR + ASR33_BOOT_MAX_BYTES) {        
         c = fgetc(asr_state.image);
  
-	sim_printf("\n[asr33_boot() 6] c = %#05x", c);
+	// sim_printf("\n[asr33_boot() 6] c = %#05x", c);
 
         if (c == EOF)
             break;
@@ -576,6 +661,12 @@ t_stat asr33_boot(int32 unit_num, DEVICE *dptr)
        would, then transfer control to the freshly loaded code. */
     asr33_reset(dptr);
     cpu_reset(&cpu_dev);
+    /* The front-panel INI micro-program raises a "transfer complete"
+     * interrupt on level 6 after the 128-byte bootstrap has been read.
+     * The loaded image contains a pre-built CPT entry (byte 0x06 or 0x0C)
+     * and a context block (byte 0x14) whose P field points at 0x22.
+     * Accepting this interrupt is how we get the CPU to start in master
+     * mode at the primary bootstrap. */
     asr_interrupt();
     get_BOOT_ENTRY_ADDR(); // get registers and condition codes from task context
     cpu_state.cpu_running = 1;
@@ -626,7 +717,7 @@ t_stat asr_dio_handler(uint16 inst, t_bool is_write);
 dib_t asr_dib = {
     0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
     NULL,               // disp (not used for RD/WD)
-    0x15,               // dio: The "Mode" this device claims
+    0x1,               // dio: The "Mode" this device claims
     asr_dio_handler     // dio_disp: The handler function
 };
 

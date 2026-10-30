@@ -1753,6 +1753,12 @@ assert cpu L=0200
 assert cpu MS=0
 nobreak all
 
+; Reset for next tests
+deposit cpu G 0000
+deposit cpu L 0400
+deposit cpu MS 1
+deposit cpu PR 1
+
 echo "TEST 23.5: SRG-derived operations"
 
 ; XAA: exchange left and right bytes of A.
@@ -2341,8 +2347,9 @@ nobreak all
 ; ================================================================
 ; TEST GROUP 16: CLS
 ; CLS: stores (P)-G' and (L)-G' in the first two words of the
-; called section LDS, then L = (G) + M[(G)-4N] and
-; P = (G) + M[(G)-4N+2].
+; called section LDS, then 
+;    L = (G) + M[(G)-4N] and
+;    P = (G) + M[(G)-4N+2].
 ; ================================================================
 
 echo "TEST 16: CLS"
@@ -2357,8 +2364,8 @@ break 104
 go 540
 assert cpu P=0104
 assert cpu L=0200
-assert 200=0340
-assert 202=0000
+assert 200=0540
+assert 202=0200
 nobreak all
 
 ; ================================================================

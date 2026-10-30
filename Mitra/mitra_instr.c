@@ -181,15 +181,12 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
      */
     uint16 mode = cpu_state.MS;
     if (cpu_state.MS == 0) { /* Slave mode */
-        uint16 hexcode = inst & 0xF000;
-        // The bug is that the code doesn't handle the RSV instruction's privileged check. RSV is at 0xF10C. 
-        // The code should check hexcode == 0xF000 && opcode == 0x01 && (inst & 0x000F) == 0x0C 
-        if ((hexcode == 0x3000 && 						// 3Axx, 3Bxx, 3Dxx
-             (opcode == 0x0A || opcode == 0x0B || opcode == 0x0D)) ||
-            (hexcode == 0xE000 && opcode == 0x0A) ||				// EAxx
-            (hexcode == 0xF000 && opcode == 0x04) ||				// F4xx SYS instructions
-            (inst == 0xEC20 || inst == 0xFC20) ||				// DITR at 0xEC20 or 0xFC20
-            (hexcode == 0xF000 && opcode == 0x01 && ((inst & 0x000F) == 0x0C)))	// RSV is at 0xF10C
+        uint16 hexcode = (inst & 0xFF00) >> I_OPCODE_SHIFT ;
+        if(hexcode == 0x3A || hexcode == 0x3B || hexcode == 0x3D ||		// 3Axx, 3Bxx, 3Dxx
+           hexcode == 0x0A || hexcode == 0xEA ||				// 0Axx, EAxx
+           hexcode == 0xF4 ||							// F4xx SYS instructions
+           inst == 0xEC20 || inst == 0xFC20 ||					// DITR at 0xEC20 or 0xFC20
+           (hexcode == 0xF1 && ((inst & 0x000F) == 0x0C)))			// RSV is at 0xF10C							          
              {
             /* Check if it's a privileged SYS function */
             if (hexcode == 0xF000 && opcode == 0x04) { /* SYS */

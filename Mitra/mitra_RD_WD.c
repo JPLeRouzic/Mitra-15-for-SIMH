@@ -72,7 +72,7 @@ Whenever the simulator starts or resets, the CPU calls the io_init() function (l
 #include <stdio.h>
 #include <string.h>
 
-
+int dump(void *myStruct, long size);
 
 /* mitra_RD_WD.c: Mitra-15 Read Direct / Write Direct implementation
 
@@ -180,6 +180,8 @@ t_stat io_rwd(uint16 inst, t_bool is_write)
     /* Dispatch */
     if (dio_disp[mode] == NULL) {
         /* Non-existent device → invalid instruction trap */
+    sim_printf("\n[io_rwd trap] dio_disp[mode] == NULL, mode=%#05x\n", mode);
+    	dump(dio_disp, sizeof(dib_t));
         return mitra_trap(TRAP_ES, cpu_state.reg_P);
     }
 

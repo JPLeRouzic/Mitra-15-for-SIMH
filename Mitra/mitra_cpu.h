@@ -40,12 +40,19 @@
 #define HIST_MAX        65536
 #define HIST_NOEA       0x40000000
 
-/* Unit flags */
-#define UNIT_MSIZE      (1 << 0)
-#define UNIT_EXTINS     (1 << 1)
-#define UNIT_FP         (1 << 2)
-#define UNIT_MULDIV     (1 << 3)
-#define UNIT_HSINT      (1 << 4)
+/* Unit flags 
+* Define as (1 << (UNIT_V_UF + n)) so they don’t collide with SIMH’s own low flag bits.
+#define UNIT_MSIZE      (1 << (UNIT_V_UF + 0)
+#define UNIT_EXTINS     (1 << (UNIT_V_UF + 1)
+#define UNIT_FP         (1 << (UNIT_V_UF + 2)
+#define UNIT_MULDIV     (1 << (UNIT_V_UF + 3)
+#define UNIT_HSINT      (1 << (UNIT_V_UF + 4)
+*/
+#define UNIT_MSIZE      (0x8000)
+#define UNIT_EXTINS     (0x4000)
+#define UNIT_FP         (0x2000)
+#define UNIT_MULDIV     (0x1000)
+#define UNIT_HSINT      (0x0800)
 
 /* Memory sizes (in words) */
 #define MEM_4K          4096
@@ -82,8 +89,8 @@
 #define I_GROUP_SHIFT   9
 #define I_DISP_MASK     0x00FF
 
-/* Fixed GPRIME macro to correctly reference the G register in the current block */
-#define GPRIME ((cpu_state.MS) ? cpu_state.reg_G : 0)
+/* G’ = G in slave mode and G' = 0 in master mode */
+#define GPRIME ((cpu_state.MS) ? 0 : cpu_state.reg_G)
 
 /* Make code ready for virtual memory as in Mitra-125 and following models */
 #define VA_TO_PA(va) ((va) & 0x7FFF)
@@ -144,19 +151,23 @@ typedef struct {
  * So now operation in the simulator occurs on a set of shim registers that are made pointing to the correct block.
  * V and W are used by micro-programs.
  */
- 						
-    uint16 reg_P, reg_L, reg_G, reg_A, reg_E, reg_X ;	// | => Alias of bloc 0 of 8 registers
-    uint16 reg_V /* reg 6 */, reg_W;			// | reg_P is at index 0 and reg_W at index 7
+
+    // Register aliases are always loaded with the current block, whether block 0 or another (case of fast interrupt)				
+    // they are used because fast interrupts swaps block 0 with another block to spare saving the registers
+    // This helps when reading code
+    // reg_P is at index 0 and reg_W at index 7
+    uint16 reg_P, reg_L, reg_G, reg_A, reg_E, reg_X ;
+    uint16 reg_V /* reg 6 */, reg_W;
     
- 															// |
-    uint16 reg_8; /* niveau de la tâche en cours */									// | FIXME
+    // These are never swapped, they are always in block 1
+    uint16 reg_8; /* niveau de la tâche en cours */									// | 
     uint16 reg_cnt_MAE,  reg_curr_MAE, reg_Work_MAE; /* mémoire de voie au télétype de service (ASR 33 ou MAE) */	// | => Alias of bloc 1 of 8 registers
     uint16 reg_12; /* adresse du bloc programme en cours d'utilisation */						// |
     uint16 reg_NC1, reg_NC2, reg_NC3;	/* not important for SIMH */							// |
     
     uint8 C, OV;
         
-    uint16 reg_block[REG_BLOCS][8];
+    uint16 reg_block[REG_BLOCS][8]; // Used in case of fast interrupt
     
     uint8 J_reg;     /* J register (bits 0-4 block selector: bits 5 to 7 register, MITRA 15S_15M/15 Manuel de microprogrammation) */
 
@@ -174,13 +185,13 @@ typedef struct {
     * The various OSes are examples of programs which must be executed in master mode. (See CSV and RSV instructions).
     * It should be noted that addressing modes are different in master and slave modes (see Chapter V "Addressing modes") to provide absolute addressing capability.
     */
-    uint8 MS; // Master/slave
-    uint8 MA; // If interrupt mask is set to 1: all interrupt levels are masked
-    uint8 PR; // Access to protected areas
+    bool MS; // Master/slave
+    bool MA; // If interrupt mask is set to 1: all interrupt levels are masked
+    bool PR; // Access to protected areas
     
     /* Interrupt/High speed Interrupt/Suspension/Trap state */
-    uint32 intrpt_mask;  /* FIXME no 32-bit bitmask of pending interrupts after all? (source Mestrellet thesis) */
-    int16 curr_int_lvl;     /* Current interrupt level not unit16 */
+    uint32 intrpt_pending;	/* 32-bit bit map of pending interrupts, set by devices, cleared when the interrupt is taken */
+    int16 curr_int_lvl;     /* Current interrupt level not uint16 */
     t_bool high_speed;  /* TRUE if high-speed interrupt */
     int32 int_reqhi;         /* Highest pending interrupt level */
     
@@ -258,7 +269,7 @@ t_stat cpt_lookup(uint16 level, uint16 *ctx_ptr_out);
 uint16 set_indicators();
 void load_indicators_from_block(uint16 ind_word);
 void load_from_reserved_block(uint16 block);
-void load_from_memory(uint16 ctx_ptr);
+void load_CTX_from_mem(uint16 ctx_ptr);
 
 t_stat set_cc(void);
 t_stat cpu_ex(t_value * vptr, t_addr addr, UNIT * uptr, int32 sw);

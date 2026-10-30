@@ -140,7 +140,7 @@ This function is responsible for wiring up the dispatch table.
 When you add a new device (e.g., via the SIMH ATTACH or SET commands) that utilizes Direct I/O, it becomes part of the sim_devices list. 
 The next time io_init() runs (usually upon a system reset or boot), it will find the device's dib_t, read its dio mode, and insert its specific handler function into the dio_disp table. From that point on, any RD or WD instruction targeting that mode will be routed to the new device's code.
 
-f a device is disabled or removed from the configuration, it is omitted from the sim_devices list. 
+If a device is disabled or removed from the configuration, it is omitted from the sim_devices list. 
 When io_init() runs, it simply skips over that device. Because io_init() explicitly sets all non-zero indices to NULL in Step A, the slot in dio_disp for that device's mode will remain NULL.
 
 If a program executes an RD or WD instruction targeting a mode that was removed (meaning dio_disp[mode] is NULL), the io_rwd() function will catch it.
@@ -152,6 +152,18 @@ DEVICE *dptr;
 dib_t *dibp; 
 uint32 dio;
 
+    /* Reset every other peripheral that needs it
+    cdr_reset();
+    panel_reset();
+    ptr_reset();
+    ptp_reset();
+    printer_reset();
+    dri_reset(dptr);
+    asr33_reset(dptr);
+    
+    sim_printf("\n[IO-INIT] all devices reset\n"); 
+    */
+    
     /* Clear the entire dio_disp array to NULL. */
     for (uint i = 0; i < DIO_N_MOD; i++)
         dio_disp[i] = NULL;
@@ -179,43 +191,42 @@ uint32 dio;
         dio_disp[dio] = dibp->dio_disp;
         
     	/* Reset every peripheral that have multiple units and that needs it */
-        dri_reset(dptr);
 	// sagem_reset(dptr);
-	asr33_reset(dptr);
     }
         
-    /* Reset every other peripheral that needs it */
-    printf("\n[IO-INIT] resetting all devices: DRI, SAGEM, CDR, ASR33, PANEL, PTR, PTP, PRINTER\n");
-    cdr_reset();
-    panel_reset();
-    ptr_reset();
-    ptp_reset();
-    printer_reset();
-    printf("\n[IO-INIT] all devices reset\n");
-    
     return FALSE;
 }
 
 void write_byte_io(uint32 addr, uint8 val, int zio) {
-    printf("\n  [IO-MEM] write_byte_io addr=%05o zio=%d val=%03o\n", addr, zio, val);
+    sim_printf("\n  [IO-MEM] write_byte_io addr=%05o zio=%d val=%03o\n", addr, zio, val);
     write_byte((uint16)addr, val);
 }
 
 t_stat read_byte_io(uint32 addr, uint8 *val, int zio) {
     *val = read_byte((uint16)addr);
-    printf("\n  [IO-MEM] read_byte_io  addr=%05o zio=%d val=%03o\n", addr, zio, *val);
+    sim_printf("\n  [IO-MEM] read_byte_io  addr=%05o zio=%d val=%03o\n", addr, zio, *val);
     return SCPE_OK;
 }
 
-void io_interrupt_dispatch(uint32 int_req, t_bool high_speed) {
-    printf("\n  [io_interrupt_dispatch ] int_req=%08x high_speed=%d\n", int_req, (int)high_speed);
-    /* no mask for interruption (source Mestrellet's thesis) */
-//    cpu_state.intrpt_mask |= int_req;
-    if (cpu_state.MA == true) 
-    	cpu_state.reg_block[1][0] = 2 * int_req; // ITN = 2 times the interrupt level
-    if (high_speed) 
-    	cpu_state.high_speed = true;
+/*
+* io_interrupt_dispatch dispatches the interrupt, it does not much but is a placeholder for a futur I/O processor
+* There is no interrupt mask register only the MA flag (source Mestrellet's thesis)
+*/
+void io_interrupt_dispatch(uint32 int_req, t_bool high_speed)
+{
+    sim_printf("\n  [io_interrupt_dispatch] int_req=%08x high_speed=%d\n",
+           int_req, (int)high_speed);
+
+    if (high_speed) {
+        cpu_state.high_speed = true;
+    } else if (cpu_state.MA == false) {
+        /* R8 contains the double of the current level number
+         * (see manual II-8.1), not 2x the pending-interrupt bitmap. */
+        for (int i = 31; i >= 0; i--) {
+            if (int_req & (1u << i)) {
+                cpu_state.reg_8 = 2 * i;
+                break;
+            }
+        }
+    }
 }
-
-
-
