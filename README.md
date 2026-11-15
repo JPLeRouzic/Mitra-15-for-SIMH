@@ -50,14 +50,12 @@ To this day I did:
 - create a working SIMH environment for SIMH (deposit/examine/run/break/etc)
 - create a complete instruction decoder for each instruction and addressing mode
 - create code for common Mitra and CII devices
-- create a convincing (not tested) code for RD and WD instructions for simple communication with devices such as ASR33 or line printer.
-- create a convincing (not tested) code for DRI disks (UK's Data Recording Instrument) that uses the suspension system, the CII invention that aims at a similar goal as modern DMA.
+- create a convincing (not fully tested) code for RD and WD instructions for simple communication with devices such as ASR33 or line printer.
+- create a convincing (not tested at all) code for DRI disks (UK's Data Recording Instrument) that uses the suspension system, the CII invention that aims at a similar goal as modern DMA.
 - create a test program with around 250 instruction tests.
 
-I am planning to reconstruct CII's MTR (Real-Time Monitor) from a hexadecimal dump found in a PDF file; however, as the OCR output is abysmal, I have to visually verify every single byte. This will likely be the only piece of original CII code against which my simulator is tested, as everything else will have to be inferred from the documentation. It is therefore crucial that this test be successful.
-- It's not useful but I have also created a rudimentary assembler (not tested).
-
-On the long term I have plans to port RSX280 (RSX-11 clone) to the Mitra. Z80's BC and DE are similar to L and G registers, IX is an index register as Mitra's X, A and HL resemble to A and E. Main problems: Mitra has less registers, less addressing modes than the Z80, and it lacks a concept of a stack, which makes managing reentrancy complicated.
+I am planning to reconstruct CII's MTR (Real-Time Monitor) from a hexadecimal dump found in a PDF file; however, as the OCR output quality is abysmal, Istarian of VCFED forums had to visually verify every single byte. This will likely be the only piece of original CII code against which my simulator is tested, as everything else will have to be inferred from the documentation. It is therefore crucial that this test be successful.
+- It's not useful but I have also created a rudimentary assembler (not fully tested).
 
 ## Requirements
 
