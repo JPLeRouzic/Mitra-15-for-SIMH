@@ -1,0 +1,145 @@
+; ---- PRIMARY (0x0000..0x007F, loaded by asr33_boot) ----
+0000  0300        CPT[0]   (first byte must be non-zero: asr33_boot skips 00s)
+0002  0000        
+0004  0000        
+0006  0014        CPT[6]   (index = level, as cpt_lookup() computes today)
+0008  0000        
+000A  0000        M[10]    = CPT base = 0
+000C  0014        CPT[6]   (index = 2*level, in case cpt_lookup is fixed)
+000E  0143        R9  value : bytes to read - 1
+0010  007F        R10 value : load address - 1
+0012  0100        secondary entry point
+0014  2000        ctx6.indicators
+0016  0000        ctx6.X
+0018  0000        ctx6.E
+001A  0000        ctx6.A
+001C  0000        ctx6.G
+001E  0000        ctx6.L
+0020  0022        ctx6.P  = entry of primary code
+0022  F408        STM : mask interrupts en tête du code primaire (à 0x0022) pour masquer les interruptions avant le WD. Cela empêche l'interruption de niveau 6 de redémarrer le primaire.
+0024  400E        
+0026  FA09        LDA/STR R9  = count-1
+0028  4010        
+002A  FA0A        LDA/STR R10 = addr-1
+002C  2101        LDE #1
+002E  2003        LDA #3 (lecture ruban)
+0030  F403        WD : start tape read
+0032  F909        LDR R9 -> 0 when done
+0034  C502        BAZ GO
+0036  CF02        BRU W
+0038  DF12        BRU (SEC_ENTRY)
+
+; ---- SECONDARY (loaded at 0x0080, 324 bytes) ----
+0080  'Secondary b  MSG1
+009A  'Dummy subro  MSG2
+00B4  5245        W_RE
+00B6  5045        W_PE
+00B8  4154        W_AT
+00BA  474F        W_GO
+00BC  0D00        CRL
+00BE  DFDF        MCASE
+00C0  FF00        MASKL
+00C2  00FF        MASKR
+00C4  000D        CRR
+00C6  801F        R9KEY
+00C8  0000        RET1
+00CA  0000        RET2
+00CC  0000        DFLAG
+0100  F408        STM : mask interrupts (no CPT needed for ASR33 irq)
+0102  2019        A = count-1 (26 bytes)
+0104  FA09        STR R9
+0106  207F        A = address-1
+0108  FA0A        STR R10
+010A  F900        LDR R0 : A = P (address of next instr)
+010C  2506        ADD #6 : A = address after the BRU
+010E  51C8        STA RET1 : save return address
+0110  C746        BRU PRT  (print greeting)
+0112  2000        A = 0
+0114  51E0        clear command buffer word 0
+0116  51E2        clear command buffer word 1
+0118  51E4        clear command buffer word 2
+011A  51E6        clear command buffer word 3
+011C  51E8        clear command buffer word 4
+011E  51EA        clear command buffer word 5
+0120  51EC        clear command buffer word 6
+0122  51EE        clear command buffer word 7
+0124  51F0        clear command buffer word 8
+0126  51F2        clear command buffer word 9
+0128  51F4        clear command buffer word 10
+012A  51F6        clear command buffer word 11
+012C  51F8        clear command buffer word 12
+012E  51FA        clear command buffer word 13
+0130  51FC        clear command buffer word 14
+0132  51FE        clear command buffer word 15
+0134  40C6        LDA R9KEY
+0136  FA09        R9  = z=1, count-1=31
+0138  20DF        A = BUF-1
+013A  FA0A        R10 = BUF-1
+013C  40BC        LDA CRL
+013E  FA0B        R11 = compare char CR (high byte)
+0140  2101        LDE #0x1
+0142  2001        A = lecture clavier
+0144  F403        WD : start keyboard read
+0146  F90B        R11 low byte = last char transferred
+0148  49C2        AND MASKR
+014A  4BC4        CMP #CR        ; FIXME CRR = 0x000D should be 0x008D
+014C  C002        BCT GOTLINE
+014E  CF04        BRU WAITCR
+0150  40E0        LDA BUF[0]
+0152  49BE        AND MCASE
+0154  4BB4        CMP W_RE
+0156  C316        BCF TRYGO
+0158  40E2        LDA BUF[1]
+015A  49BE        AND MCASE
+015C  4BB6        CMP W_PE
+015E  C312        BCF TRYGO
+0160  40E4        LDA BUF[2]
+0162  49BE        AND MCASE
+0164  4BB8        CMP W_AT
+0166  C30E        BCF TRYGO
+0168  40E6        LDA BUF[3]
+016A  49C0        AND MASKL
+016C  4BBC        CMP CRL
+016E  C30A        BCF TRYGO
+0170  2019        A = count-1
+0172  FA09        STR R9
+0174  207F        LDA #0x7f
+0176  FA0A        STR R10
+0178  F900        LDR R0 : A = P (address of next instr)
+017A  2506        ADD #6 : A = address after the BRU
+017C  51C8        STA RET1 : save return address
+017E  C70F        BRU PRT  (re-send greeting)
+0180  CF37        BRU LISTEN
+0182  40E0        LDA BUF[0]
+0184  49BE        AND MCASE
+0186  4BBA        CMP W_GO
+0188  CB3B        BCF LISTEN (unknown)
+018A  40E2        LDA BUF[1]
+018C  49C0        AND MASKL
+018E  4BBC        CMP CRL
+0190  CB3F        BCF LISTEN (unknown)
+0192  F900        LDR R0 : A = P (address of next instr)
+0194  2506        ADD #6 : A = address after the BRU
+0196  51CA        STA RET2 : save return address
+0198  C709        BRU DUMMY  (launch dummy subroutine)
+019A  CF44        BRU LISTEN
+019C  2101        LDE #0x1
+019E  2002        A = ecriture clavier
+01A0  F403        WD : start print
+01A2  F909        R9 -> 0 when the transfer is complete
+01A4  C502        BAZ PRTX
+01A6  CF02        BRU PRTW
+01A8  DFC8        BRU (RET1) : return
+01AA  2055        LDA #0x55
+01AC  51CC        STA DFLAG : visible side effect (M[DFLAG]=0x0055)
+01AE  2019        A = count-1
+01B0  FA09        STR R9
+01B2  2099        LDA #0x99
+01B4  FA0A        STR R10
+01B6  F900        LDR R0 : A = P (address of next instr)
+01B8  2506        ADD #6 : A = address after the BRU
+01BA  51C8        STA RET1 : save return address
+01BC  CF10        BRU PRT  (print MSG2)
+01BE  20AA        LDA #0xaa
+01C0  51CC        DFLAG = 0x00AA : completed
+01C2  DFCA        BRU (RET2) : return
