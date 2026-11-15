@@ -160,7 +160,7 @@ static void set_condition_codes_compare(uint16 acc, uint16 mem, uint16 result) {
  * double_to_mitra().
  */
 void set_condition_codes_float(fp_status_t status) {
-  sim_printf("\n [set_condition_codes_float] fp_status_t: %#05x", status);
+  // sim_printf("\n [set_condition_codes_float] fp_status_t: %#05x", status);
 
   switch (status) {
     case MITRA_FP_OVERFLOW:
@@ -251,13 +251,13 @@ static uint16 sub16(uint16 a, uint16 b, uint16* carry, uint16* overflow) {
 /* mul32(cpu_state.reg_A, mem_value, &cpu_state.reg_E, &cpu_state.reg_A);
 static void mul32(uint16 a, uint16 b, uint16* high, uint16* low) {
     uint32 product = (uint32)(int16_t)a * (uint32)(int16_t)b;
-    sim_printf("\nproduct: %#010x", product);
+    // sim_printf("\nproduct: %#010x", product);
     *high = (product >> 16) & 0xFFFF;
     *low = product & 0xFFFF;
 } */
 static void mul32(uint16 a, uint16 b, uint16* high, uint16* low) {
   uint32 product = (uint32)a * (uint32)b;
-  sim_printf("\nproduct: %#010x", product);
+  // sim_printf("\nproduct: %#010x", product);
   *high = (uint16)(product >> 16);
   *low = (uint16)product;
 }
@@ -535,11 +535,11 @@ static fp_status_t double_to_mitra(double v, uint16_t* A, uint16_t* E) {
 
   bool negative = v < 0.0;
   double x = fabs(v);
-  sim_printf("\n[double_to_mitra] x = %g", x);
+  // sim_printf("\n[double_to_mitra] x = %g", x);
 
   int e = (int)floor(log(x) / log(16.0)) + 1;
 
-  sim_printf("\n[double_to_mitra] e = %d", e);
+  // sim_printf("\n[double_to_mitra] e = %d", e);
 
   /* Characteristic must fit in the 7-bit biased field.
    * Normalized mantissa is in [1/16, 1), so the exponent e
@@ -643,7 +643,7 @@ uint16 F4MasterInst(uint16 mode, uint16 inst) {
       break;
 
     default:
-      sim_printf("\n[group_3_P] 0xF4 unknown MasterInst %#04x", MasterInst);
+      // sim_printf("\n[group_3_P] 0xF4 unknown MasterInst %#04x", MasterInst);
       return TRAP_II;
   }
   return ret_code;
@@ -653,7 +653,7 @@ uint16 F4MasterInst(uint16 mode, uint16 inst) {
 uint16 case_instr_xDR(uint16 inst) {
   uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;  // opcodes all over 8 bits
 
-  sim_printf("\n[case_instr_xDR] opcode: %#010x\n", opcode);
+  // sim_printf("\n[case_instr_xDR] opcode: %#010x\n", opcode);
 
   uint16 disp = inst & 0x00FF;
   t_addr target_address;
@@ -726,8 +726,7 @@ uint16 case_instr_xDR(uint16 inst) {
     } break;
 
     default:
-      sim_printf("\n[case_instr_xDR] unknown opcode %#04x, inst %#06x\n",
-                 opcode, inst);
+      // sim_printf("\n[case_instr_xDR] unknown opcode %#04x, inst %#06x\n", opcode, inst);
       return TRAP_II;
   }
   return 0;
@@ -738,10 +737,10 @@ uint16 case_instr_xDR(uint16 inst) {
 // cpu_state.reg_block[1][n] This is because it would be awkward to write
 // cpu_state.reg_block[1][1] for cpu_state.reg_A
 void instr_LDR(uint16 reg_block, uint16 reg_num) {
-  sim_printf(
-      "\n[instr_LDR 1] reg_block = %#05x, reg_num = %#05x, cpu_state.reg_A = "
-      "%#05x, cpu_state.reg_cnt_MAE = %#05x",
-      reg_block, reg_num, cpu_state.reg_A, cpu_state.reg_cnt_MAE);
+  // sim_printf(
+  //    "\n[instr_LDR 1] reg_block = %#05x, reg_num = %#05x, cpu_state.reg_A = "
+  //    "%#05x, cpu_state.reg_cnt_MAE = %#05x",
+  //    reg_block, reg_num, cpu_state.reg_A, cpu_state.reg_cnt_MAE);
   if (reg_block == 0) {
     switch (reg_num) {
       case 0:
@@ -799,7 +798,7 @@ void instr_LDR(uint16 reg_block, uint16 reg_num) {
   } else {
     cpu_state.reg_A = cpu_state.reg_block[reg_block][reg_num];
   }
-  sim_printf("\n[instr_LDR 2] cpu_state.reg_A = %#05x", cpu_state.reg_A);
+  // sim_printf("\n[instr_LDR 2] cpu_state.reg_A = %#05x", cpu_state.reg_A);
   set_condition_codes_load(cpu_state.reg_A);
 }
 
@@ -882,7 +881,7 @@ void instr_STR(uint16 reg_block, uint16 reg_num) {
  */
 uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
   uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
-  sim_printf("\n[SHC, Special shift] opcode: %#010x\n", opcode);
+  // sim_printf("\n[SHC, Special shift] opcode: %#010x\n", opcode);
   uint16 disp = inst & I_DISP_MASK;
   uint8 count = disp & 0x1F;
 
@@ -890,16 +889,15 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
     case 0x3C: {  // SHC DL
       uint8 shc_word = (uint8)(read_word(target_address) & 0xFF);
       uint8 shc_type = (shc_word >> 5) & 0x07;
-      sim_printf("\nshc_type: %#010x\n", shc_type);
+      // sim_printf("\nshc_type: %#010x\n", shc_type);
       count = shc_word & 0x1F;
       switch (shc_type) {
         case 0:  // SLLD
           shift_lld(&cpu_state.reg_E, &cpu_state.reg_A, count);
           break;
         case 1:  // ???
-          sim_printf(
-              "\n[shift_instr] 0x3C case 1 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf( "\n[shift_instr] 0x3C case 1 unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
         case 2:  // PTY, ParitY check in A
           cpu_state.reg_E = compute_parity(&cpu_state.reg_A, count);
@@ -907,17 +905,16 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
           return 0;
 
         case 3:  // ???
-          sim_printf(
-              "\n[shift_instr] 0x3C case 3 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf("\n[shift_instr] 0x3C case 3 unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
         case 4:  // SRLD
           shift_rld(&cpu_state.reg_E, &cpu_state.reg_A, count);
           break;
         case 5:  // ???
-          sim_printf(
-              "\n[shift_instr] 0x3C case 5 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf(
+          //    "\n[shift_instr] 0x3C case 5 unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
         case 6:  // NLZ
           normalize(&cpu_state.reg_E, &cpu_state.reg_A, &cpu_state.reg_X,
@@ -926,15 +923,15 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
           return 0;
 
         case 7:  // ???
-          sim_printf(
-              "\n[shift_instr] case 0x3C unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf(
+          //    "\n[shift_instr] case 0x3C unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
 
         default:
-          sim_printf(
-              "\n[shift_instr] case 0x3C unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf(
+          //    "\n[shift_instr] case 0x3C unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           return TRAP_II;
       }
       set_condition_codes_load(cpu_state.reg_A);
@@ -959,17 +956,14 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
           // no break as it would execute set_condition_codes_load()
           return 0;
         case 3:
-          sim_printf(
-              "\n[shift_instr] case 0xEC 3 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf( "\n[shift_instr] case 0xEC 3 unknown opcode %#04x, inst %#06x\n", opcode, inst);
           break;
         case 4:  // SRLD
           shift_rld(&cpu_state.reg_E, &cpu_state.reg_A, count);
           break;
         case 5:
-          sim_printf(
-              "\n[shift_instr] case 0xEC 5 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf( "\n[shift_instr] case 0xEC 5 unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
         case 6:
           /* NLZ, double length NormaliZe (option)
@@ -983,15 +977,14 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
           // no break as it would execute set_condition_codes_load()
           return 0;
         case 7:
-          sim_printf(
-              "\n[shift_instr] case 0xEC 7 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf( "\n[shift_instr] case 0xEC 7 unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
 
         default:
-          sim_printf(
-              "\n[shift_instr] case 0xEC unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf(
+          //    "\n[shift_instr] case 0xEC unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           return TRAP_II;
       }
       set_condition_codes_load(cpu_state.reg_A);  // reg_A
@@ -1015,17 +1008,17 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
           return 0;
 
         case 3:
-          sim_printf(
-              "\n[shift_instr] case 0xFC 3 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf(
+          //    "\n[shift_instr] case 0xFC 3 unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
         case 4:  // SRLD
           shift_rld(&cpu_state.reg_E, &cpu_state.reg_A, count);
           break;
         case 5:
-          sim_printf(
-              "\n[shift_instr] case 0xFC 5 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf(
+          //    "\n[shift_instr] case 0xFC 5 unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
         case 6:
           /* NLZ, double length NormaliZe (option)
@@ -1040,23 +1033,22 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
           return 0;
 
         case 7:
-          sim_printf(
-              "\n[shift_instr] case 0xFC 7 unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf(
+          //    "\n[shift_instr] case 0xFC 7 unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           break;
 
         default:
-          sim_printf(
-              "\n[shift_instr] case 0xFC unknown opcode %#04x, inst %#06x\n",
-              opcode, inst);
+          // sim_printf(
+          //    "\n[shift_instr] case 0xFC unknown opcode %#04x, inst %#06x\n",
+          //    opcode, inst);
           return TRAP_II;
       }
       set_condition_codes_load(cpu_state.reg_A);
     } break;
 
     default:
-      sim_printf("\n[shift_instr] unknown opcode %#04x, inst %#06x\n", opcode,
-                 inst);
+      // sim_printf("\n[shift_instr] unknown opcode %#04x, inst %#06x\n", opcode, inst);
       return TRAP_II;
   }
   return 0;
@@ -1072,7 +1064,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
  */
 uint16 set_register(uint16 inst, uint32 mode) {
   uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0FF;
-  sim_printf("\n[set_register] opcode: %#010x\n", opcode);
+  // sim_printf("\n[set_register] opcode: %#010x\n", opcode);
   uint16 disp = inst & I_DISP_MASK;
   uint16 data;
 
@@ -1298,7 +1290,7 @@ uint16 set_register(uint16 inst, uint32 mode) {
               (cpu_state.reg_G + read_word(cpu_state.reg_G + 2)) & 0x7FFF;
           cpu_state.reg_P =  // (G) + 2 + ((G))
               (cpu_state.reg_G + 2 + read_word(cpu_state.reg_G)) & 0x7FFF;
-          sim_printf("\n[RSV_instr] P = %#05x", cpu_state.reg_P);
+          // sim_printf("\n[RSV_instr] P = %#05x", cpu_state.reg_P);
           break;
         case SRG_ACE:
           cpu_state.reg_E = (cpu_state.reg_E + cpu_state.C) & 0xFFFF;
@@ -1345,16 +1337,15 @@ uint16 set_register(uint16 inst, uint32 mode) {
           cpu_state.reg_X = (cpu_state.reg_X >> 1) | (cpu_state.reg_X & 0x8000);
           break;
         default:
-          sim_printf("\n[set_register] unknown opcode %#04x, inst %#06x\n",
-                     opcode, inst);
+          // sim_printf("\n[set_register] unknown opcode %#04x, inst %#06x\n",
+          //           opcode, inst);
           return TRAP_II;
       }  // switch (type)
     }  // case 0xF1:
     break;
 
     default:
-      sim_printf("\n[set_register] unknown opcode %#04x, inst %#06x\n", opcode,
-                 inst);
+      // sim_printf("\n[set_register] unknown opcode %#04x, inst %#06x\n", opcode, inst);
       return TRAP_II;
   }
   return 0;
@@ -1375,8 +1366,7 @@ uint16 set_register(uint16 inst, uint32 mode) {
 uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address,
                          uint16 inst) {
   uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0F;  // opcode on bits 4 to 7
-  sim_printf("\n[Mem_OP_Reg_To_Reg] opcode: %#05x mem_value: %#05x\n", opcode,
-             mem_value);
+  // sim_printf("\n[Mem_OP_Reg_To_Reg] opcode: %#05x mem_value: %#05x\n", opcode, mem_value);
   uint8 s_byte, d_byte;
   uint16 i, data;
   uint16 carry, overflow;
@@ -1450,11 +1440,11 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address,
                           0	|1	|	(A)< Y2
                           1	|0	|	(A)= Y2
       */
-      //    sim_printf("\n[CMP] carry = %#05x \n", cpu_state.C);
-      //    sim_printf("\n[CMP] overflow = %#010x \n", cpu_state.OV);
+      //    // sim_printf("\n[CMP] carry = %#05x \n", cpu_state.C);
+      //    // sim_printf("\n[CMP] overflow = %#010x \n", cpu_state.OV);
       set_condition_codes_compare(cpu_state.reg_A, mem_value, 0);
-      //    sim_printf("\n[CMP after codes_compare] carry = %#05x \n",
-      //    cpu_state.C); sim_printf("\n[CMP] overflow = %#05x \n",
+      //    // sim_printf("\n[CMP after codes_compare] carry = %#05x \n",
+      //    cpu_state.C); // sim_printf("\n[CMP] overflow = %#05x \n",
       //    cpu_state.OV);
       break;
 
@@ -1470,9 +1460,9 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address,
        * Operand is loaded in leftmost byte of A-register
        * Rightmost byte of A register is unaffected.
        */
-      //    sim_printf("\n[LBL] right: %#05x\n", cpu_state.reg_A & 0x00FF);
-      //    sim_printf("\n[LBL] mem_value: %#05x\n", mem_value);
-      //    sim_printf("\n[LBL] mem_value & 0xFF00: %#05x\n", mem_value &
+      //    // sim_printf("\n[LBL] right: %#05x\n", cpu_state.reg_A & 0x00FF);
+      //    // sim_printf("\n[LBL] mem_value: %#05x\n", mem_value);
+      //    // sim_printf("\n[LBL] mem_value & 0xFF00: %#05x\n", mem_value &
       //    0xFF00);
       cpu_state.reg_A =
           (cpu_state.reg_A &
@@ -1480,7 +1470,7 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address,
           ((mem_value << 8) &
            0xFF00);  // Memory's left byte is loaded in A's left byte
       set_condition_codes_load(cpu_state.reg_A);
-      //    sim_printf("\n[Load Byte Left] A: %#05x\n", cpu_state.reg_A);
+      //    // sim_printf("\n[Load Byte Left] A: %#05x\n", cpu_state.reg_A);
       break;
 
     case 0x0E:
@@ -1506,8 +1496,8 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address,
       break;
 
     default:
-      sim_printf("\n[Mem_OP_Reg_To_Reg] unknown opcode %#04x, inst %#06x\n",
-                 opcode, inst);
+      // sim_printf("\n[Mem_OP_Reg_To_Reg] unknown opcode %#04x, inst %#06x\n",
+      //           opcode, inst);
       return TRAP_II;
   }
   return 0;
@@ -1517,7 +1507,7 @@ uint16 Mem_OP_Reg_To_Reg(t_value mem_value, t_addr target_address,
 uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst,
                                  t_addr target_address, t_value mem_value) {
   uint16 disp = inst & I_DISP_MASK;
-  sim_printf("\n[Complex_Mem_OP_Reg_To_Reg] opcode: %#010x\n", opcode);
+  // sim_printf("\n[Complex_Mem_OP_Reg_To_Reg] opcode: %#010x\n", opcode);
   switch (opcode) {
     case 0x04:  // "LEA"
       cpu_state.reg_A = (target_address - cpu_state.reg_G) & 0x0FFFF;
@@ -1556,8 +1546,8 @@ uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst,
       if(i == cpu_state.reg_E) {
 	      cpu_state.reg_A = cpu_state.reg_G + cpu_state.reg_A;
 	      cpu_state.reg_E = 0;
-    	      cpu_state.C = 1;  
-    	      cpu_state.OV = 0;
+    	      cpu_state.C = 0;  
+    	      cpu_state.OV = 1;
     	      }
       else {
       	      // Reference byte found in the string,
@@ -1571,9 +1561,9 @@ uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst,
       break;
 
     default:
-      sim_printf(
-          "\n[Complex_Mem_OP_Reg_To_Reg] unknown opcode %#04x, inst %#06x\n",
-          opcode, inst);
+      // sim_printf(
+      //    "\n[Complex_Mem_OP_Reg_To_Reg] unknown opcode %#04x, inst %#06x\n",
+      //    opcode, inst);
       return TRAP_II;
   }
   return 0;
@@ -1592,7 +1582,7 @@ uint16 Complex_Mem_OP_Reg_To_Reg(uint8 opcode, uint16 inst,
  */
 uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
   uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0x0F;  // opcodes on bits 4 to 7
-  sim_printf("\n[Reg_OP_Mem_To_Mem] opcode: %#010x\n", opcode);
+  // sim_printf("\n[Reg_OP_Mem_To_Mem] opcode: %#010x\n", opcode);
   uint16 data, data2, result;
   uint16 carry, overflow;
   int i;
@@ -1615,25 +1605,18 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
 
     case 0x04:
       /* SBL - Store Byte Left
-       * Store A register's left byte in memory's left byte
+       * L/R name the half of register A, not the memory position:
+       * A's left byte is stored in the BYTE addressed by Y (even Y = left byte of the word, odd Y = right byte).
        */
-      data = read_word(target_address);
-      write_word(
-          target_address,                   // Store result in memory
-          (data & 0x00FF) |                 // Keep memory's right byte
-              (cpu_state.reg_A & 0xFF00));  // Select A register's left byte
+      write_byte(target_address, (cpu_state.reg_A >> 8) & 0x00FF);
       break;
 
     case 0x05:
       /*
        * SBR - Store Byte Right
-       * Rightmost byte of register A is stored in memory
+       * A's right byte is stored in the BYTE addressed by Y.
        */
-      data = read_word(target_address);
-      write_word(target_address,
-                 (data & 0xFF00) |  // Left byte of memory is unchanged
-                     ((cpu_state.reg_A) &
-                      0x00FF));  // Rightmost byte of register A is selected
+      write_byte(target_address, cpu_state.reg_A & 0x00FF);
       break;
 
     case 0x06:
@@ -1691,18 +1674,18 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
 
       uint16 table = target_address;  // a 256 consecutive byte translation
                                       // table starting at Y-calculated address
-      sim_printf("\n[TRS 1] table: %#05x", table);
-      sim_printf("\n[TRS 2] E: %#05x", cpu_state.reg_E);
+      // sim_printf("\n[TRS 1] table: %#05x", table);
+      // sim_printf("\n[TRS 2] E: %#05x", cpu_state.reg_E);
       for (i = 0; i < cpu_state.reg_E; i++) {
         // ((A) + (G) + i) = (Y + ((A) + (G) +i)e)
         // b = ((A) + (G) +i)
         uint8 b = read_byte(cpu_state.reg_A + cpu_state.reg_G + i);
-        sim_printf("\n[TRS 3] b: %#05x", b);
+        // sim_printf("\n[TRS 3] b: %#05x", b);
         uint8 t = read_byte(table + (b & 0xFF));
-        sim_printf("\n[TRS 4] t: %#05x", t);
+        // sim_printf("\n[TRS 4] t: %#05x", t);
         // ((A) + (G) + i) = t
-        sim_printf("\n[TRS 5] target: %#05x",
-                   cpu_state.reg_A + cpu_state.reg_G + i);
+        // sim_printf("\n[TRS 5] target: %#05x",
+        //           cpu_state.reg_A + cpu_state.reg_G + i);
         write_byte(cpu_state.reg_A + cpu_state.reg_G + i, t);
       }
       cpu_state.reg_E = 0;
@@ -1729,8 +1712,8 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
       break;
 
     default:
-      sim_printf("\n[Reg_OP_Mem_To_Mem] unknown opcode %#04x, inst %#06x\n",
-                 opcode, inst);
+      // sim_printf("\n[Reg_OP_Mem_To_Mem] unknown opcode %#04x, inst %#06x\n",
+      //           opcode, inst);
       return TRAP_II;
   }
   return 0;
@@ -1743,7 +1726,7 @@ uint16 Reg_OP_Mem_To_Mem(uint16 inst, t_addr target_address, uint32 mode) {
  */
 uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address) {
   uint8 opcode = ((inst & 0x0F00) >> I_OPCODE_SHIFT);
-  sim_printf("\n[floating_inst] opcode: %#010x\n", opcode);
+  // sim_printf("\n[floating_inst] opcode: %#010x\n", opcode);
   uint16 data, data2;
 
   switch (opcode) {
@@ -1756,14 +1739,14 @@ uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address) {
       uint16_t op_A = read_word((target_address + 2) & 0x0FFFF); /* low half */
       uint16_t op_E = read_word(target_address);                 /* high half */
       double a = mitra_to_double(cpu_state.reg_A, cpu_state.reg_E);
-      sim_printf("\n[floating_inst] a: %g\n", a);
+      // sim_printf("\n[floating_inst] a: %g\n", a);
       double b = mitra_to_double(op_A, op_E);
-      sim_printf("\n[floating_inst] b: %g\n", b);
+      // sim_printf("\n[floating_inst] b: %g\n", b);
       double r = a + b;
-      sim_printf("\n[floating_inst] r: %g\n", r);
+      // sim_printf("\n[floating_inst] r: %g\n", r);
       fp_status_t st = double_to_mitra(r, &cpu_state.reg_A, &cpu_state.reg_E);
-      sim_printf("\n[floating_inst] E: %#05x\n", cpu_state.reg_E);
-      sim_printf("\n[floating_inst] A: %#05x\n", cpu_state.reg_A);
+      // sim_printf("\n[floating_inst] E: %#05x\n", cpu_state.reg_E);
+      // sim_printf("\n[floating_inst] A: %#05x\n", cpu_state.reg_A);
       set_condition_codes_float(st);
     } break;
 
@@ -1773,14 +1756,14 @@ uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address) {
       uint16_t op_A = read_word((target_address + 2) & 0x0FFFF); /* low half */
       uint16_t op_E = read_word(target_address);                 /* high half */
       double a = mitra_to_double(cpu_state.reg_A, cpu_state.reg_E);
-      sim_printf("\n[floating_inst] a: %g\n", a);
+      // sim_printf("\n[floating_inst] a: %g\n", a);
       double b = mitra_to_double(op_A, op_E);
-      sim_printf("\n[floating_inst] b: %g\n", b);
+      // sim_printf("\n[floating_inst] b: %g\n", b);
       double r = a - b;
-      sim_printf("\n[floating_inst] r: %g\n", r);
+      // sim_printf("\n[floating_inst] r: %g\n", r);
       fp_status_t st = double_to_mitra(r, &cpu_state.reg_A, &cpu_state.reg_E);
-      sim_printf("\n[floating_inst] E: %#05x\n", cpu_state.reg_E);
-      sim_printf("\n[floating_inst] A: %#05x\n", cpu_state.reg_A);
+      // sim_printf("\n[floating_inst] E: %#05x\n", cpu_state.reg_E);
+      // sim_printf("\n[floating_inst] A: %#05x\n", cpu_state.reg_A);
       set_condition_codes_float(st);
     } break;
 
@@ -1793,8 +1776,8 @@ uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address) {
       double b = mitra_to_double(op_A, op_E);
       double r = a * b;
       fp_status_t st = double_to_mitra(r, &cpu_state.reg_A, &cpu_state.reg_E);
-      sim_printf("\n[floating_inst] E: %#05x\n", cpu_state.reg_E);
-      sim_printf("\n[floating_inst] A: %#05x\n", cpu_state.reg_A);
+      // sim_printf("\n[floating_inst] E: %#05x\n", cpu_state.reg_E);
+      // sim_printf("\n[floating_inst] A: %#05x\n", cpu_state.reg_A);
       set_condition_codes_float(st);
     } break;
 
@@ -1808,14 +1791,13 @@ uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address) {
       if (b == 0.0) return TRAP_II;
       double r = a / b;
       fp_status_t st = double_to_mitra(r, &cpu_state.reg_A, &cpu_state.reg_E);
-      sim_printf("\n[floating_inst] E: %#05x\n", cpu_state.reg_E);
-      sim_printf("\n[floating_inst] A: %#05x\n", cpu_state.reg_A);
+      // sim_printf("\n[floating_inst] E: %#05x\n", cpu_state.reg_E);
+      // sim_printf("\n[floating_inst] A: %#05x\n", cpu_state.reg_A);
       set_condition_codes_float(st);
     } break;
 
     default:
-      sim_printf("\n[floating_inst] unknown opcode %#04x, inst %#06x\n", opcode,
-                 inst);
+      // sim_printf("\n[floating_inst] unknown opcode %#04x, inst %#06x\n", opcode, inst);
       return TRAP_II;
   }
   return 0;
@@ -1842,7 +1824,7 @@ uint16 floating_inst(uint16 inst, uint32 mode, t_addr target_address) {
  */
 uint16 string_proc(uint16 inst, uint32 mode, t_addr target_address) {
   uint8 opcode = ((inst & 0x1F00) >> I_OPCODE_SHIFT);
-  sim_printf("\n[string_proc] opcode: %#010x\n", opcode);
+  // sim_printf("\n[string_proc] opcode: %#010x\n", opcode);
 
   switch (opcode) {
     case 0x1F:  // DL
@@ -1851,8 +1833,8 @@ uint16 string_proc(uint16 inst, uint32 mode, t_addr target_address) {
     case 0x9F:  // IGX
     case 0xAF:  // ILX
       /* MVS - MVS moves a string from (G)+(A) to Y (optional) */
-      //    	sim_printf("\n[string_proc] flags = %#05x", cpu_unit.flags);
-      //    	sim_printf("\n[string_proc] UNIT_EXTINS = %#05x", UNIT_EXTINS);
+      //    	// sim_printf("\n[string_proc] flags = %#05x", cpu_unit.flags);
+      //    	// sim_printf("\n[string_proc] UNIT_EXTINS = %#05x", UNIT_EXTINS);
       //        if (!(cpu_unit.flags & UNIT_EXTINS)) FIXME breaks here
       //            	return MM_INVINS;
       for (int alpha = (cpu_state.reg_E - 1); alpha >= 0; alpha--) {
@@ -1863,8 +1845,8 @@ uint16 string_proc(uint16 inst, uint32 mode, t_addr target_address) {
       break;
 
     default:
-      sim_printf("\n[string_proc] unknown opcode %#04x, inst %#06x\n", opcode,
-                 inst);
+      // sim_printf("\n[string_proc] unknown opcode %#04x, inst %#06x\n", opcode,
+      //           inst);
       return TRAP_II;
   }
   return 0;
@@ -1904,10 +1886,10 @@ void call_section(t_addr target_address) {
   * (G) + ((G) - 4Y + 2) -> (P)
   */
   uint16 section = target_address;
-  sim_printf(
-      "\n[call_section] target_address=%u section=%u P=%#06x G=%#06x "
-      "GPRIME=%#06x\n",
-      target_address, section, cpu_state.reg_P, cpu_state.reg_G, GPRIME);
+  // sim_printf(
+  //    "\n[call_section] target_address=%u section=%u P=%#06x G=%#06x "
+  //    "GPRIME=%#06x\n",
+  //    target_address, section, cpu_state.reg_P, cpu_state.reg_G, GPRIME);
 
   uint16 called_Lbase = read_word((cpu_state.reg_G - 4 * section) &
                                   0x0FFFF);  // Lbase = ((G) - 4Y)
@@ -1968,8 +1950,8 @@ void CSV_instr(t_addr target_address) {
   /* ---- Contrôle de borne ---- */
   uint16 max_sections = read_word(0x0E);
   if (target_address >= max_sections) {
-    sim_printf("\n[CSV] section %u >= max_sections %u -> TRAP_VM\n",
-               target_address, max_sections);
+    // sim_printf("\n[CSV] section %u >= max_sections %u -> TRAP_VM\n",
+    //           target_address, max_sections);
     mitra_trap(TRAP_VM, cpu_state.reg_P);
     return;
   }
@@ -1996,7 +1978,7 @@ void CSV_instr(t_addr target_address) {
 
   cpu_state.reg_L = read_word(srdn_addr);     /* ((&C) - 4N)     */
   cpu_state.reg_P = read_word(srdn_addr + 2); /* ((&C) - 4N + 2) */
-  sim_printf("\n[CSV_instr] P = %#05x", cpu_state.reg_P);
+  // sim_printf("\n[CSV_instr] P = %#05x", cpu_state.reg_P);
 }
 
 uint16 test_and_set(uint32 mode, t_addr target_address) {

@@ -161,6 +161,13 @@ t_stat cdr_dio_handler(uint16 inst, t_bool is_write) {
 	 }
 }
 
+dib_t cdr_dib = {
+    0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
+    NULL,               // disp (not used for RD/WD)
+    0x2,               // dio: The "Mode" this device claims
+    cdr_dio_handler     // dio_disp: The handler function
+};
+
 /* ------------------------------------------------------------------ */
 /* Card image reading (identical packing to sigma_cr.c)               */
 /* ------------------------------------------------------------------ */
@@ -437,7 +444,7 @@ DEVICE cdr_dev = {
     &cr_boot,           /* boot */
     &cr_attach,         /* attach */
     &cr_detach,         /* detach */
-    &cdr_dio_handler,               /* ctxt */
+    &cdr_dib,               /* ctxt */
     DEV_DISABLE,        /* flags */
     0,                  /* dctrl */
     NULL,               /* debflags */

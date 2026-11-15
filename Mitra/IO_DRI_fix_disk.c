@@ -777,7 +777,7 @@ t_stat dri_dio_handler(uint16 inst, t_bool is_write); // RD and WD wrapper
 dib_t dri_dib = {
     0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
     NULL,               // disp (not used for RD/WD)
-    0x15,               // dio: The "Mode" this device claims
+    0x3,               // dio: The "Mode" this device claims
     dri_dio_handler     // dio_disp: The handler function
 };
 

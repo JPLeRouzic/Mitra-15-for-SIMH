@@ -172,7 +172,6 @@ All devices will follow the same integration pattern, they provide:
 #define SAGEM_WORDS_PER_SECTOR (SAGEM_SECTOR_SIZE / 2)
 #define SAGEM_NUM_UNITS        2
 
-extern uint32 intrpt_mask;  /* interrupt request bits */
 UNIT sagem_unit[SAGEM_NUM_UNITS];
 
 /* Declared in sim_disk.h; forward-declared here to avoid include-path issues */
@@ -186,8 +185,6 @@ extern t_value read_word(t_addr va);
 extern void write_word(t_addr va, t_value val);
 extern uint8 read_byte(t_addr va);
 extern void write_byte(t_addr va, uint8 val);
-
-extern uint32 intrpt_mask;  /* interrupt request bits */
 
 typedef struct {
     FILE *image;
@@ -394,6 +391,13 @@ t_stat sagem_dio_handler(uint16 inst, t_bool is_write) {
 	 }
 }
 
+dib_t sagem_dib = {
+    0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
+    NULL,               // disp (not used for RD/WD)
+    0x8,               // dio: The "Mode" this device claims
+    sagem_dio_handler     // dio_disp: The handler function
+};
+
 /* WD handler (E=5) - Write AP to &3D */
 t_stat sagem_wd(uint16 e_reg, uint16 a_val)
 {
@@ -518,7 +522,7 @@ DEVICE sagem_dev = {
     NULL,            /* boot */
     &sagem_attach,     /* attach */
     &sagem_detach,     /* detach */
-    &sagem_dio_handler,            /* ctxt */
+    &sagem_dib,            /* ctxt */
     DEV_DISK | DEV_DISABLE,  /* flags */
     0,               /* dctrl */
     NULL,            /* debflags */

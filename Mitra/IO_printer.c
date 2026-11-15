@@ -123,8 +123,6 @@ All devices will follow the same integration pattern, they provide:
 #include <stdlib.h>
 #include <stdbool.h>
 
-extern uint32 intrpt_mask;  /* interrupt request bits */
-
 /* Memory Access Functions (defined in mitra_cpu.h) */
 extern t_value read_word(t_addr va);
 extern void write_word(t_addr va, t_value val);
@@ -162,6 +160,13 @@ t_stat printer_dio_handler(uint16 inst, t_bool is_write) {
 	 return printer_rd(cpu_state.reg_E, &cpu_state.reg_A);
 	 }
 }
+
+dib_t printer_dib = {
+    0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
+    NULL,               // disp (not used for RD/WD)
+    0x5,               // dio: The "Mode" this device claims
+    printer_dio_handler     // dio_disp: The handler function
+};
 
 static void lp_interrupt(void)
 {
@@ -368,7 +373,7 @@ DEVICE lp_dev = {
     NULL,               /* boot */
     &lpt_attach,        /* attach */
     &lpt_detach,        /* detach */
-    &printer_dio_handler,               /* ctxt */
+    &printer_dib,       /* ctxt */
     DEV_DISABLE,        /* flags */
     0,                  /* dctrl */
     NULL,               /* debflags */

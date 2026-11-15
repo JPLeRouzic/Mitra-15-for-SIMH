@@ -160,7 +160,7 @@ t_stat mitra_trap(int trap, uint16 pc) {
     write_word(4, (pc - GPRIME) & 0x7FFF); // 
     write_word(6, (cpu_state.reg_L - GPRIME) & 0x7FFF);
     /* Indicators word: cpu_state.PR, cpu_state.MA, cpu_state.MS, OV, C */
-    ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
+    ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA) << 14) |
         ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) | ((cpu_state.C &
             1) << 11);
     write_word(8, ind_word);
@@ -185,7 +185,7 @@ t_stat mitra_trap(int trap, uint16 pc) {
     /* Force master mode with protection override */
     cpu_state.MS = 1;
     cpu_state.PR = 1;
-    cpu_state.MA = 1;
+    cpu_state.MA = true;
     
     cpu_state.reg_L = (sect0_Lbase + cpu_state.reg_G) & 0x7FFF;
     cpu_state.reg_P = (sect0_Pbase + cpu_state.reg_G) & 0x7FFF; // Performs a call to supervisor section 0.
@@ -310,23 +310,36 @@ void io_suspension_dispatch(uint16 susp_level) {
 
 /* ========== Interrupt System (Section II-8.1) ========== */
 
+/* Indicator (status) word of a context / of the TWB.  Bit 0 is the LEFTMOST bit, bit 15 the rightmost:
+ *   bit 11 (0x0010) PR  protection bypass ("passe-partout", PM in the thesis)
+ *   bit 12 (0x0008) MA  interrupts masked
+ *   bit 13 (0x0004) MS  master mode
+ *   bit 14 (0x0002) OV  (CC_OVERFLOW in mitra_cpu.h)
+ *   bit 15 (0x0001) C   (CC_CARRY in mitra_cpu.h)
+ * "passe-partout" = PR + MS = 0x0014 ; with interrupts masked = 0x001C (thesis, figure 18). */
+#define IND_PR  0x0010
+#define IND_MA  0x0008
+#define IND_MS  0x0004
+#define IND_OV  0x0002
+#define IND_C   0x0001
 uint16 set_indicators() {
 	return (
-		((cpu_state.C  ? 1 : 0) << 11) |
-		((cpu_state.OV ? 1 : 0) << 12) |
-		((cpu_state.MA ? 1 : 0) << 14) |
-		((cpu_state.PR ? 1 : 0) << 15) |
-		((cpu_state.MS ? 1 : 0) << 13));	
+		((cpu_state.OV ? 1 : 0) << 0) |
+		((cpu_state.C  ? 1 : 0) << 1) |
+		((cpu_state.MS ? 1 : 0) << 2) |
+		((cpu_state.MA ? 1 : 0) << 3) |
+		((cpu_state.PR ? 1 : 0) << 4)
+		);	
 }
 
 /* Load indicators and shim registers from reserved block */
 void load_indicators_from_block(uint16 ind_word) {
         /* Load indicators from reserved block */
-	cpu_state.PR = (ind_word >> 15) & 1;
-        cpu_state.MA = (ind_word >> 14) & 1;
-        cpu_state.MS = (ind_word >> 13) & 1;
-        cpu_state.OV = (ind_word >> 12) & 1;
-        cpu_state.C = (ind_word >> 11) & 1;
+	cpu_state.PR = (ind_word >> 4) & 1;
+        cpu_state.MA = (ind_word >> 3) & 1;
+        cpu_state.MS = (ind_word >> 2) & 1;
+        cpu_state.OV = (ind_word >> 1) & 1;
+        cpu_state.C = (ind_word) & 1;
 }
 
 /* High-speed interrupts *
@@ -417,7 +430,7 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
     }
 
     /* is the new interrupt priority higher than the current level? */
-    if (int_level <= cpu_state.curr_int_lvl) {
+    if (int_level <= (cpu_state.reg_8 / 2)) { 
         sim_printf("\n[mitra_interrupt_accept] accept level=%d ** REJECTED (out of 0..31 range) as new interrupt priority NOT higher than the current level\n", int_level);
         return SCPE_ARG;
     }
@@ -438,7 +451,7 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         sim_printf("\n[mitra_interrupt_accept] taking FAST/high-speed path: register-block switch %d -> 6\n", cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
         
         /* Save current indicators in block 0, register 6 */
-        cpu_state.reg_V = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
+        cpu_state.reg_V = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA) << 14) |
                          ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
                          ((cpu_state.C & 1) << 11);
         
@@ -469,7 +482,7 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         sim_printf("\n[mitra_interrupt_accept] taking NORMAL path (context saved/loaded through memory CPT)\n");
         
 	uint16 old_ctx_ptr;
-	t_stat lk1 = cpt_lookup(cpu_state.curr_int_lvl, &old_ctx_ptr);
+	t_stat lk1 = cpt_lookup((cpu_state.reg_8 / 2), &old_ctx_ptr);
 	if (lk1 != SCPE_OK) {
 	    sim_printf("\n[mitra_interrupt_accept] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", int_level, lk1);
 	    return lk1;
@@ -491,11 +504,11 @@ t_stat mitra_interrupt_accept(uint16 int_level, t_bool high_speed) {
         write_word(old_ctx_ptr + 12, cpu_state.reg_P);
         
         /* Switch to new interrupt level */
-        sim_printf("\n[mitra_interrupt_accept] switching current level %d -> %d\n", cpu_state.curr_int_lvl, int_level);
-        cpu_state.curr_int_lvl = int_level;
+        sim_printf("\n[mitra_interrupt_accept] switching current level %d -> %d\n", (cpu_state.reg_8 / 2), int_level);
+        cpu_state.reg_8 = int_level * 2;
         
 	uint16 new_ctx_ptr;
-	t_stat lk2 = cpt_lookup(cpu_state.curr_int_lvl, &new_ctx_ptr);
+	t_stat lk2 = cpt_lookup((cpu_state.reg_8 / 2), &new_ctx_ptr);
 	if (lk2 != SCPE_OK) {
 	    sim_printf("\n[mitra_interrupt_accept] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", int_level, lk2);
 	    return lk2;
@@ -540,9 +553,7 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
     if (cpu_state.high_speed) {
         /* DITR - Return from high-speed interrupt */
         /* Save indicators in reserved block */
-        uint16 ind_word = ((cpu_state.PR & 1) << 15) | ((cpu_state.MA & 1) << 14) |
-                         ((cpu_state.MS & 1) << 13) | ((cpu_state.OV & 1) << 12) |
-                         ((cpu_state.C & 1) << 11);
+        uint16 ind_word = set_indicators();
         cpu_state.reg_block[cpu_state.reg_12][6] = ind_word;
         
         /* Return to block 0 */
@@ -562,12 +573,12 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
     } else {
         /* DIT - Return from normal interrupt */
 	uint16 ctx_ptr;
-	t_stat lk = cpt_lookup(cpu_state.curr_int_lvl, &ctx_ptr);
+	t_stat lk = cpt_lookup((cpu_state.reg_8 / 2), &ctx_ptr);
 	if (lk != SCPE_OK) {
-	    sim_printf("\n[mitra_interrupt_return] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", cpu_state.curr_int_lvl, lk);
+	    sim_printf("\n[mitra_interrupt_return] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n", (cpu_state.reg_8 / 2), lk);
 	    return lk;
 	}
-        sim_printf("\n[mitra_interrupt_return] leaving level=%d, saving its context to CPT[%d]=%#05x\n", cpu_state.curr_int_lvl, cpu_state.curr_int_lvl, ctx_ptr);
+        sim_printf("\n[mitra_interrupt_return] leaving level=%d, saving its context to CPT[%d]=%#05x\n", (cpu_state.reg_8 / 2), (cpu_state.reg_8 / 2), ctx_ptr);
         
         load_indicators_from_block(ctx_ptr);
 
@@ -584,12 +595,12 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         if (next_lvl >= 0) {
             /* Accept next interrupt */
             sim_printf("\n[mitra_interrupt_return] another interrupt pending, resuming level=%d\n", next_lvl);
-            cpu_state.curr_int_lvl = next_lvl;
+            cpu_state.reg_8 = next_lvl * 2;
             cpu_state.MA = false;
-            t_stat lk = cpt_lookup(cpu_state.curr_int_lvl, &ctx_ptr);
+            t_stat lk = cpt_lookup((cpu_state.reg_8 / 2), &ctx_ptr);
 		if (lk != SCPE_OK) {
 		    sim_printf("\n[mitra_interrupt_return] ** cannot dispatch interrupt level=%d (cpt_lookup=%d) **\n",
-			       cpu_state.curr_int_lvl, lk);
+			       (cpu_state.reg_8 / 2), lk);
 		    return lk;
 		}
             
@@ -603,7 +614,7 @@ t_stat mitra_interrupt_return(t_bool high_speed) {
         } else {
             /* Return to level 0 */
             sim_printf("\n[mitra_interrupt_return] no more interrupts pending, returning to level 0\n");
-            cpu_state.curr_int_lvl = 0;
+            cpu_state.reg_8 = 0;
         }
         sim_printf("ditret-out\n");
     }
@@ -632,13 +643,13 @@ t_stat get_BOOT_ENTRY_ADDR(void)
     sim_printf("\n[get_BOOT_ENTRY_ADDR] level=%d ctx_ptr=%#05x\n",
                next_lvl, ctx_ptr);
 
-    cpu_state.curr_int_lvl = next_lvl;
+    cpu_state.reg_8 = next_lvl * 2;
 
     uint16 ind_word = read_word(ctx_ptr);
     load_indicators_from_block(ind_word);
     load_CTX_from_mem(ctx_ptr);
 
-    /* Consume the pending interrupt now that its context is loaded. */
+    /* Remove the pending interrupt now that its context is loaded. */
     cpu_state.intrpt_pending &= ~(1u << next_lvl);
 
     sim_printf("\n[get_BOOT_ENTRY_ADDR] loaded P=%#05x L=%#05x G=%#05x MS=%d\n",

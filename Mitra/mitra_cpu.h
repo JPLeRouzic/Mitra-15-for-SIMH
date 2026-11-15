@@ -160,7 +160,7 @@ typedef struct {
     uint16 reg_V /* reg 6 */, reg_W;
     
     // These are never swapped, they are always in block 1
-    uint16 reg_8; /* niveau de la tâche en cours */									// | 
+    uint16 reg_8; /* niveau de la tâche en cours R8 = 2 × level */									// | 
     uint16 reg_cnt_MAE,  reg_curr_MAE, reg_Work_MAE; /* mémoire de voie au télétype de service (ASR 33 ou MAE) */	// | => Alias of bloc 1 of 8 registers
     uint16 reg_12; /* adresse du bloc programme en cours d'utilisation */						// |
     uint16 reg_NC1, reg_NC2, reg_NC3;	/* not important for SIMH */							// |
@@ -191,7 +191,7 @@ typedef struct {
     
     /* Interrupt/High speed Interrupt/Suspension/Trap state */
     uint32 intrpt_pending;	/* 32-bit bit map of pending interrupts, set by devices, cleared when the interrupt is taken */
-    int16 curr_int_lvl;     /* Current interrupt level not uint16 */
+//    int16 curr_int_lvl;     /* Current interrupt level sould be reg_8 */
     t_bool high_speed;  /* TRUE if high-speed interrupt */
     int32 int_reqhi;         /* Highest pending interrupt level */
     

@@ -214,8 +214,8 @@ t_stat read_byte_io(uint32 addr, uint8 *val, int zio) {
 */
 void io_interrupt_dispatch(uint32 int_req, t_bool high_speed)
 {
-    sim_printf("\n  [io_interrupt_dispatch] int_req=%08x high_speed=%d\n",
-           int_req, (int)high_speed);
+    // sim_printf("\n  [io_interrupt_dispatch] int_req=%08x high_speed=%d\n",
+    //       int_req, (int)high_speed);
 
     if (high_speed) {
         cpu_state.high_speed = true;

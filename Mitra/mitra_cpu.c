@@ -98,6 +98,10 @@ static BRKTYPTAB cpu_breakpoints[] = {
     { 0 }
 };
 
+static uint16 PChistpoint = 0;
+static uint16 PChistory[16] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+void is_loop_P(uint16 inst, uint16 PC);
+
 t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw);
 t_stat cpu_dep (t_value val, t_addr addr, UNIT *uptr, int32 sw);
 t_stat cpu_reset (DEVICE *dptr);
@@ -147,6 +151,8 @@ UNIT cpu_unit = {
 *    FLDATA(name, var, reset) - For 1-bit boolean flags (uses a single bit in the register)
 *    ORDATA(name, var, width) - For numeric values that can be any width (1-32 bits)
 *    DRDATA(name, var, width) - For display-only numeric values
+*
+* SIMH upper-cases the name you type, so register table must never defines names in lowercase (HRDATA(reg_8, …)
 */
 REG cpu_reg[] = {
     { HRDATA(P, cpu_state.reg_P, 16) }, // The order is important. HRDATA (not ORDATA): P must
@@ -160,8 +166,7 @@ REG cpu_reg[] = {
     { HRDATA(X, cpu_state.reg_X, 16) },
     { HRDATA(V, cpu_state.reg_V, 16) },
     { HRDATA(W, cpu_state.reg_W, 16) },
-    
-    { HRDATA(reg_8, cpu_state.reg_8, 16) },
+    { HRDATA(R8, cpu_state.reg_8, 16) },    
     
     { FLDATA(C, cpu_state.C, 0) },
     { FLDATA(OV, cpu_state.OV, 0) },
@@ -174,7 +179,7 @@ REG cpu_reg[] = {
     { HRDATA(U, cpu_state.U, 16) },
     
     /* Use separate variables for interrupt state instead of struct member */
-    { HRDATA(INT_LVL, cpu_state.curr_int_lvl, 5) },
+//    { HRDATA(INT_LVL, cpu_state.curr_int_lvl, 5) },   is reg_8
     { HRDATA(SUSP_REQ, cpu_state.susp_req_bits, 32) },
     { HRDATA(SUSP_LVL, cpu_state.susp_active_level, 5) },
     { HRDATA(TRP_REQ, cpu_state.trp_req_bits, 16) },
@@ -314,7 +319,7 @@ t_stat sim_instr(void) {
     t_stat reason = 0;
 
     while (reason == 0) {
-    sim_printf("\ncpu_state.reg_P: %#010x\n", cpu_state.reg_P);
+    	// // sim_printf("\ncpu_state.reg_P: %#05x\n", cpu_state.reg_P);
         if (cpu_astop) {
             cpu_astop = 0;
             return SCPE_STOP;
@@ -366,16 +371,13 @@ t_stat sim_instr(void) {
         */
         cpu_state.int_reqhi = get_highest_interrupt();
         
-        sim_printf("cpu_state.MA = %#05x, cpu_state.int_reqhi = %#05x, cpu_state.curr_int_lvl = %#05x", cpu_state.MA, cpu_state.int_reqhi, cpu_state.curr_int_lvl);
-        
-// FIXME Why a master program should not be interrupted?        
-        if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > cpu_state.curr_int_lvl)) {
-//        if (true) {
- sim_printf("\nsim_instr(void) 17\n");
+        // // sim_printf("cpu_state.MA = %#05x, cpu_state.int_reqhi = %#05x, curr_int_lvl = %#05x", cpu_state.MA, cpu_state.int_reqhi, cpu_state.reg_8);
+                
+        if ((cpu_state.MA == 0) && (cpu_state.int_reqhi >= 0) && (cpu_state.int_reqhi > (cpu_state.reg_8 / 2))) {
             uint16 pa;
 	    reason = cpt_lookup((uint16)cpu_state.int_reqhi, &pa);
 	    if (reason != SCPE_OK) {
-	    	sim_printf("reason != SCPE_OK.  reason = %#05x, cpu_state.int_reqhi = %#05x, pa = %#05x", reason, cpu_state.int_reqhi, pa);
+	    	// sim_printf("reason != SCPE_OK.  reason = %#05x, cpu_state.int_reqhi = %#05x, pa = %#05x", reason, cpu_state.int_reqhi, pa);
 	        break;
 	        }
             /* Accept interrupt
@@ -384,9 +386,7 @@ t_stat sim_instr(void) {
              * CPT[i] = word address of the context save area for level i.
              * Save area layout: word 0=Indicators, 1=X, 2=E, 3=A, 4=G, 5=L, 6=P 
              */
- sim_printf("\nsim_instr(void) 20\n");
             reason = mitra_interrupt_accept(cpu_state.int_reqhi, high_speed);
- sim_printf("\nsim_instr(void) 11\n");
             if (reason != SCPE_OK) break;
             
         } else {
@@ -424,17 +424,18 @@ t_stat sim_instr(void) {
             inst = read_word(cpu_state.reg_P);
             cpu_state.reg_P = (cpu_state.reg_P + 2);
             if (inst != 0) {
-                sim_printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x ---\n", inst, save_P);
+                // // sim_printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x ---\n", inst, save_P);
+                is_loop_P(inst, cpu_state.reg_P);
                 
                 // Print the instruction  mnemonic
-                fprint_sym(stdout, save_P, (unsigned int *) &inst, NULL, 0);
-                sim_printf("\n");
+                // fprint_sym(stdout, save_P, (unsigned int *) &inst, NULL, 0);
+                // // sim_printf("\n");
                 
                 reason = one_inst(inst, save_P, cpu_state.cpu_mode, & cpu_state.trap_P);
-                sim_printf("\n--- sim_instr: one_inst() returned reason=%#04x ---", reason);
+                // // sim_printf("\n--- sim_instr: one_inst() returned reason=%#04x ---", reason);
                 if (reason > 0 && reason != STOP_HALT) {
-                    sim_printf("\n    P restored to %#010x (was advanced to %#010x) due to reason=%#010x",
-                              save_P, cpu_state.reg_P, reason);
+                    // // sim_printf("\n    P restored to %#010x (was advanced to %#010x) due to reason=%#010x",
+                    //          save_P, cpu_state.reg_P, reason);
                     cpu_state.reg_P = save_P;
                 }
                 if (reason == STOP_IONRDY)
@@ -447,19 +448,39 @@ t_stat sim_instr(void) {
     return reason;
 }
 
+void is_loop_P(uint16 inst, uint16 PC) {
+	// static uint16 PChistpoint = 0;
+	// static void PChistory[16];
+	int i = 0;
+	for(; i < 16; i++) {
+		if((PChistory[i] == PC)) {
+			break;
+			}
+		}
+	if(i == 16) {
+		// // sim_printf("\n--- sim_instr: fetched inst=%#010x at P=%#010x ---\n", inst, PC);
+	}
+	PChistory[PChistpoint] = PC;
+	PChistpoint++;
+	if(PChistpoint > 15) {
+		PChistpoint = 0;
+		}
+}
+
 /* Helper to get highest pending interrupt */
 int get_highest_interrupt(void) {
     int int_level;
     if (cpu_state.MA == false) {
+    	// Interrupts are unmasked
 	for (int_level = 31; int_level >= 0; int_level--) {
 		/* 
 		* intrpt_pending is a 32-bit bit map of pending interrupts, set by devices, cleared when the interrupt is taken
 		* This is better than having a 'cpu_state.int_level' because it lower level interrupts of enables devices to be 
 		* remembered after a higher level interrupt has been processed
 		*/
-		    sim_printf("[get_highest_interrupt]  int level=%d, cpu_state.intrpt_pending=%#09x, 1u << int_level=%#09x\n", int_level, cpu_state.intrpt_pending, (0x01 << int_level));
+		// sim_printf("[get_highest_interrupt]  int level=%d, cpu_state.intrpt_pending=%#09x, 1u << int_level=%#09x\n", int_level, cpu_state.intrpt_pending, (0x01 << int_level));
 		if(cpu_state.intrpt_pending & (0x01 << int_level)) {
-		    sim_printf("[get_highest_interrupt] priority scan: found int level=%d, cpu_state.intrpt_pending=%#05x\n", int_level, cpu_state.intrpt_pending);
+		    // sim_printf("[get_highest_interrupt] priority scan: found int level=%d, cpu_state.intrpt_pending=%#05x\n", int_level, cpu_state.intrpt_pending);
 		    return int_level;
 		    }
 	    }
@@ -473,7 +494,7 @@ int get_highest_interrupt(void) {
 // read_word() returns a 16bits word
 t_value read_word(t_addr va) {
     if (va & 1) { // Addresses should be even
-        sim_printf("\n[read_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
+        // sim_printf("\n[read_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
         cpu_state.trp_req_bits |= (1u << TRAP_AI);
         cpu_state.trap_pending = TRUE;
         exit(-1);
@@ -482,13 +503,13 @@ t_value read_word(t_addr va) {
     uint16 pa = pa1  >> 1;	// The address is given for bytes, but M[] is a 16 bits array
     if (pa >= MAX_MEM_WORDS) {
         /* Trigger address invalid trap (TRAP_AI) */
-        sim_printf("\n    [MEM] trap in read_word  va=%#010x pa=%#010x  ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
-                 va, pa, MAX_MEM_WORDS);
+        // sim_printf("\n    [MEM] trap in read_word  va=%#010x pa=%#010x  ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
+        //         va, pa, MAX_MEM_WORDS);
         cpu_state.trp_req_bits |= (1 << TRAP_AI);
         cpu_state.trap_pending = TRUE;
         exit(-1);
     }
-    sim_printf("\n[MEM] read_word  pa=%#05x, value: %#05x, sizeof value: %#05x\n", pa, M[pa], sizeof(M[pa]));
+    // // sim_printf("\n[MEM] read_word  pa=%#05x, value: %#05x, sizeof value: %#05x\n", pa, M[pa], sizeof(M[pa]));
     return M[pa];
 }
 
@@ -496,30 +517,30 @@ t_value read_word(t_addr va) {
 // And it's forbidden to write a word at a odd address
 void write_word(t_addr va, t_value val) {
     if (va & 1) {
-        sim_printf("\n[write_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
+        // sim_printf("\n[write_word()] va=%#05x ** ODD ADDRESS ** -> TRAP_AI queued",  va);
         cpu_state.trp_req_bits |= (1u << TRAP_AI);
         cpu_state.trap_pending = TRUE;
         exit(-1);
     }
     uint16 pa1 = VA_TO_PA(va);
     uint16 pa = pa1  >> 1;	// The address is given for bytes, but M[] is a 16 bits array
-sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, val);
+// sim_printf("\n    Entering write_word()  va=%#010x pa=%d val=%#010x", va, pa, val);
     if (pa >= MAX_MEM_WORDS) {
-        sim_printf("\n    [MEM] write_word va=%#010x pa=%d val=%#010x ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
-                 va, pa, val, MAX_MEM_WORDS);
+        // sim_printf("\n    [MEM] write_word va=%#010x pa=%d val=%#010x ** OUT OF RANGE ** (MAX_MEM_WORDS=%d) -> TRAP_AI queued",
+        //         va, pa, val, MAX_MEM_WORDS);
         cpu_state.trp_req_bits |= (1 << TRAP_AI);
         cpu_state.trap_pending = TRUE;
         exit(-1);
     }
     /* Check memory protection */
     if (!cpu_state.PR && MP[pa]) {  /* Protection bit set and cpu_state.PR=0 */
-        sim_printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x ** PROTECTED ** (cpu_state.PR=0, prot bit set) -> TRAP_PM queued",
-                 va, pa, val);
+        // sim_printf("\n    [MEM] write_word va=%#010x pa=%#010x val=%#010x ** PROTECTED ** (cpu_state.PR=0, prot bit set) -> TRAP_PM queued",
+        //         va, pa, val);
         cpu_state.trp_req_bits |= (1 << TRAP_PM);
         cpu_state.trap_pending = TRUE;
         return;
     }
-    sim_printf("\n[MEM] write_word pa=%#010x val=%#010x (was %#010x)\n", pa, val, M[pa]);
+    // sim_printf("\n[MEM] write_word pa=%#010x val=%#010x (was %#010x)\n", pa, val, M[pa]);
     M[pa] = val;
 }
 
@@ -531,16 +552,16 @@ uint8 read_byte(t_addr va) {
     uint8 byte = 0;
 
     if (va & 1) {
-	// Odd should be right byte, so we erase the left byte
-	byte = word & 0x00FF;
+	// Odd means the left byte, so shift to left and we erase the right byte
+	byte = (word >> 8) & 0x00FF;
 	}
     else {
-    	// Even should be left byte, so we erase the right byte and shift to left
-	byte = (word & 0xFF00) >> 8;
+    	// Even means the right byte, so we erase the left byte
+	byte = word & 0x00FF;
     	}
 
-    sim_printf("\n    [MEM] read_byte  va=%#010x (word %#010x, %#010x byte) -> %#010x",
-             va, word_addr, (va & 1) ? "low" : "high", byte);
+    // sim_printf("\n    [MEM] read_byte  va=%#010x (word %#010x, %#010x byte) -> %#010x",
+    //         va, word_addr, (va & 1) ? "low" : "high", byte);
     return byte;
 }
 
@@ -551,13 +572,15 @@ void write_byte(t_addr va, uint8 val) {
     uint16 word = read_word(word_addr);
     uint16 wordReass;
     if (va & 1) {
-        wordReass = (word & 0xFF00) | (val & 0x0FF); // Odd should be right byte, so we erase the right byte before writing it
+        // Odd means the left byte
+        wordReass = (word & 0x00FF) | ((val << 8) & 0xFF00); // we erase the left byte before writing it
         }
     else {
-        wordReass = (word & 0x00FF) | (val << 8); // Even should be left byte, so we erase the left byte before writing it
+	// Even means the right byte
+        wordReass = (word & 0xFF00) | (val & 0x0FF);
         }
-    sim_printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
-             va, word_addr, (va & 1) ? "right byte" : "left byte", val);
+    // sim_printf("\n    [MEM] write_byte va=%#010x (word %#010x, %#010x byte) val=%#010x",
+    //         va, word_addr, (va & 1) ? "right byte" : "left byte", val);
     write_word(word_addr, wordReass);
 }
 
@@ -570,7 +593,7 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.MS = 1; // We boot in master mode
     cpu_state.MA = cpu_state.PR = 0;
     cpu_state.cpu_mode = 0;
-    cpu_state.curr_int_lvl = 0;
+    cpu_state.reg_8 = 0; // 2 * interrupt level
     cpu_state.susp_req_bits = 0;
     susp_stack_ptr = 0;
     cpu_state.trp_req_bits = 0;
@@ -611,7 +634,7 @@ t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 	if (vptr != NULL) {
 	    *vptr = M[pa] & DMASK;
 	    }
-	sim_printf("\nAddress at: %#010x contains: %#010x\n", addr, M[pa] & DMASK);
+	// sim_printf("\nAddress at: %#05x contains: %#05x\n", addr, M[pa] & DMASK);
 	return SCPE_OK;
 }
 
@@ -619,11 +642,11 @@ t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 t_stat cpu_dep(t_value val, t_addr addr, UNIT * uptr, int32 sw) {
     uint16 pa = addr >> 1;	// The address is given for bytes, but M[] is a 16 bits array
 
-    sim_printf("\nDeposit: %#010x to: %#010x\n", val & DMASK, addr);
+    // sim_printf("\nDeposit: %#05x to: %#05x\n", val & DMASK, addr);
     if (pa >= MAX_MEM_WORDS)
         return SCPE_NXM;
     M[pa] = val & DMASK;
-//    sim_printf("\nMemory now contains: %#010x\n", M[pa]);
+    // sim_printf("\nMemory now contains: %#05x\n", M[pa]);
     return SCPE_OK;
 }
 
@@ -796,5 +819,3 @@ t_stat cpu_show_hist(FILE * st, UNIT * uptr, int32 val, CONST void * desc) {
     }
     return SCPE_OK;
 }
-
-

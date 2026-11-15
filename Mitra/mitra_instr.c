@@ -151,8 +151,8 @@ Bits 0-2 do not completely specify the address mode:
 7	111:	DG, IL, PX, P,
 */
 t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
-    sim_printf(
-        "\none_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, modeSIMH, *trappc);
+    // // sim_printf(
+    //    "\none_inst: instruction: %#010x, PC: %#010x, mode: %#010x, trap: %#010x", inst, pc, modeSIMH, *trappc);
 
     uint8 opcode = (inst >> I_OPCODE_SHIFT) & 0xFF;
     uint16 disp = inst & I_DISP_MASK;
@@ -160,20 +160,20 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
     *trappc = pc;
 
     /*
-    sim_printf(
+    // sim_printf(
         "\n[INST] P=%#010x inst=%#010x (opcode=%#010x disp=%#010x hexcode=%04X) "
         "mode=%s blk=%#010x\n",
         pc, inst, opcode, disp, inst & 0xF000, cpu_state.MS ? "MASTER" : "SLAVE",
         cpu_state.SuspensionStack[susp_stack_ptr].J_reg);
         
-    sim_printf(
+    // sim_printf(
         "\nregs-before: A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x L=%#010x "
         "G=%#010x\n",
         cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X, cpu_state.C,
         cpu_state.OV, cpu_state.reg_L, cpu_state.reg_G);
-    */
-    sim_printf(
+    // sim_printf(
         "\nregs-before: A=%#010x E=%#010x\n", cpu_state.reg_A, cpu_state.reg_E);
+    */
 
     /* Check for privileged instruction in slave mode
      * Privileged opcodes are: 0x3A (STR), 0x3B (LDP), 0x3D (TES),
@@ -192,16 +192,16 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
             if (hexcode == 0xF000 && opcode == 0x04) { /* SYS */
                     /* DIT, RD, WD, STM, CLM, DITR are privileged, so they trap in
                      * slave mode */
-                    sim_printf(
-                        "\n** privileged SYS function (disp=%#010x) attempted "
-                        "in SLAVE mode -> TRAP_VM **\n",
-                        disp);
+                    // sim_printf(
+                    //    "\n** privileged SYS function (disp=%#010x) attempted "
+                    //    "in SLAVE mode -> TRAP_VM **\n",
+                    //    disp);
                     return mitra_trap(TRAP_VM, pc);
             } else {
-                sim_printf(
-                    "\n** privileged instruction (opcode=%#010x) attempted in "
-                    "SLAVE mode -> TRAP_VM **\n",
-                    opcode);
+                // sim_printf(
+                //    "\n** privileged instruction (opcode=%#010x) attempted in "
+                //    "SLAVE mode -> TRAP_VM **\n",
+                //    opcode);
                 return mitra_trap(TRAP_VM, pc);
             }
         }
@@ -282,40 +282,48 @@ t_stat one_inst(uint16 inst, uint16 pc, uint32 modeSIMH, uint16* trappc) {
             ret_code = group_3_PX(inst, mode);
             break;
         case 0xF000:
-//    sim_printf("\n[one_inst case_instr_xDR #1] inst: %#010x\n", inst);
+//    // sim_printf("\n[one_inst case_instr_xDR #1] inst: %#010x\n", inst);
     
             ret_code = group_3_P(inst, mode);
             break;
     }
 
     
-    sim_printf(
+    /* // sim_printf(
         "\nregs-after : P=%#010x A=%#010x E=%#010x X=%#010x C=%#010x O=%#010x "
         "L=%#010x G=%#010x\n",
         cpu_state.reg_P, cpu_state.reg_A, cpu_state.reg_E, cpu_state.reg_X,
         cpu_state.C, cpu_state.OV, cpu_state.reg_L, cpu_state.reg_G);
-    
-    sim_printf(
+    // sim_printf(
         "\nregs-after : A=%#010x E=%#010x\n", cpu_state.reg_A, cpu_state.reg_E);
+    */
     /* Check for traps after instruction execution */
     if (cpu_state.trap_pending) {
         int cause = mitra_resolve_trap_cause(cpu_state.trp_req_bits);
         if (cause < 0) {
             /* Defensive: flag was set but no cause bit is actually present. */
-            sim_printf(
-                "\n  -> trap_pending set but trp_req_bits=0, clearing spurious "
-                "trap\n");
+            // sim_printf(
+            //    "\n  -> trap_pending set but trp_req_bits=0, clearing spurious "
+            //    "trap\n");
             cpu_state.trap_pending = FALSE;
         } else {
             cpu_state.trap_cause = cause;
-            sim_printf(
-                "\n  -> trap pending (cause=%d %s) after execution, dispatching "
-                "mitra_trap()\n",
-                cause, mitra_trap_name(cause));
+            // sim_printf(
+            //    "\n  -> trap pending (cause=%d %s) after execution, dispatching "
+            //    "mitra_trap()\n",
+            //    cause, mitra_trap_name(cause));
             return mitra_trap(cause, pc);
         }
     }
     return ret_code;
+}
+
+/* LBL / LBR / LBX (opcodes 0x0D-0x0F) address a BYTE: Y is a byte address, even = left byte of the word,
+ * odd = right byte.  Every other group-1 instruction fetches a word. */
+static t_value read_operand(uint16 inst, t_addr ea)
+{
+    uint8 op = (inst >> I_OPCODE_SHIFT) & 0x0F;
+    return (op >= 0x0D && op <= 0x0F) ? read_byte(ea) : read_word(ea);
 }
 
 /*
@@ -338,15 +346,15 @@ uint16 group_1_DL(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    sim_printf("\nL = %#010x \n", cpu_state.reg_L);
+    // sim_printf("\nL = %#010x \n", cpu_state.reg_L);
 
     target_address = (cpu_state.reg_L + disp) & 0x0FFFF;
 
-    sim_printf("\ntarget_address = %#010x \n", target_address);
+    // sim_printf("\ntarget_address = %#010x \n", target_address);
 
-    t_value target_value = read_word(target_address);
+    t_value target_value = read_operand(inst, target_address);
 
-    sim_printf("\ntarget_value = %#010x \n", target_value);
+    // sim_printf("\ntarget_value = %#010x \n", target_value);
 
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
@@ -481,11 +489,11 @@ uint16 group_3_DL(uint16 inst, uint32 mode) {
             break;
         case 0x36:  // DCL DL, reg_X is decremented by the content of (reg_L
                     // added to displacement)
-    sim_printf("\n[DCL DL before] L = %#05x", cpu_state.reg_L);
-    sim_printf("\n[DCL DL before] target_address: %#05x", target_address);
+    // sim_printf("\n[DCL DL before] L = %#05x", cpu_state.reg_L);
+    // sim_printf("\n[DCL DL before] target_address: %#05x", target_address);
             cpu_state.reg_L =
                 (cpu_state.reg_L - read_word(target_address)) & 0x0FFFF;
-    sim_printf("\n[DCL DL after] L = %#05x", cpu_state.reg_L);
+    // sim_printf("\n[DCL DL after] L = %#05x", cpu_state.reg_L);
             break;
         case 0x37:
             /* CSV in DL mode */
@@ -600,7 +608,7 @@ uint16 group_1_DG(uint16 inst) {
     uint16 ret_code =0;
 
     target_address = (cpu_state.reg_G + disp) & 0x0FFFF;
-    t_value target_value = read_word(target_address);
+    t_value target_value = read_operand(inst, target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
     return ret_code;
@@ -674,7 +682,7 @@ uint16 group_1_IL(uint16 inst) {
     tmp = read_word(cpu_state.reg_L + disp);
     target_address = (GPRIME + tmp) & 0x0FFFF;
     
-    t_value target_value = read_word(target_address);
+    t_value target_value = read_operand(inst, target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
     return ret_code;
@@ -750,7 +758,7 @@ uint16 group_1_IGX(uint16 inst) {
 
     tmp = read_word(cpu_state.reg_G + disp); // tmp = (D+(G))
     target_address = (cpu_state.reg_G + tmp + cpu_state.reg_X) & 0x0FFFF; // IGX = tmp +(G) +(X)
-    t_value target_value = read_word(target_address);
+    t_value target_value = read_operand(inst, target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
 
     return ret_code;
@@ -826,7 +834,7 @@ uint16 group_1_ILX(uint16 inst) {
 
     tmp = read_word(cpu_state.reg_L + disp);
     target_address = (GPRIME + tmp + cpu_state.reg_X) & 0x0FFFF;
-    t_value target_value = read_word(target_address);
+    t_value target_value = read_operand(inst, target_address);
     Mem_OP_Reg_To_Reg(target_value, target_address, inst);
     return ret_code;
 }
@@ -903,7 +911,7 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    sim_printf("\n[group_3_PX] X: %#05x", cpu_state.reg_X);
+    // sim_printf("\n[group_3_PX] X: %#05x", cpu_state.reg_X);
     target_address = (disp + cpu_state.reg_X); // without  & 0x0FFFF because it breaks PX
     switch (opcode) {
         case 0xE0: // Shift variants in PX mode
@@ -919,18 +927,18 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
          *  Y = (P)
          */
 	case 0xE2: // ICX PX
-    sim_printf("\n[ICX PX before] X: %#05x", cpu_state.reg_X);
-    sim_printf("\n[ICX PX before] target_address: %#05x", target_address);
+    // sim_printf("\n[ICX PX before] X: %#05x", cpu_state.reg_X);
+    // sim_printf("\n[ICX PX before] target_address: %#05x", target_address);
 	    cpu_state.reg_X = (cpu_state.reg_X + target_address) & 0x0FFFF;
-    sim_printf("\n[ICX PX after] X: %#05x", cpu_state.reg_X);
+    // sim_printf("\n[ICX PX after] X: %#05x", cpu_state.reg_X);
 	    set_condition_codes_load(cpu_state.reg_X);
 	    break;
 	    
 	case 0xE3: // DCX PX
-    sim_printf("\n[DCX PX before] X = %#05x", cpu_state.reg_X);
-    sim_printf("\n[DCX PX before] target_address: %#05x", target_address);
+    // sim_printf("\n[DCX PX before] X = %#05x", cpu_state.reg_X);
+    // sim_printf("\n[DCX PX before] target_address: %#05x", target_address);
 	    cpu_state.reg_X = (cpu_state.reg_X - target_address); // Removed  & 0x0FFFF because arithmetic is on all 16 bits
-    sim_printf("\n[DCX PX after] X = %#05x", cpu_state.reg_X);
+    // sim_printf("\n[DCX PX after] X = %#05x", cpu_state.reg_X);
 	    set_condition_codes_load(cpu_state.reg_X);
 	    break;
 	    
@@ -942,10 +950,10 @@ uint16 group_3_PX(uint16 inst, uint32 mode) {
 	    break;
 	    
 	case 0xE6: // DCL PX
-    sim_printf("\n[DCL PX before] L = %#05x", cpu_state.reg_L);
-    sim_printf("\n[DCL PX before] target_address: %#05x", target_address);
+    // sim_printf("\n[DCL PX before] L = %#05x", cpu_state.reg_L);
+    // sim_printf("\n[DCL PX before] target_address: %#05x", target_address);
 	    cpu_state.reg_L = (cpu_state.reg_L - target_address); // Removed  & 0x0FFFF because arithmetic is on all 16 bits
-    sim_printf("\n[DCL PX after] X = %#05x", cpu_state.reg_X);
+    // sim_printf("\n[DCL PX after] X = %#05x", cpu_state.reg_X);
 	    break;
 	    
         case 0xE7:
@@ -1157,7 +1165,7 @@ uint16 group_3_P(uint16 inst, uint32 mode) {
             break;
 
         case 0xFA:  // STR P
-			sim_printf("\n[case_instr_xDR #2] inst: %#010x\n", inst);
+			// sim_printf("\n[case_instr_xDR #2] inst: %#010x\n", inst);
             case_instr_xDR(inst);
             break;
 
@@ -1216,14 +1224,14 @@ uint16 group_4_RP(uint16 inst) {
             * Y-address is loaded into P-register and execution proceeds at Y-address.
             * (P) + (2 * disp) + (2 * (X)) -> (P)
 	    */
-    sim_printf("\n[group_4_RP] target_address: %#05x\n", target_address);
-    sim_printf("\n[group_4_RP] X: %#05x\n", cpu_state.reg_X);
+    // sim_printf("\n[group_4_RP] target_address: %#05x\n", target_address);
+    // sim_printf("\n[group_4_RP] X: %#05x\n", cpu_state.reg_X);
             cpu_state.reg_P = (target_address + (cpu_state.reg_X << 1)) & 0x0FFFF;
-    sim_printf("\n[group_4_RP] P: %#05x\n", cpu_state.reg_P);
+    // sim_printf("\n[group_4_RP] P: %#05x\n", cpu_state.reg_P);
             break;
         case 0xC2:
             /* BOT - Branch on Overflow True (RP mode) */
-            sim_printf("\nC2, Overflow: %#010x\n", cpu_state.OV);
+            // sim_printf("\nC2, Overflow: %#010x\n", cpu_state.OV);
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1306,16 +1314,16 @@ uint16 group_4_RM(uint16 inst) {
             * (P) - (2 * disp) - (2 * (X)) -> (P)
             * 710 - (2 * 1) - (2 * 2)
 			*/
-    sim_printf("\n[group_4_RM] target_address: %#05x\n", target_address);
-    sim_printf("\n[group_4_RM] P: %#05x\n", cpu_state.reg_P);
-    sim_printf("\n[group_4_RM] disp: %#05x\n", disp);
-    sim_printf("\n[group_4_RM] X: %#05x\n", cpu_state.reg_X);
+    // sim_printf("\n[group_4_RM] target_address: %#05x\n", target_address);
+    // sim_printf("\n[group_4_RM] P: %#05x\n", cpu_state.reg_P);
+    // sim_printf("\n[group_4_RM] disp: %#05x\n", disp);
+    // sim_printf("\n[group_4_RM] X: %#05x\n", cpu_state.reg_X);
             cpu_state.reg_P = (cpu_state.reg_P - (disp << 1) - (cpu_state.reg_X << 1) -2) & 0x0FFFF; // minus 2 because P is already at P+2
-    sim_printf("\n[group_4_RM] P: %#05x\n", cpu_state.reg_P);
+    // sim_printf("\n[group_4_RM] P: %#05x\n", cpu_state.reg_P);
             break;
         case 0xCA:
             /* BOT */
-            sim_printf("\nCA, Overflow: %#010x\n", cpu_state.OV);
+            // sim_printf("\nCA, Overflow: %#010x\n", cpu_state.OV);
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1389,12 +1397,12 @@ uint16 group_5_IL(uint16 inst) {
             /* 
             * BCT - Branch on Carry True (IL mode)
             */
-    sim_printf("\n[group_5_IL] BCT 1 target_address: %#05x", target_address);
+    // sim_printf("\n[group_5_IL] BCT 1 target_address: %#05x", target_address);
             if (cpu_state.C)
                 cpu_state.reg_P = target_address;
             else
                 ;
-    sim_printf("\n[group_5_IL] BCT 2 target_address: %#05x", target_address);
+    // sim_printf("\n[group_5_IL] BCT 2 target_address: %#05x", target_address);
             break;
         case 0xD1:
             /* 
@@ -1407,7 +1415,7 @@ uint16 group_5_IL(uint16 inst) {
             break;
         case 0xD2:
             /* BOT */
-            sim_printf("\nD2, Overflow: %#010x\n", cpu_state.OV);
+            // sim_printf("\nD2, Overflow: %#010x\n", cpu_state.OV);
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1445,7 +1453,7 @@ uint16 group_5_IL(uint16 inst) {
             /* 
             * BRU - Branch Unconditional (IL mode) 
             */
-    sim_printf("\n[group_5_IL] BRU target_address: %#05x", target_address);
+    // sim_printf("\n[group_5_IL] BRU target_address: %#05x", target_address);
             cpu_state.reg_P = target_address;
             break;
     }
@@ -1472,13 +1480,13 @@ uint16 group_5_IG(uint16 inst) {
     uint16 target_address;
     uint16 ret_code =0;
 
-    sim_printf("\n[group_5_IG] reg_P = %d", cpu_state.reg_P);        
+    // sim_printf("\n[group_5_IG] reg_P = %d", cpu_state.reg_P);        
     tmp = read_word(cpu_state.reg_G + disp);
-    sim_printf("\n[group_5_IG] reg_G = %d", cpu_state.reg_G);
-    sim_printf("\n[group_5_IG] target_address = %d", disp);
-    sim_printf("\n[group_5_IG] tmp = %d", tmp);
+    // sim_printf("\n[group_5_IG] reg_G = %d", cpu_state.reg_G);
+    // sim_printf("\n[group_5_IG] target_address = %d", disp);
+    // sim_printf("\n[group_5_IG] tmp = %d", tmp);
     target_address = (GPRIME + tmp) & 0x0FFFF;
-    sim_printf("\n[group_5_IG] target_address = %d", target_address);
+    // sim_printf("\n[group_5_IG] target_address = %d", target_address);
     
 //    tmp = read_word(cpu_state.reg_L + disp);
 //    target_address = (GPRIME + tmp) & 0xFFFF;
@@ -1507,7 +1515,7 @@ uint16 group_5_IG(uint16 inst) {
             
         case 0xDA:
             /* BOT */
-            sim_printf("\nDA, Overflow: %#010x\n", cpu_state.OV);
+            // sim_printf("\nDA, Overflow: %#010x\n", cpu_state.OV);
             if (cpu_state.OV)
                 cpu_state.reg_P = target_address;
             else
@@ -1550,8 +1558,8 @@ uint16 group_5_IG(uint16 inst) {
             /* 
             * BRU - Branch Unconditional (IG mode) 
             */
-            sim_printf("\n[group_5_IG] target_address = %d", target_address);
-            sim_printf("\n[group_5_IG] 1 reg_P = %d", cpu_state.reg_P);        
+            // sim_printf("\n[group_5_IG] target_address = %d", target_address);
+            // sim_printf("\n[group_5_IG] 1 reg_P = %d", cpu_state.reg_P);        
             cpu_state.reg_P = target_address;
             break;
     }

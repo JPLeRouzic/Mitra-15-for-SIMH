@@ -85,6 +85,8 @@
 #define ASR33_BOOT_ENTRY_ADDR   0        /* PC value after a successful load   */
 #define ASR33_BOOT_MAX_BYTES    4096     /* safety cap on how much we'll load  */
 #define ASR33_LEADER_BYTE       0x00     /* blank/leader frame to skip over    */
+#define ASR33_BOOT_MAX_BYTES    4096     /* safety cap on how much we'll load  */
+#define ASR33_BOOT_FRONT_PANEL  128      /* bytes read by the INI micro-program at boot */
 
 // Interrupts save context in an area pointed by an index to the CPT table.
 // the CPT itself is pointed to by the contents of absolute address 10: M[10]
@@ -104,7 +106,6 @@ void   io_dev_attach(int oplabel, const char *file, int write);
 t_stat read_byte_io(uint32 addr, uint8 *val, int zio) ;
 void write_byte_io(uint32 addr, uint8 val, int zio) ;
 t_stat get_BOOT_ENTRY_ADDR(void);
-extern uint32 intrpt_mask;
 extern t_bool high_speed_int;
 
 #endif

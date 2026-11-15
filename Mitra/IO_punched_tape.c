@@ -154,8 +154,6 @@ All devices will follow the same integration pattern, they provide:
 #define PTR_LEADER_BYTE       0x00     /* blank/leader frame to skip over    */
 #define PTR_BOOT_MAX_BYTES    4096     /* safety cap on how much we'll load  */
 
-extern uint32 intrpt_mask;  /* interrupt request bits */
-
 /* Memory Access Functions (defined in mitra_cpu.h) */
 extern t_value read_word(t_addr va);
 extern void write_word(t_addr va, t_value val);
@@ -294,6 +292,20 @@ t_stat ptr_wd(uint16 e_reg, uint16 a_val)
     }
     return SCPE_OK;
 }
+
+dib_t ptr_dib = {
+    0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
+    NULL,               // disp (not used for RD/WD)
+    0x61,               // dio: The "Mode" this device claims
+    ptr_dio_handler     // dio_disp: The handler function
+};
+
+dib_t ptp_dib = {
+    0,                  // dva (not used for RD/WD, or set to a dummy channel/dev)
+    NULL,               // disp (not used for RD/WD)
+    0x62,               // dio: The "Mode" this device claims
+    ptr_dio_handler     // dio_disp: The handler function
+};
 
 t_stat ptr_rd(uint16 e_reg, uint16 *result)
 {
@@ -489,7 +501,7 @@ DEVICE ptr_dev = {
     &ptr_boot,          /* boot */
     &ptr_attach,        /* attach */
     &ptr_detach,        /* detach */
-    NULL,               /* ctxt */
+    &ptr_dib,               /* ctxt */
     DEV_DISABLE,        /* flags */
     0,                  /* dctrl */
     NULL,               /* debflags */
@@ -550,7 +562,7 @@ DEVICE ptp_dev = {
     NULL,               /* boot */
     &ptp_attach,        /* attach */
     &ptp_detach,        /* detach */
-    &ptr_dio_handler,               /* ctxt */
+    &ptp_dib,               /* ctxt */
     DEV_DISABLE,        /* flags */
     0,                  /* dctrl */
     NULL,               /* debflags */
