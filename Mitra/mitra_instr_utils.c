@@ -949,7 +949,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
         case 1:  // DITR PX, deactivate high-speed interrupt
           if (mode != 1) 
           	return MM_PRVINS;
-          mitra_interrupt_return(FALSE);
+          mitra_interrupt_return(true); // True because it is a high speed interrupt return
           break;
         case 2:  // PTY, ParitY check in A
           cpu_state.reg_E = compute_parity(&cpu_state.reg_A, count);
@@ -999,7 +999,7 @@ uint16 shift_instr(uint16 inst, uint32 mode, t_addr target_address) {
         case 1:  // DITR P, deactivate high-speed interrupt
           if (mode != 1) 
           	return MM_PRVINS;
-          mitra_interrupt_return(FALSE);
+          mitra_interrupt_return(true); // True because it is a high speed interrupt return
           break;
 
         case 2:  // PTY, ParitY check in A

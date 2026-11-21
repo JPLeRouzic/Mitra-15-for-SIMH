@@ -480,7 +480,7 @@ int get_highest_interrupt(void) {
 		*/
 		// sim_printf("[get_highest_interrupt]  int level=%d, cpu_state.intrpt_pending=%#09x, 1u << int_level=%#09x\n", int_level, cpu_state.intrpt_pending, (0x01 << int_level));
 		if(cpu_state.intrpt_pending & (0x01 << int_level)) {
-		    // sim_printf("[get_highest_interrupt] priority scan: found int level=%d, cpu_state.intrpt_pending=%#05x\n", int_level, cpu_state.intrpt_pending);
+		    sim_printf("[get_highest_interrupt] priority scan: found int level=%d, cpu_state.intrpt_pending=%#05x\n", int_level, cpu_state.intrpt_pending);
 		    return int_level;
 		    }
 	    }
@@ -587,7 +587,6 @@ void write_byte(t_addr va, uint8 val) {
 /* ========== CPU Reset and Management ========== */
 t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.reg_A = cpu_state.reg_E = cpu_state.reg_X = cpu_state.reg_L = cpu_state.reg_G = cpu_state.reg_P = cpu_state.S = 0;
-    cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 0;
     cpu_state.MREG = cpu_state.reg_V = cpu_state.reg_W = cpu_state.U = 0;
     cpu_state.C = cpu_state.OV = cpu_state.MS = 0;
     cpu_state.MS = 1; // We boot in master mode
@@ -596,6 +595,7 @@ t_stat cpu_reset(DEVICE * dptr) {
     cpu_state.reg_8 = 0; // 2 * interrupt level
     cpu_state.susp_req_bits = 0;
     susp_stack_ptr = 0;
+    cpu_state.SuspensionStack[susp_stack_ptr].J_reg = 0;
     cpu_state.trp_req_bits = 0;
     cpu_state.trap_pending = FALSE;
     cpu_state.cpu_running = 0;
