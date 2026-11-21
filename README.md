@@ -73,6 +73,8 @@ Many thanks to:
 - The SIMH developers for creating and maintaining the simulator
 - Istarian on VCFED forums who transcribed and verified each byte in Patrick Chour dump of the MTR (Mitra's real time small OS).
 https://forum.vcfed.org/index.php?members/istarian.86461/
-
-- Everyone who has contributed to keeping the history of French computing alive but mainly Pascal Chour
+- Michel Mestrallet for the incredible amount of information in his PhD thesis:
+https://inis.iaea.org/records/7m8xe-h1f04
+- Pascal Chour for notes on how to program Mitra-15 devices and a dump of the MTR
 https://www.pascalchour.fr/ressources/cii/mitra15.htm
+- Everyone who has contributed to keeping alive the history of French computing
